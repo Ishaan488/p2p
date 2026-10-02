@@ -73,11 +73,11 @@ func getLocalIP() string {
 func main() {
 	initDirs()
 	fmt.Print(Cyan + `
-    ____ ___  ____   __    _       __  
-   / __ \__ \/ __ \ / /   (_)___  / /__
-  / /_/ /_/ / /_/ // /   / / __ \/ //_/
- / ____/ __/ ____// /___/ / / / / ,<   
-/_/   /____/_/   /_____/_/_/ /_/_/|_|  
+    ____ ___  ____     __    _       __  
+   / __ \__ \/ __ \   / /   (_)___  / /__
+  / /_/ /_/ / /_/ /  / /   / / __ \/ //_/
+ / ____/ __/ ____/  / /___/ / / / /  ,<   
+/_/   /____/_/     /_____/_/_/ /_/_/|_|  
 ` + Reset)
 	fmt.Println(Green + "\n  Server running on port 8080" + Reset)
 	fmt.Println(White + "  Type '" + Yellow + "help" + White + "' for commands.\n" + Reset)
