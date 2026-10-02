@@ -160,6 +160,26 @@ func handleDownloadChunk(w http.ResponseWriter, r *http.Request) {
 	w.Write(buf[:n])
 }
 
+func handleDownloadFull(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(w, r) {
+		return
+	}
+
+	transferId := r.URL.Query().Get("transferId")
+
+	transfersMu.Lock()
+	state, exists := transfers[transferId]
+	transfersMu.Unlock()
+
+	if !exists || !state.IsDownload {
+		http.Error(w, "Unknown transfer", 404)
+		return
+	}
+
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+state.Filename+"\"")
+	http.ServeFile(w, r, state.FilePath)
+}
+
 func completeTransfer(id string, expectedHash string) {
 	transfersMu.Lock()
 	state, exists := transfers[id]
@@ -216,10 +236,9 @@ func startSendTransfer(filePath string) error {
 		return err
 	}
 
-	// Compute checksum
-	h := sha256.New()
-	io.Copy(h, f)
-	checksum := hex.EncodeToString(h.Sum(nil))
+	// Skip synchronous hashing for large files to prevent CLI freeze
+	checksum := "pending"
+	f.Close() // ServeFile will open it itself
 
 	filename := filepath.Base(filePath)
 	transferId := "transfer-" + strconv.FormatInt(stat.Size(), 10) + filename // simplified id
@@ -232,7 +251,7 @@ func startSendTransfer(filePath string) error {
 		ID:          transferId,
 		Filename:    filename,
 		TotalChunks: totalChunks,
-		File:        f,
+		FilePath:    filePath,
 		IsDownload:  true,
 	}
 	transfersMu.Unlock()

@@ -85,6 +85,7 @@ func main() {
 	http.HandleFunc("/ws", handleWebSocket)
 	http.HandleFunc("/upload", handleUploadChunk)
 	http.HandleFunc("/download", handleDownloadChunk)
+	http.HandleFunc("/download_full", handleDownloadFull)
 
 	// Serve the production React PWA
 	fs := http.FileServer(http.Dir("../mobile/dist"))

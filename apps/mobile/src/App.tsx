@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { WebSocketTransport } from './lib/transport';
 import { Message } from './lib/protocol';
-import { Send, Smartphone, File as FileIcon, Paperclip, QrCode, LogOut } from 'lucide-react';
+import { Send, Smartphone, File as FileIcon, Paperclip, QrCode, LogOut, Trash2, Download } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 
 const transport = new WebSocketTransport();
@@ -33,6 +33,7 @@ export default function App() {
     return saved ? JSON.parse(saved) : [];
   });
   const [inputValue, setInputValue] = useState('');
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const formatFileSize = (bytes: number) => {
@@ -45,6 +46,22 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('p2p_messages', JSON.stringify(messages));
   }, [messages]);
+
+  const handleDelete = (id: string) => {
+    setDeletingIds(prev => new Set(prev).add(id));
+    setTimeout(() => {
+      setMessages(prev => prev.filter(m => m.id !== id));
+      setDeletingIds(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }, 300);
+  };
+
+  const handleCopy = (text: string) => {
+    navigator.clipboard.writeText(text);
+  };
 
   useEffect(() => {
     transport.onStatusChange(setStatus);
@@ -126,8 +143,12 @@ export default function App() {
   }, [isScanning]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    if (status === 'connected') {
+      setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }, 50);
+    }
+  }, [messages, status]);
 
   const handleConnect = async (e: React.FormEvent, directAddress?: string) => {
     if (e) e.preventDefault();
@@ -285,31 +306,28 @@ export default function App() {
     }));
   };
 
-  const handleDownload = async (msgId: string, file: NonNullable<ChatMessage['file']>) => {
-    if (!file || file.isDownloading || file.blobUrl) return;
-
-    setMessages(prev => prev.map(m => m.id === msgId ? { ...m, file: { ...m.file!, isDownloading: true, progress: 0 } } : m));
+  const handleDownload = async (msgId: string, file: NonNullable<ChatMessage['file']>, forceNative = false) => {
+    if (!file || file.isDownloading || (file.blobUrl && !forceNative)) return;
 
     const host = address.split('/')[0];
-    const chunks: BlobPart[] = [];
+    const url = `http://${host}/download_full?transferId=${file.transferId}`;
 
-    for (let i = 0; i < file.totalChunks; i++) {
-      try {
-        const res = await fetch(`http://${host}/download?transferId=${file.transferId}&chunkIndex=${i}&chunkSize=${file.chunkSize}`);
-        const buf = await res.arrayBuffer();
-        chunks.push(buf);
-
-        setMessages(prev => prev.map(m => m.id === msgId ? { ...m, file: { ...m.file!, progress: ((i + 1) / file.totalChunks) * 100 } } : m));
-      } catch (err) {
-        console.error("Chunk download failed", err);
-        break;
+    if (!forceNative && file.filename.match(/\.(jpg|jpeg|png|gif|webp)$/i) && file.totalSize < 20 * 1024 * 1024) {
+      // For small images (<20MB), set the blobUrl so the UI displays it immediately
+      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, file: { ...m.file!, isDownloading: false, progress: 100, blobUrl: url } } : m));
+    } else {
+      // For other files, trigger native browser download (0 RAM usage!)
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = file.filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      
+      if (!forceNative) {
+        setMessages(prev => prev.map(m => m.id === msgId ? { ...m, file: { ...m.file!, isDownloading: false, progress: 100 } } : m));
       }
     }
-
-    const blob = new Blob(chunks);
-    const url = URL.createObjectURL(blob);
-
-    setMessages(prev => prev.map(m => m.id === msgId ? { ...m, file: { ...m.file!, isDownloading: false, progress: 100, blobUrl: url } } : m));
   };
 
   const formatTime = (ts: number) => {
@@ -339,7 +357,10 @@ export default function App() {
               </div>
             ) : (
               <>
-                <h2 style={{ marginBottom: '1.5rem' }}>Connect to PC</h2>
+                <h2 style={{ marginBottom: '0.5rem' }}>Connect to PC</h2>
+                <div style={{ fontSize: '0.9rem', marginBottom: '2rem', textAlign: 'center', lineHeight: '1.4', color: 'var(--text-secondary)' }}>
+                  Ensure your phone and pc are on same network
+                </div>
                 
                 {cameraError && (
                   <div style={{ padding: '0.75rem', background: 'rgba(239, 68, 68, 0.2)', border: '1px solid var(--error-color)', borderRadius: '8px', marginBottom: '1rem', color: 'var(--error-color)', fontSize: '0.875rem' }}>
@@ -356,7 +377,7 @@ export default function App() {
                 <button 
                   onClick={() => setIsScanning(true)}
                   className="primary-btn"
-                  style={{ marginBottom: '1.5rem', background: 'var(--bg-primary)', border: '1px solid var(--accent-color)' }}
+                  style={{ marginBottom: '1.5rem', background: 'transparent', border: '1px solid var(--accent-color)', color: 'var(--accent-color)' }}
                 >
                   <QrCode size={18} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '8px' }} />
                   Scan to Connect
@@ -395,17 +416,24 @@ export default function App() {
     <div className="app-container">
       <header className="header">
         <div className="header-title">P2P Link</div>
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+          <button 
+            onClick={() => setMessages([])} 
+            className="icon-btn"
+            title="Clear History"
+          >
+            <Trash2 size={18} />
+          </button>
           <div className="status-indicator">
             <div className="status-dot connected"></div>
             <span>Connected</span>
           </div>
           <button 
             onClick={handleDisconnect} 
-            style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+            className="icon-btn"
             title="Disconnect"
           >
-            <LogOut size={20} />
+            <LogOut size={18} />
           </button>
         </div>
       </header>
@@ -413,16 +441,26 @@ export default function App() {
       <main className="chat-container">
         <div className="message-list">
           {messages.map(msg => (
-            <div key={msg.id} className={`message-wrapper ${msg.sender}`}>
+            <div key={msg.id} className={`message-wrapper ${msg.sender} ${deletingIds.has(msg.id) ? 'deleting' : ''}`}>
               <div className={`message ${msg.sender}`}>
-                {msg.text && <div>{msg.text}</div>}
+                {msg.text && <div onClick={() => handleCopy(msg.text!)} className="interactive-text" title="Tap to copy">{msg.text}</div>}
                 {msg.file && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', minWidth: '200px' }}>
                     {msg.file.blobUrl && msg.file.filename.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? (
-                      <img src={msg.file.blobUrl} alt={msg.file.filename} style={{ maxWidth: '100%', borderRadius: '8px', maxHeight: '250px', objectFit: 'cover' }} />
+                      <div style={{ position: 'relative', width: '100%', borderRadius: '0.35rem', overflow: 'hidden', background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                        <img src={msg.file.blobUrl} alt={msg.file.filename} style={{ width: '100%', maxHeight: '400px', objectFit: 'contain', display: 'block' }} />
+                        <button 
+                          onClick={() => handleDownload(msg.id, msg.file!, true)} 
+                          className="icon-btn" 
+                          style={{ position: 'absolute', bottom: '0.5rem', right: '0.5rem', background: 'rgba(0,0,0,0.65)', color: 'white', padding: '0.5rem', backdropFilter: 'blur(4px)', opacity: 1 }}
+                          title="Download Image"
+                        >
+                          <Download size={16} />
+                        </button>
+                      </div>
                     ) : (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontWeight: 500, background: 'rgba(0,0,0,0.1)', padding: '0.75rem', borderRadius: '8px' }}>
-                        <div style={{ background: 'var(--accent-color)', padding: '0.5rem', borderRadius: '8px', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontWeight: 500, background: 'rgba(255,255,255,0.015)', padding: '0.65rem', borderRadius: '0.5rem', border: '1px solid rgba(255,255,255,0.03)' }}>
+                        <div style={{ background: 'rgba(255,255,255,0.05)', padding: '0.5rem', borderRadius: '0.35rem', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                           <FileIcon size={20} /> 
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -433,23 +471,23 @@ export default function App() {
                     )}
                     
                     {msg.sender === 'me' && msg.file.progress !== undefined && msg.file.progress < 100 && (
-                      <div className="progress-bar-container" style={{ height: '6px', background: 'rgba(255,255,255,0.2)', borderRadius: '3px', overflow: 'hidden', marginTop: '4px' }}>
-                        <div className="progress-bar-fill" style={{ height: '100%', background: '#fff', width: `${msg.file.progress}%`, transition: 'width 0.2s' }}></div>
+                      <div className="progress-bar-container" style={{ height: '4px', background: 'rgba(255,255,255,0.2)', borderRadius: '2px', overflow: 'hidden', marginTop: '0.5rem' }}>
+                        <div className="progress-bar-fill" style={{ height: '100%', background: '#fff', width: `${msg.file.progress}%`, transition: 'width 0.3s cubic-bezier(0.4, 0, 0.2, 1)' }}></div>
                       </div>
                     )}
                     
                     {msg.sender !== 'me' && !msg.file.blobUrl && (
                       <div style={{ marginTop: '0.25rem' }}>
                         {msg.file.progress !== undefined && msg.file.progress > 0 && msg.file.progress < 100 && (
-                          <div className="progress-bar-container" style={{ height: '6px', background: 'rgba(0,0,0,0.2)', borderRadius: '3px', overflow: 'hidden', marginBottom: '0.75rem' }}>
-                            <div className="progress-bar-fill" style={{ height: '100%', background: 'var(--accent-color)', width: `${msg.file.progress}%`, transition: 'width 0.2s' }}></div>
+                          <div className="progress-bar-container" style={{ height: '4px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden', marginBottom: '0.75rem' }}>
+                            <div className="progress-bar-fill" style={{ height: '100%', background: 'rgba(255,255,255,0.8)', width: `${msg.file.progress}%`, transition: 'width 0.3s cubic-bezier(0.4, 0, 0.2, 1)' }}></div>
                           </div>
                         )}
                         <button 
                           className="primary-btn" 
                           onClick={() => handleDownload(msg.id, msg.file!)} 
                           disabled={msg.file.isDownloading}
-                          style={{ width: '100%', padding: '0.5rem', background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid rgba(255,255,255,0.1)' }}
+                          style={{ width: '100%', padding: '0.75rem', borderRadius: '0.75rem', background: 'rgba(255,255,255,0.05)', color: 'var(--text-primary)', border: '1px solid rgba(255,255,255,0.05)', fontWeight: 600 }}
                         >
                           {msg.file.isDownloading ? `Downloading ${Math.round(msg.file.progress || 0)}%` : 'Download File'}
                         </button>
@@ -465,14 +503,19 @@ export default function App() {
                           a.download = msg.file!.filename;
                           a.click();
                         }}
-                        style={{ width: '100%', padding: '0.5rem', background: 'var(--accent-gradient)' }}
+                        style={{ width: '100%', padding: '0.65rem', borderRadius: '0.5rem', background: 'rgba(255,255,255,0.1)', color: 'white', border: 'none', fontWeight: 500 }}
                       >
-                        Save to Device
+                        {msg.file.filename.match(/\.(jpg|jpeg|png|gif|webp)$/i) && msg.file.totalSize < 20 * 1024 * 1024 ? 'Preview Image' : 'Save to Device'}
                       </button>
                     )}
                   </div>
                 )}
-                <div className="message-time">{formatTime(msg.timestamp)}</div>
+                <div className="message-time">
+                  <span>{msg.sender === 'me' ? 'Sent' : 'Received'} • {formatTime(msg.timestamp)}</span>
+                  <button onClick={() => handleDelete(msg.id)} className="icon-btn" style={{ padding: '0.2rem' }} title="Delete">
+                    <Trash2 size={14} />
+                  </button>
+                </div>
               </div>
             </div>
           ))}
@@ -483,7 +526,7 @@ export default function App() {
       <form className="input-area" onSubmit={handleSend}>
           <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0.5rem' }}>
             <input type="file" style={{ display: 'none' }} onChange={handleFileUpload} />
-            <Paperclip size={24} color="var(--accent-color)" />
+            <Paperclip size={24} color="var(--text-secondary)" />
           </label>
           <input 
             type="text" 
@@ -491,7 +534,6 @@ export default function App() {
             value={inputValue}
             onChange={e => setInputValue(e.target.value)}
             placeholder="Type a message..."
-            autoFocus
           />
           <button type="submit" className="send-btn" disabled={!inputValue.trim()}>
             <Send size={20} />
