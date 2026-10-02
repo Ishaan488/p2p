@@ -109,9 +109,10 @@ func main() {
 		if text != "" {
 			if text == "help" {
 				fmt.Println(Cyan + "\n--- Commands ---" + Reset)
-				fmt.Println(Yellow + "pair" + Reset + "       : Show QR code to connect phone")
-				fmt.Println(Yellow + "send <file>" + Reset + ": Send a file (e.g. send \"C:\\photo.jpg\")")
-				fmt.Println(Yellow + "exit" + Reset + "       : Close the server\n")
+				fmt.Println(Yellow + "pair" + Reset + "          : Show QR code to connect phone")
+				fmt.Println(Yellow + "send <file>" + Reset + "   : Send a file (e.g. send \"C:\\photo.jpg\")")
+				fmt.Println(Yellow + "setdir <path>" + Reset + " : Set directory for received files")
+				fmt.Println(Yellow + "exit" + Reset + "          : Close the server\n")
 			} else if text == "exit" {
 				fmt.Println(Yellow + "Shutting down..." + Reset)
 				os.Exit(0)
@@ -132,6 +133,16 @@ func main() {
 				err := startSendTransfer(filePath)
 				if err != nil {
 					fmt.Printf("Failed to send file: %v\n> ", err)
+				}
+			} else if strings.HasPrefix(text, "setdir ") {
+				newDir := strings.TrimPrefix(text, "setdir ")
+				newDir = strings.TrimSpace(newDir)
+				newDir = strings.Trim(newDir, "\"'")
+				err := setReceiveDir(newDir)
+				if err != nil {
+					fmt.Printf("%sFailed to set receive directory: %v%s\n> ", Red, err, Reset)
+				} else {
+					fmt.Printf("%sReceive directory set to: %s%s\n> ", Green, newDir, Reset)
 				}
 			} else {
 				msg := Message{

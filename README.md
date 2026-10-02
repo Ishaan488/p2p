@@ -34,6 +34,7 @@ To use P2P Link, your PC and Phone must be connected to the **same Wi-Fi network
 
 ### Step 3: Transferring Files
 - **From Phone to PC:** Tap the paperclip icon in the app, select any file, and it will instantly upload to the `receive` folder on your PC.
+  - *Tip:* You can change where files are saved at any time by typing `setdir "D:\My Downloads"` in the PC terminal!
 - **From PC to Phone:** In your PC's terminal window, type `send "C:\path\to\your\file.jpg"` and press Enter. It will appear on your phone instantly.
 
 ---

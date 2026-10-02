@@ -41,6 +41,29 @@ func getTempPath(id string) string {
 	return filepath.Join(tempDir, id+".tmp")
 }
 
+func setReceiveDir(newDir string) error {
+	absPath, err := filepath.Abs(newDir)
+	if err != nil {
+		return err
+	}
+	err = os.MkdirAll(absPath, 0755)
+	if err != nil {
+		return err
+	}
+	
+	newTemp := filepath.Join(absPath, ".temp")
+	err = os.MkdirAll(newTemp, 0755)
+	if err != nil {
+		return err
+	}
+
+	transfersMu.Lock()
+	receiveDir = absPath
+	tempDir = newTemp
+	transfersMu.Unlock()
+	return nil
+}
+
 func startReceiveTransfer(id, filename string, totalChunks int) {
 	initDirs()
 	path := getTempPath(id)
@@ -212,7 +235,22 @@ func completeTransfer(id string, expectedHash string) {
 			err := os.Rename(state.FilePath, finalPath)
 			if err != nil {
 				// Fallback to copy if rename fails across partitions
-				fmt.Printf("%s%s[Error saving file]:%s %v (Check permissions)\n> ", ClearLine, Red, Reset, err)
+				srcFile, errCopy := os.Open(state.FilePath)
+				if errCopy == nil {
+					destFile, errCreate := os.Create(finalPath)
+					if errCreate == nil {
+						io.Copy(destFile, srcFile)
+						destFile.Close()
+						srcFile.Close()
+						os.Remove(state.FilePath)
+						fmt.Printf("\n%s[File Received]:%s %s saved to %s\n> ", Green, Reset, state.Filename, finalPath)
+					} else {
+						srcFile.Close()
+						fmt.Printf("%s%s[Error saving file]:%s %v\n> ", ClearLine, Red, Reset, errCreate)
+					}
+				} else {
+					fmt.Printf("%s%s[Error saving file]:%s %v\n> ", ClearLine, Red, Reset, err)
+				}
 			} else {
 				fmt.Printf("\n%s[File Received]:%s %s saved to %s\n> ", Green, Reset, state.Filename, finalPath)
 			}
