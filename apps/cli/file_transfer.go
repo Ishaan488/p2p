@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 var (
@@ -25,6 +26,7 @@ type TransferState struct {
 	File        *os.File
 	FilePath    string
 	IsDownload  bool // true if Windows is sending to phone
+	LastActive  int64 // Unix timestamp
 }
 
 var (
@@ -35,6 +37,47 @@ var (
 func initDirs() {
 	os.MkdirAll(receiveDir, 0755)
 	os.MkdirAll(tempDir, 0755)
+}
+
+// Background janitor to clean up abandoned transfers (file descriptor leaks)
+func startTransferJanitor() {
+	go func() {
+		for {
+			time.Sleep(5 * time.Minute)
+			now := time.Now().Unix()
+			
+			transfersMu.Lock()
+			for id, state := range transfers {
+				if now - state.LastActive > 900 { // 15 minutes timeout
+					if state.File != nil {
+						state.File.Close()
+					}
+					if !state.IsDownload {
+						os.Remove(state.FilePath) // cleanup temp file
+					}
+					delete(transfers, id)
+					fmt.Printf("\n%s[System]:%s Cleaned up stale transfer %s\n> ", Yellow, Reset, state.Filename)
+				}
+			}
+			transfersMu.Unlock()
+		}
+	}()
+}
+
+func getUniqueFilePath(dir, filename string) string {
+	ext := filepath.Ext(filename)
+	name := strings.TrimSuffix(filename, ext)
+	path := filepath.Join(dir, filename)
+	
+	counter := 1
+	for {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			break
+		}
+		path = filepath.Join(dir, fmt.Sprintf("%s (%d)%s", name, counter, ext))
+		counter++
+	}
+	return path
 }
 
 func getTempPath(id string) string {
@@ -80,6 +123,7 @@ func startReceiveTransfer(id, filename string, totalChunks int) {
 		File:        f,
 		FilePath:    path,
 		IsDownload:  false,
+		LastActive:  time.Now().Unix(),
 	}
 	transfersMu.Unlock()
 	fmt.Printf("%s%s[Receiving file]:%s %s\n", ClearLine, Cyan, Reset, filename)
@@ -111,6 +155,9 @@ func handleUploadChunk(w http.ResponseWriter, r *http.Request) {
 
 	transfersMu.Lock()
 	state, exists := transfers[transferId]
+	if exists {
+		state.LastActive = time.Now().Unix()
+	}
 	transfersMu.Unlock()
 
 	if !exists {
@@ -164,6 +211,9 @@ func handleDownloadChunk(w http.ResponseWriter, r *http.Request) {
 
 	transfersMu.Lock()
 	state, exists := transfers[transferId]
+	if exists {
+		state.LastActive = time.Now().Unix()
+	}
 	transfersMu.Unlock()
 
 	if !exists || !state.IsDownload {
@@ -192,6 +242,9 @@ func handleDownloadFull(w http.ResponseWriter, r *http.Request) {
 
 	transfersMu.Lock()
 	state, exists := transfers[transferId]
+	if exists {
+		delete(transfers, transferId) // DownloadFull completes the transfer
+	}
 	transfersMu.Unlock()
 
 	if !exists || !state.IsDownload {
@@ -230,7 +283,7 @@ func completeTransfer(id string, expectedHash string) {
 		actualHash := hex.EncodeToString(h.Sum(nil))
 
 		if actualHash == expectedHash || expectedHash == "pending" {
-			finalPath := filepath.Join(receiveDir, state.Filename)
+			finalPath := getUniqueFilePath(receiveDir, state.Filename)
 			f.Close()
 			err := os.Rename(state.FilePath, finalPath)
 			if err != nil {
@@ -291,6 +344,7 @@ func startSendTransfer(filePath string) error {
 		TotalChunks: totalChunks,
 		FilePath:    filePath,
 		IsDownload:  true,
+		LastActive:  time.Now().Unix(),
 	}
 	transfersMu.Unlock()
 

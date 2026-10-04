@@ -93,6 +93,7 @@ func getLocalIP() string {
 
 func main() {
 	initDirs()
+	startTransferJanitor()
 	fmt.Print(Cyan + `
     ____ ___  ____     __    _       __  
    / __ \__ \/ __ \   / /   (_)___  / /__
