@@ -3,6 +3,7 @@ import { WebSocketTransport } from './lib/transport';
 import { Message } from './lib/protocol';
 import { Send, Smartphone, File as FileIcon, Paperclip, QrCode, LogOut, Trash2, Download } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
+import { Clipboard } from '@capacitor/clipboard';
 
 const transport = new WebSocketTransport();
 
@@ -77,11 +78,18 @@ export default function App() {
     document.body.removeChild(textArea);
   };
 
-  const handleCopy = (text: string) => {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).catch(() => fallbackCopyTextToClipboard(text));
-    } else {
-      fallbackCopyTextToClipboard(text);
+  const handleCopy = async (text: string) => {
+    try {
+      // This calls the native Android OS clipboard directly! Bypasses all browser restrictions.
+      await Clipboard.write({ string: text });
+      console.log("Copied via Native Capacitor Clipboard");
+    } catch (e) {
+      // Fallback for when running in standard PC browser
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).catch(() => fallbackCopyTextToClipboard(text));
+      } else {
+        fallbackCopyTextToClipboard(text);
+      }
     }
   };
 
@@ -157,25 +165,23 @@ export default function App() {
           try {
             await transport.connect(target);
             isReady = true;
-          } catch(e) { console.error(e); }
+          } catch (e) { console.error(e); }
         }
-        
+
         if (isReady) {
           try {
-            if (navigator.clipboard && navigator.clipboard.readText) {
-              const text = await navigator.clipboard.readText();
-              if (text && text.trim().length > 0) {
-                const msg = {
-                  type: 'clipboard',
-                  id: `msg-${Date.now()}`,
-                  timestamp: Math.floor(Date.now() / 1000),
-                  payload: { text }
-                };
-                transport.send(JSON.stringify(msg));
-              }
+            const { value } = await Clipboard.read();
+            if (value && value.trim().length > 0) {
+              const msg = {
+                type: 'clipboard',
+                id: `msg-${Date.now()}`,
+                timestamp: Math.floor(Date.now() / 1000),
+                payload: { text: value }
+              };
+              transport.send(JSON.stringify(msg));
             }
-          } catch(e) {
-            // Permission denied or not supported by mobile browser
+          } catch (e) {
+            // Permission denied or clipboard empty
           }
         }
       }
@@ -188,15 +194,15 @@ export default function App() {
     if (isScanning) {
       setCameraError('');
       const html5QrCode = new Html5Qrcode("qr-reader");
-      html5QrCode.start({ facingMode: "environment" }, { fps: 10, qrbox: { width: 250, height: 250 } }, 
+      html5QrCode.start({ facingMode: "environment" }, { fps: 10, qrbox: { width: 250, height: 250 } },
         (decodedText) => {
-          html5QrCode.stop().then(() => setIsScanning(false)).catch(() => {});
+          html5QrCode.stop().then(() => setIsScanning(false)).catch(() => { });
           setAddress(decodedText);
           localStorage.setItem('p2p_address', decodedText);
           localStorage.setItem('p2p_auto_connect', 'true');
           transport.connect(decodedText).catch(console.error);
-        }, 
-        () => {}
+        },
+        () => { }
       ).catch(err => {
         console.error("Camera error", err);
         setCameraError("Camera access denied or unsupported. Browser may require HTTPS.");
@@ -205,7 +211,7 @@ export default function App() {
 
       return () => {
         if (html5QrCode.isScanning) {
-          html5QrCode.stop().catch(() => {});
+          html5QrCode.stop().catch(() => { });
         }
       };
     }
@@ -243,7 +249,7 @@ export default function App() {
 
     const id = `msg-${Date.now()}`;
     const timestamp = Math.floor(Date.now() / 1000);
-    
+
     const msg: Message = {
       version: 1,
       type: 'text',
@@ -253,14 +259,14 @@ export default function App() {
     };
 
     transport.send(JSON.stringify(msg));
-    
+
     setMessages(prev => [...prev, {
       id,
       text: inputValue.trim(),
       sender: 'me',
       timestamp: Date.now()
     }]);
-    
+
     setInputValue('');
   };
 
@@ -290,6 +296,11 @@ export default function App() {
     const totalChunks = Math.ceil(file.size / chunkSize);
     const timestamp = Math.floor(Date.now() / 1000);
 
+    let blobUrl: string | undefined = undefined;
+    if (file.name.match(/\.(jpg|jpeg|png|gif|webp)$/i) && file.size < 20 * 1024 * 1024) {
+      blobUrl = URL.createObjectURL(file);
+    }
+
     // 1. Send file_start over WS
     transport.send(JSON.stringify({
       version: 1,
@@ -318,7 +329,8 @@ export default function App() {
         totalChunks,
         chunkSize,
         isDownloading: true,
-        progress: 0
+        progress: 0,
+        blobUrl
       },
       sender: 'me',
       timestamp: Date.now()
@@ -330,15 +342,15 @@ export default function App() {
       const start = i * chunkSize;
       const end = Math.min(start + chunkSize, file.size);
       const chunk = file.slice(start, end);
-      
+
       try {
         const res = await fetch(`http://${host}/upload?transferId=${transferId}&chunkIndex=${i}&chunkSize=${chunkSize}`, {
           method: 'POST',
           body: chunk
         });
-        
+
         if (!res.ok) {
-           throw new Error(`Upload failed with status ${res.status}`);
+          throw new Error(`Upload failed with status ${res.status}`);
         }
 
         // Update progress
@@ -386,13 +398,10 @@ export default function App() {
       setMessages(prev => prev.map(m => m.id === msgId ? { ...m, file: { ...m.file!, isDownloading: false, progress: 100, blobUrl: url } } : m));
     } else {
       // For other files, trigger native browser download (0 RAM usage!)
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = file.filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      
+      // In Capacitor/Android WebView, a.click() often silently fails for downloads.
+      // window.open with _blank will reliably trigger the native OS browser to handle the download stream.
+      window.open(url, '_blank');
+
       if (!forceNative) {
         setMessages(prev => prev.map(m => m.id === msgId ? { ...m, file: { ...m.file!, isDownloading: false, progress: 100 } } : m));
       }
@@ -413,11 +422,11 @@ export default function App() {
             <span>{status === 'connecting' ? 'Connecting...' : 'Disconnected'}</span>
           </div>
         </header>
-        
+
         <main className="setup-screen">
           <div className="card">
             <Smartphone size={48} style={{ color: 'var(--accent-color)', margin: '0 auto 1.5rem', display: 'block' }} />
-            
+
             {isScanning ? (
               <div>
                 <h2 style={{ marginBottom: '1rem' }}>Scan QR Code</h2>
@@ -430,20 +439,20 @@ export default function App() {
                 <div style={{ fontSize: '0.9rem', marginBottom: '2rem', textAlign: 'center', lineHeight: '1.4', color: 'var(--text-secondary)' }}>
                   Ensure your phone and pc are on same network
                 </div>
-                
+
                 {cameraError && (
                   <div style={{ padding: '0.75rem', background: 'rgba(239, 68, 68, 0.2)', border: '1px solid var(--error-color)', borderRadius: '8px', marginBottom: '1rem', color: 'var(--error-color)', fontSize: '0.875rem' }}>
                     {cameraError}
                   </div>
                 )}
-                
+
                 {status === 'error' && !cameraError && (
                   <div style={{ padding: '0.75rem', background: 'rgba(239, 68, 68, 0.2)', border: '1px solid var(--error-color)', borderRadius: '8px', marginBottom: '1rem', color: 'var(--error-color)', fontSize: '0.875rem' }}>
                     Connection timed out. Are you on the exact same Wi-Fi network as your PC?
                   </div>
                 )}
 
-                <button 
+                <button
                   onClick={() => setIsScanning(true)}
                   className="primary-btn"
                   style={{ marginBottom: '1.5rem', background: 'transparent', border: '1px solid var(--accent-color)', color: 'var(--accent-color)' }}
@@ -457,16 +466,16 @@ export default function App() {
                 <form onSubmit={handleConnect}>
                   <div className="input-group">
                     <label>Windows IP Address & Port</label>
-                    <input 
-                      type="text" 
-                      className="text-input" 
+                    <input
+                      type="text"
+                      className="text-input"
                       value={address}
                       onChange={e => setAddress(e.target.value)}
                       placeholder="192.168.1.x:8080"
                     />
                   </div>
-                  <button 
-                    type="submit" 
+                  <button
+                    type="submit"
                     className="primary-btn"
                     disabled={status === 'connecting'}
                   >
@@ -486,8 +495,8 @@ export default function App() {
       <header className="header">
         <div className="header-title">P2P Link</div>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-          <button 
-            onClick={() => setMessages([])} 
+          <button
+            onClick={() => setMessages([])}
             className="icon-btn"
             title="Clear History"
           >
@@ -497,8 +506,8 @@ export default function App() {
             <div className="status-dot connected"></div>
             <span>Connected</span>
           </div>
-          <button 
-            onClick={handleDisconnect} 
+          <button
+            onClick={handleDisconnect}
             className="icon-btn"
             title="Disconnect"
           >
@@ -530,20 +539,30 @@ export default function App() {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', minWidth: '200px' }}>
                     {msg.file.blobUrl && msg.file.filename.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? (
                       <div style={{ position: 'relative', width: '100%', borderRadius: '0.35rem', overflow: 'hidden', background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.05)' }}>
-                        <img src={msg.file.blobUrl} alt={msg.file.filename} style={{ width: '100%', maxHeight: '400px', objectFit: 'contain', display: 'block' }} />
-                        <button 
-                          onClick={() => handleDownload(msg.id, msg.file!, true)} 
-                          className="icon-btn" 
-                          style={{ position: 'absolute', bottom: '0.5rem', right: '0.5rem', background: 'rgba(0,0,0,0.65)', color: 'white', padding: '0.5rem', backdropFilter: 'blur(4px)', opacity: 1 }}
-                          title="Download Image"
-                        >
-                          <Download size={16} />
-                        </button>
+                        <img 
+                          src={msg.file.blobUrl} 
+                          alt={msg.file.filename} 
+                          style={{ width: '100%', maxHeight: '400px', objectFit: 'contain', display: 'block' }} 
+                          onError={() => {
+                            // If PC disconnects or clears RAM, the image link breaks. Fallback to standard file view!
+                            setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, file: { ...m.file!, blobUrl: undefined } } : m));
+                          }}
+                        />
+                        {msg.sender !== 'me' && (
+                          <button
+                            onClick={() => handleDownload(msg.id, msg.file!, true)}
+                            className="icon-btn"
+                            style={{ position: 'absolute', bottom: '0.5rem', right: '0.5rem', background: 'rgba(0,0,0,0.65)', color: 'white', padding: '0.5rem', backdropFilter: 'blur(4px)', opacity: 1 }}
+                            title="Download Image"
+                          >
+                            <Download size={16} />
+                          </button>
+                        )}
                       </div>
                     ) : (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontWeight: 500, background: 'rgba(255,255,255,0.015)', padding: '0.65rem', borderRadius: '0.5rem', border: '1px solid rgba(255,255,255,0.03)' }}>
                         <div style={{ background: 'rgba(255,255,255,0.05)', padding: '0.5rem', borderRadius: '0.35rem', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                          <FileIcon size={20} /> 
+                          <FileIcon size={20} />
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                           <span style={{ whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', fontSize: '0.9rem' }}>{msg.file.filename}</span>
@@ -551,13 +570,13 @@ export default function App() {
                         </div>
                       </div>
                     )}
-                    
+
                     {msg.sender === 'me' && msg.file.progress !== undefined && msg.file.progress < 100 && (
                       <div className="progress-bar-container" style={{ height: '4px', background: 'rgba(255,255,255,0.2)', borderRadius: '2px', overflow: 'hidden', marginTop: '0.5rem' }}>
                         <div className="progress-bar-fill" style={{ height: '100%', background: '#fff', width: `${msg.file.progress}%`, transition: 'width 0.3s cubic-bezier(0.4, 0, 0.2, 1)' }}></div>
                       </div>
                     )}
-                    
+
                     {msg.sender !== 'me' && !msg.file.blobUrl && (
                       <div style={{ marginTop: '0.25rem' }}>
                         {msg.file.progress !== undefined && msg.file.progress > 0 && msg.file.progress < 100 && (
@@ -565,9 +584,9 @@ export default function App() {
                             <div className="progress-bar-fill" style={{ height: '100%', background: 'rgba(255,255,255,0.8)', width: `${msg.file.progress}%`, transition: 'width 0.3s cubic-bezier(0.4, 0, 0.2, 1)' }}></div>
                           </div>
                         )}
-                        <button 
-                          className="primary-btn" 
-                          onClick={() => handleDownload(msg.id, msg.file!)} 
+                        <button
+                          className="primary-btn"
+                          onClick={() => handleDownload(msg.id, msg.file!)}
                           disabled={msg.file.isDownloading}
                           style={{ width: '100%', padding: '0.75rem', borderRadius: '0.75rem', background: 'rgba(255,255,255,0.05)', color: 'var(--text-primary)', border: '1px solid rgba(255,255,255,0.05)', fontWeight: 600 }}
                         >
@@ -575,15 +594,12 @@ export default function App() {
                         </button>
                       </div>
                     )}
-                    
+
                     {msg.sender !== 'me' && msg.file.blobUrl && !msg.file.filename.match(/\.(jpg|jpeg|png|gif|webp)$/i) && (
-                      <button 
-                        className="primary-btn" 
+                      <button
+                        className="primary-btn"
                         onClick={() => {
-                          const a = document.createElement('a');
-                          a.href = msg.file!.blobUrl!;
-                          a.download = msg.file!.filename;
-                          a.click();
+                          window.open(msg.file!.blobUrl!, '_blank');
                         }}
                         style={{ width: '100%', padding: '0.65rem', borderRadius: '0.5rem', background: 'rgba(255,255,255,0.1)', color: 'white', border: 'none', fontWeight: 500 }}
                       >
@@ -606,21 +622,21 @@ export default function App() {
       </main>
 
       <form className="input-area" onSubmit={handleSend}>
-          <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0.5rem' }}>
-            <input type="file" style={{ display: 'none' }} onChange={handleFileUpload} />
-            <Paperclip size={24} color="var(--text-secondary)" />
-          </label>
-          <input 
-            type="text" 
-            className="text-input"
-            value={inputValue}
-            onChange={e => setInputValue(e.target.value)}
-            placeholder="Type a message..."
-          />
-          <button type="submit" className="send-btn" disabled={!inputValue.trim()}>
-            <Send size={20} />
-          </button>
-        </form>
+        <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0.5rem' }}>
+          <input type="file" style={{ display: 'none' }} onChange={handleFileUpload} />
+          <Paperclip size={24} color="var(--text-secondary)" />
+        </label>
+        <input
+          type="text"
+          className="text-input"
+          value={inputValue}
+          onChange={e => setInputValue(e.target.value)}
+          placeholder="Type a message..."
+        />
+        <button type="submit" className="send-btn" disabled={!inputValue.trim()}>
+          <Send size={20} />
+        </button>
+      </form>
     </div>
   );
 }

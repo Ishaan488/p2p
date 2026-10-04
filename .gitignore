@@ -30,3 +30,11 @@ yarn-error.log*
 
 # Docs
 docs/roadmap.md
+
+# Android / Capacitor
+*.apk
+*.aab
+*.jks
+*.keystore
+.gradle/
+local.properties
