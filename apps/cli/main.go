@@ -11,9 +11,30 @@ import (
 	"sync"
 	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/gorilla/websocket"
 	"github.com/mdp/qrterminal/v3"
 )
+
+var lastClipboardText string
+
+func watchClipboard() {
+	for {
+		time.Sleep(1 * time.Second)
+		text, err := clipboard.ReadAll()
+		if err == nil && text != "" && text != lastClipboardText {
+			lastClipboardText = text
+			msg := Message{
+				Type:      "clipboard",
+				ID:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
+				Timestamp: time.Now().Unix(),
+				Payload:   TextPayload{Text: text},
+			}
+			fmt.Printf("%s%s[Clipboard Synced PC -> Phone]%s\n> ", ClearLine, Cyan, Reset)
+			broadcastMessage(msg)
+		}
+	}
+}
 
 const (
 	Reset     = "\033[0m"
@@ -90,6 +111,8 @@ func main() {
 	// Serve the production React PWA
 	fs := http.FileServer(http.Dir("../mobile/dist"))
 	http.Handle("/", fs)
+
+	go watchClipboard()
 
 	go func() {
 		log.Println("Listening on 0.0.0.0:8080")
@@ -203,7 +226,18 @@ func (c *Client) readPump() {
 			payload, ok := msg.Payload.(map[string]interface{})
 			if ok {
 				if text, exists := payload["text"].(string); exists {
-					fmt.Printf("%s%s[Phone]:%s %s\n> ", ClearLine, Blue, Reset, text)
+					lastClipboardText = text
+					clipboard.WriteAll(text)
+					fmt.Printf("%s%s[Phone]:%s %s %s(Copied to Clipboard)%s\n> ", ClearLine, Blue, Reset, text, Cyan, Reset)
+				}
+			}
+		} else if msg.Type == "clipboard" {
+			payload, ok := msg.Payload.(map[string]interface{})
+			if ok {
+				if text, exists := payload["text"].(string); exists {
+					lastClipboardText = text
+					clipboard.WriteAll(text)
+					fmt.Printf("%s%s[Phone Clipboard Synced]%s\n> ", ClearLine, Cyan, Reset)
 				}
 			}
 		} else if msg.Type == "file_start" {

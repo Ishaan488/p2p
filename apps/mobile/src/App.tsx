@@ -21,6 +21,7 @@ interface ChatMessage {
   };
   sender: 'me' | 'other';
   timestamp: number;
+  isClipboard?: boolean;
 }
 
 export default function App() {
@@ -59,8 +60,29 @@ export default function App() {
     }, 300);
   };
 
+  const fallbackCopyTextToClipboard = (text: string) => {
+    const textArea = document.createElement("textarea");
+    textArea.value = text;
+    textArea.style.top = "0";
+    textArea.style.left = "0";
+    textArea.style.position = "fixed";
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    try {
+      document.execCommand('copy');
+    } catch (err) {
+      console.error('Fallback: unable to copy', err);
+    }
+    document.body.removeChild(textArea);
+  };
+
   const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(() => fallbackCopyTextToClipboard(text));
+    } else {
+      fallbackCopyTextToClipboard(text);
+    }
   };
 
   useEffect(() => {
@@ -90,6 +112,28 @@ export default function App() {
             sender: 'other',
             timestamp: msg.timestamp * 1000
           }]);
+        } else if (msg.type === 'clipboard') {
+          const fallback = () => {
+            setMessages(prev => [...prev, {
+              id: msg.id,
+              text: msg.payload.text,
+              sender: 'other',
+              timestamp: msg.timestamp * 1000,
+              isClipboard: true
+            }]);
+          };
+
+          try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(msg.payload.text)
+                .then(() => console.log("Clipboard auto-synced from PC"))
+                .catch(fallback);
+            } else {
+              fallback(); // HTTP context fallback
+            }
+          } catch (err) {
+            fallback();
+          }
         }
       } catch (e) {
         console.error("Failed to parse message", e);
@@ -105,10 +149,35 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && !transport.isConnected() && localStorage.getItem('p2p_auto_connect') !== 'false') {
-        const target = localStorage.getItem('p2p_address') || `${window.location.hostname}:8080`;
-        transport.connect(target).catch(console.error);
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState === 'visible') {
+        let isReady = transport.isConnected();
+        if (!isReady && localStorage.getItem('p2p_auto_connect') !== 'false') {
+          const target = localStorage.getItem('p2p_address') || `${window.location.hostname}:8080`;
+          try {
+            await transport.connect(target);
+            isReady = true;
+          } catch(e) { console.error(e); }
+        }
+        
+        if (isReady) {
+          try {
+            if (navigator.clipboard && navigator.clipboard.readText) {
+              const text = await navigator.clipboard.readText();
+              if (text && text.trim().length > 0) {
+                const msg = {
+                  type: 'clipboard',
+                  id: `msg-${Date.now()}`,
+                  timestamp: Math.floor(Date.now() / 1000),
+                  payload: { text }
+                };
+                transport.send(JSON.stringify(msg));
+              }
+            }
+          } catch(e) {
+            // Permission denied or not supported by mobile browser
+          }
+        }
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -443,7 +512,20 @@ export default function App() {
           {messages.map(msg => (
             <div key={msg.id} className={`message-wrapper ${msg.sender} ${deletingIds.has(msg.id) ? 'deleting' : ''}`}>
               <div className={`message ${msg.sender}`}>
-                {msg.text && <div onClick={() => handleCopy(msg.text!)} className="interactive-text" title="Tap to copy">{msg.text}</div>}
+                {msg.text && (
+                  <div onClick={() => handleCopy(msg.text!)} className="interactive-text" title="Tap to copy">
+                    {msg.isClipboard ? (
+                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        <div style={{ fontSize: '0.75rem', opacity: 0.7, marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                          <span>📋</span> PC Clipboard
+                        </div>
+                        <div>{msg.text}</div>
+                      </div>
+                    ) : (
+                      msg.text
+                    )}
+                  </div>
+                )}
                 {msg.file && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', minWidth: '200px' }}>
                     {msg.file.blobUrl && msg.file.filename.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? (
