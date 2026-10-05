@@ -122,6 +122,17 @@ func main() {
 		}
 	}()
 
+	// Auto-display QR Code on startup
+	ip := getLocalIP()
+	if ip != "" {
+		addr := fmt.Sprintf("%s:8080", ip)
+		fmt.Printf("\n%s[Pairing]%s Scan this QR code from your phone:\n\n", Cyan, Reset)
+		qrterminal.GenerateHalfBlock(addr, qrterminal.L, os.Stdout)
+		fmt.Println()
+	} else {
+		fmt.Printf("\n%sCould not determine local IP address%s\n", Red, Reset)
+	}
+
 	// CLI input for sending messages
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
