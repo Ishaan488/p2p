@@ -2,11 +2,13 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -91,8 +93,21 @@ func getLocalIP() string {
 	return ""
 }
 
+var (
+	port        = flag.Int("port", 8080, "port to listen on")
+	homeFlag    = flag.String("home", "", "directory for received files and app data (default ~/P2P)")
+	noClipboard = flag.Bool("no-clipboard", false, "disable clipboard sync")
+)
+
 func main() {
+	flag.Parse()
+	if *homeFlag != "" {
+		baseDir = *homeFlag
+		receiveDir = filepath.Join(baseDir, "received")
+		tempDir = filepath.Join(baseDir, "temp")
+	}
 	initDirs()
+	cleanTempDir()
 	startTransferJanitor()
 	fmt.Print(Cyan + `
     ____ ___  ____     __    _       __  
@@ -105,19 +120,24 @@ func main() {
 	fmt.Println(White + "  Type '" + Yellow + "help" + White + "' for commands.\n" + Reset)
 
 	http.HandleFunc("/ws", handleWebSocket)
+	http.HandleFunc("/upload_init", handleUploadInit)
 	http.HandleFunc("/upload", handleUploadChunk)
-	http.HandleFunc("/download", handleDownloadChunk)
+	http.HandleFunc("/upload_complete", handleUploadComplete)
+	http.HandleFunc("/upload_cancel", handleUploadCancel)
 	http.HandleFunc("/download_full", handleDownloadFull)
 
 	// Serve the production React PWA
 	fs := http.FileServer(http.Dir("../mobile/dist"))
 	http.Handle("/", fs)
 
-	go watchClipboard()
+	if !*noClipboard {
+		go watchClipboard()
+	}
 
 	go func() {
-		log.Println("Listening on 0.0.0.0:8080")
-		if err := http.ListenAndServe("0.0.0.0:8080", nil); err != nil {
+		listenAddr := fmt.Sprintf("0.0.0.0:%d", *port)
+		log.Println("Listening on " + listenAddr)
+		if err := http.ListenAndServe(listenAddr, nil); err != nil {
 			log.Fatal("ListenAndServe:", err)
 		}
 	}()
@@ -125,7 +145,7 @@ func main() {
 	// Auto-display QR Code on startup
 	ip := getLocalIP()
 	if ip != "" {
-		addr := fmt.Sprintf("%s:8080", ip)
+		addr := fmt.Sprintf("%s:%d", ip, *port)
 		fmt.Printf("\n%s[Pairing]%s Scan this QR code from your phone:\n\n", Cyan, Reset)
 		qrterminal.GenerateHalfBlock(addr, qrterminal.L, os.Stdout)
 		fmt.Println()
@@ -154,7 +174,7 @@ func main() {
 			} else if text == "pair" {
 				ip := getLocalIP()
 				if ip != "" {
-					addr := fmt.Sprintf("%s:8080", ip)
+					addr := fmt.Sprintf("%s:%d", ip, *port)
 					fmt.Printf("\n%s[Pairing]%s Scan this QR code from your phone:\n\n", Cyan, Reset)
 					qrterminal.GenerateHalfBlock(addr, qrterminal.L, os.Stdout)
 					fmt.Print("\n> ")
@@ -251,21 +271,6 @@ func (c *Client) readPump() {
 					clipboard.WriteAll(text)
 					fmt.Printf("%s%s[Phone Clipboard Synced]%s\n> ", ClearLine, Cyan, Reset)
 				}
-			}
-		} else if msg.Type == "file_start" {
-			payload, ok := msg.Payload.(map[string]interface{})
-			if ok {
-				transferId, _ := payload["transferId"].(string)
-				filename, _ := payload["filename"].(string)
-				totalChunksFloat, _ := payload["totalChunks"].(float64)
-				startReceiveTransfer(transferId, filename, int(totalChunksFloat))
-			}
-		} else if msg.Type == "file_complete" {
-			payload, ok := msg.Payload.(map[string]interface{})
-			if ok {
-				transferId, _ := payload["transferId"].(string)
-				checksum, _ := payload["checksum"].(string)
-				completeTransfer(transferId, checksum)
 			}
 		}
 	}

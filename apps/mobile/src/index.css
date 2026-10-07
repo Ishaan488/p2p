@@ -367,3 +367,19 @@ body {
   background: var(--bg-chat-me);
   transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
+
+.transfer-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  min-height: 1.75rem;
+}
+.transfer-actions {
+  display: flex;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}

@@ -1,11 +1,32 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { WebSocketTransport } from './lib/transport';
 import { Message } from './lib/protocol';
-import { Send, Smartphone, File as FileIcon, Paperclip, QrCode, LogOut, Trash2, Download } from 'lucide-react';
+import { ServerApi } from './lib/api';
+import { CHUNK_SIZE, Upload, UploadQueue, UploadStatus, transferIdFor } from './lib/uploads';
+import { Send, Smartphone, File as FileIcon, Paperclip, QrCode, LogOut, Trash2, Download, Pause, Play, X } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { Clipboard } from '@capacitor/clipboard';
 
 const transport = new WebSocketTransport();
+const api = new ServerApi();
+const uploadQueue = new UploadQueue();
+const uploads = new Map<string, Upload>(); // live uploads by message id
+
+const connectTo = (address: string) => {
+  api.host = address.split('/')[0]; // fallback strip path
+  return transport.connect(address);
+};
+
+const getClientId = () => {
+  let id = localStorage.getItem('p2p_client_id');
+  if (!id) {
+    id = Math.random().toString(36).slice(2, 10);
+    localStorage.setItem('p2p_client_id', id);
+  }
+  return id;
+};
+
+const ACTIVE_UPLOAD: string[] = ['queued', 'uploading', 'paused', 'error'];
 
 interface ChatMessage {
   id: string;
@@ -19,6 +40,10 @@ interface ChatMessage {
     isDownloading?: boolean;
     progress?: number;
     blobUrl?: string;
+    // Uploads only. 'interrupted' = the app was reloaded mid-transfer.
+    status?: UploadStatus | 'interrupted';
+    speed?: number;
+    error?: string;
   };
   sender: 'me' | 'other';
   timestamp: number;
@@ -32,7 +57,11 @@ export default function App() {
   const [cameraError, setCameraError] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     const saved = localStorage.getItem('p2p_messages');
-    return saved ? JSON.parse(saved) : [];
+    const restored: ChatMessage[] = saved ? JSON.parse(saved) : [];
+    // Uploads do not survive a reload, but the server keeps their chunks.
+    return restored.map(m => m.file?.status && ACTIVE_UPLOAD.includes(m.file.status) && !uploads.has(m.id)
+      ? { ...m, file: { ...m.file, status: 'interrupted' as const, speed: 0 } }
+      : m);
   });
   const [inputValue, setInputValue] = useState('');
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
@@ -49,7 +78,23 @@ export default function App() {
     localStorage.setItem('p2p_messages', JSON.stringify(messages));
   }, [messages]);
 
+  const updateFile = (id: string, patch: Partial<NonNullable<ChatMessage['file']>>) => {
+    setMessages(prev => prev.map(m => m.id === id && m.file ? { ...m, file: { ...m.file, ...patch } } : m));
+  };
+
+  const cancelUpload = (id: string, transferId: string) => {
+    const upload = uploads.get(id);
+    if (upload) {
+      uploadQueue.cancel(upload);
+    } else {
+      api.call('/upload_cancel', { transferId }).catch(() => { });
+      updateFile(id, { status: 'canceled' });
+    }
+  };
+
   const handleDelete = (id: string) => {
+    const file = messages.find(m => m.id === id)?.file;
+    if (file?.status && file.status !== 'done' && file.status !== 'canceled') cancelUpload(id, file.transferId);
     setDeletingIds(prev => new Set(prev).add(id));
     setTimeout(() => {
       setMessages(prev => prev.filter(m => m.id !== id));
@@ -150,7 +195,7 @@ export default function App() {
 
     if (localStorage.getItem('p2p_auto_connect') !== 'false') {
       const target = localStorage.getItem('p2p_address') || `${window.location.hostname}:8080`;
-      transport.connect(target).catch(console.error);
+      connectTo(target).catch(console.error);
     }
 
     return () => transport.disconnect();
@@ -163,7 +208,7 @@ export default function App() {
         if (!isReady && localStorage.getItem('p2p_auto_connect') !== 'false') {
           const target = localStorage.getItem('p2p_address') || `${window.location.hostname}:8080`;
           try {
-            await transport.connect(target);
+            await connectTo(target);
             isReady = true;
           } catch (e) { console.error(e); }
         }
@@ -200,7 +245,7 @@ export default function App() {
           setAddress(decodedText);
           localStorage.setItem('p2p_address', decodedText);
           localStorage.setItem('p2p_auto_connect', 'true');
-          transport.connect(decodedText).catch(console.error);
+          connectTo(decodedText).catch(console.error);
         },
         () => { }
       ).catch(err => {
@@ -231,7 +276,7 @@ export default function App() {
     localStorage.setItem('p2p_address', addrToUse);
     localStorage.setItem('p2p_auto_connect', 'true');
     try {
-      await transport.connect(addrToUse);
+      await connectTo(addrToUse);
     } catch (e) {
       console.error(e);
     }
@@ -284,114 +329,79 @@ export default function App() {
       try {
         const target = localStorage.getItem('p2p_address') || address;
         localStorage.setItem('p2p_auto_connect', 'true');
-        await transport.connect(target);
+        await connectTo(target);
       } catch (err) {
         console.error("Failed to reconnect before upload", err);
         return;
       }
     }
 
-    const transferId = `transfer-${Date.now()}-${file.name}`;
-    const chunkSize = 65536;
-    const totalChunks = Math.ceil(file.size / chunkSize);
-    const timestamp = Math.floor(Date.now() / 1000);
+    sendFile(file);
+  };
+
+  const sendFile = (file: File) => {
+    const transferId = transferIdFor(getClientId(), file);
+    const msgId = `msg-${transferId}`;
+
+    // Same file while it is still in flight: just make sure it is moving.
+    const running = uploads.get(msgId);
+    if (running) {
+      uploadQueue.enqueue(running);
+      return;
+    }
 
     let blobUrl: string | undefined = undefined;
     if (file.name.match(/\.(jpg|jpeg|png|gif|webp)$/i) && file.size < 20 * 1024 * 1024) {
       blobUrl = URL.createObjectURL(file);
     }
 
-    // 1. Send file_start over WS
-    transport.send(JSON.stringify({
-      version: 1,
-      type: 'file_start',
-      id: `msg-${transferId}`,
-      timestamp,
-      payload: {
-        transferId,
-        filename: file.name,
-        mimeType: file.type || 'application/octet-stream',
-        totalSize: file.size,
-        chunkSize,
-        totalChunks,
-        checksum: 'pending' // client-side hash omitted for brevity
-      }
-    }));
+    // Chunks go over HTTP, several at a time. Re-sending a file that was
+    // interrupted earlier maps to the same transfer id, so it resumes.
+    const upload = new Upload(api, file, transferId, p => {
+      // Until the server has reported what it already holds, keep the old progress on screen.
+      const progress = p.status === 'queued' ? {} : { progress: p.totalBytes ? (p.sentBytes / p.totalBytes) * 100 : 100 };
+      updateFile(msgId, { status: p.status, speed: p.speed, error: p.error, ...progress });
+      if (p.status === 'done' || p.status === 'canceled') uploads.delete(msgId);
+    });
+    uploads.set(msgId, upload);
 
-    // Add to UI
-    const msgId = `msg-${transferId}`;
-    setMessages(prev => [...prev, {
+    const resumedFrom = messages.find(m => m.id === msgId)?.file;
+    setMessages(prev => [...prev.filter(m => m.id !== msgId), {
       id: msgId,
       file: {
         filename: file.name,
         transferId,
         totalSize: file.size,
-        totalChunks,
-        chunkSize,
-        isDownloading: true,
-        progress: 0,
+        totalChunks: upload.totalChunks,
+        chunkSize: CHUNK_SIZE,
+        status: 'queued',
+        progress: resumedFrom?.status === 'interrupted' ? resumedFrom.progress : 0,
         blobUrl
       },
       sender: 'me',
       timestamp: Date.now()
     }]);
 
-    // 2. Upload chunks via HTTP
-    const host = address.split('/')[0]; // fallback strip path
-    for (let i = 0; i < totalChunks; i++) {
-      const start = i * chunkSize;
-      const end = Math.min(start + chunkSize, file.size);
-      const chunk = file.slice(start, end);
+    uploadQueue.enqueue(upload);
+  };
 
-      try {
-        const res = await fetch(`http://${host}/upload?transferId=${transferId}&chunkIndex=${i}&chunkSize=${chunkSize}`, {
-          method: 'POST',
-          body: chunk
-        });
-
-        if (!res.ok) {
-          throw new Error(`Upload failed with status ${res.status}`);
-        }
-
-        // Update progress
-        setMessages(prev => prev.map(m => {
-          if (m.id === msgId && m.file) {
-            return { ...m, file: { ...m.file, progress: ((i + 1) / totalChunks) * 100 } };
-          }
-          return m;
-        }));
-      } catch (err) {
-        console.error("Chunk upload failed", err);
-        return; // Abort transfer if a chunk fails
-      }
+  const uploadLabel = (file: NonNullable<ChatMessage['file']>) => {
+    const percent = `${Math.floor(file.progress || 0)}%`;
+    switch (file.status) {
+      case 'queued': return 'Queued';
+      case 'uploading': return `Uploading ${percent}${file.speed ? ` • ${formatFileSize(file.speed)}/s` : ''}`;
+      case 'paused': return `Paused • ${percent}`;
+      case 'error': return `Stalled at ${percent} • ${file.error || 'connection lost'}`;
+      case 'interrupted': return `Interrupted at ${percent} • select the file again to resume`;
+      case 'canceled': return 'Cancelled';
+      default: return '';
     }
-
-    // 3. Send file_complete over WS
-    transport.send(JSON.stringify({
-      version: 1,
-      type: 'file_complete',
-      id: `msg-complete-${transferId}`,
-      timestamp: Math.floor(Date.now() / 1000),
-      payload: {
-        transferId,
-        checksum: 'pending'
-      }
-    }));
-
-    // Mark complete
-    setMessages(prev => prev.map(m => {
-      if (m.id === msgId && m.file) {
-        return { ...m, file: { ...m.file, isDownloading: false, progress: 100 } };
-      }
-      return m;
-    }));
   };
 
   const handleDownload = async (msgId: string, file: NonNullable<ChatMessage['file']>, forceNative = false) => {
     if (!file || file.isDownloading || (file.blobUrl && !forceNative)) return;
 
-    const host = address.split('/')[0];
-    const url = `http://${host}/download_full?transferId=${file.transferId}`;
+    const url = api.downloadUrl(file.transferId);
 
     if (!forceNative && file.filename.match(/\.(jpg|jpeg|png|gif|webp)$/i) && file.totalSize < 20 * 1024 * 1024) {
       // For small images (<20MB), set the blobUrl so the UI displays it immediately
@@ -496,7 +506,7 @@ export default function App() {
         <div className="header-title">P2P Link</div>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
           <button
-            onClick={() => setMessages([])}
+            onClick={() => setMessages(prev => prev.filter(m => uploads.has(m.id)))}
             className="icon-btn"
             title="Clear History"
           >
@@ -571,9 +581,33 @@ export default function App() {
                       </div>
                     )}
 
-                    {msg.sender === 'me' && msg.file.progress !== undefined && msg.file.progress < 100 && (
-                      <div className="progress-bar-container" style={{ height: '4px', background: 'rgba(255,255,255,0.2)', borderRadius: '2px', overflow: 'hidden', marginTop: '0.5rem' }}>
-                        <div className="progress-bar-fill" style={{ height: '100%', background: '#fff', width: `${msg.file.progress}%`, transition: 'width 0.3s cubic-bezier(0.4, 0, 0.2, 1)' }}></div>
+                    {msg.sender === 'me' && msg.file.status && msg.file.status !== 'done' && (
+                      <div>
+                        {msg.file.status !== 'canceled' && (
+                          <div className="progress-bar-container" style={{ height: '4px', background: 'rgba(255,255,255,0.2)', borderRadius: '2px', overflow: 'hidden', marginTop: '0.5rem' }}>
+                            <div className="progress-bar-fill" style={{ height: '100%', background: '#fff', width: `${msg.file.progress || 0}%`, transition: 'width 0.3s cubic-bezier(0.4, 0, 0.2, 1)' }}></div>
+                          </div>
+                        )}
+                        <div className="transfer-status">
+                          <span>{uploadLabel(msg.file)}</span>
+                          {msg.file.status !== 'canceled' && (
+                            <span className="transfer-actions">
+                              {(msg.file.status === 'uploading' || msg.file.status === 'queued') && (
+                                <button onClick={() => uploadQueue.pause(uploads.get(msg.id)!)} className="icon-btn" title="Pause">
+                                  <Pause size={16} />
+                                </button>
+                              )}
+                              {(msg.file.status === 'paused' || msg.file.status === 'error') && (
+                                <button onClick={() => uploadQueue.enqueue(uploads.get(msg.id)!)} className="icon-btn" title="Resume">
+                                  <Play size={16} />
+                                </button>
+                              )}
+                              <button onClick={() => cancelUpload(msg.id, msg.file!.transferId)} className="icon-btn" title="Cancel">
+                                <X size={16} />
+                              </button>
+                            </span>
+                          )}
+                        </div>
                       </div>
                     )}
 
