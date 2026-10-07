@@ -56,8 +56,9 @@ var upgrader = websocket.Upgrader{
 }
 
 type Client struct {
-	conn *websocket.Conn
-	send chan Message
+	conn   *websocket.Conn
+	send   chan Message
+	device *Device
 }
 
 var (
@@ -107,6 +108,7 @@ func main() {
 		tempDir = filepath.Join(baseDir, "temp")
 	}
 	initDirs()
+	loadState()
 	cleanTempDir()
 	startTransferJanitor()
 	fmt.Print(Cyan + `
@@ -120,11 +122,13 @@ func main() {
 	fmt.Println(White + "  Type '" + Yellow + "help" + White + "' for commands.\n" + Reset)
 
 	http.HandleFunc("/ws", handleWebSocket)
-	http.HandleFunc("/upload_init", handleUploadInit)
-	http.HandleFunc("/upload", handleUploadChunk)
-	http.HandleFunc("/upload_complete", handleUploadComplete)
-	http.HandleFunc("/upload_cancel", handleUploadCancel)
-	http.HandleFunc("/download_full", handleDownloadFull)
+	http.HandleFunc("/pair", handlePair)
+	http.HandleFunc("/hello", handleHello)
+	http.HandleFunc("/upload_init", authed(handleUploadInit))
+	http.HandleFunc("/upload", authed(handleUploadChunk))
+	http.HandleFunc("/upload_complete", authed(handleUploadComplete))
+	http.HandleFunc("/upload_cancel", authed(handleUploadCancel))
+	http.HandleFunc("/download_full", authed(handleDownloadFull))
 
 	// Serve the production React PWA
 	fs := http.FileServer(http.Dir("../mobile/dist"))
@@ -143,15 +147,7 @@ func main() {
 	}()
 
 	// Auto-display QR Code on startup
-	ip := getLocalIP()
-	if ip != "" {
-		addr := fmt.Sprintf("%s:%d", ip, *port)
-		fmt.Printf("\n%s[Pairing]%s Scan this QR code from your phone:\n\n", Cyan, Reset)
-		qrterminal.GenerateHalfBlock(addr, qrterminal.L, os.Stdout)
-		fmt.Println()
-	} else {
-		fmt.Printf("\n%sCould not determine local IP address%s\n", Red, Reset)
-	}
+	showPairing()
 
 	// CLI input for sending messages
 	scanner := bufio.NewScanner(os.Stdin)
@@ -164,23 +160,22 @@ func main() {
 		if text != "" {
 			if text == "help" {
 				fmt.Println(Cyan + "\n--- Commands ---" + Reset)
-				fmt.Println(Yellow + "pair" + Reset + "          : Show QR code to connect phone")
-				fmt.Println(Yellow + "send <file>" + Reset + "   : Send a file (e.g. send \"C:\\photo.jpg\")")
-				fmt.Println(Yellow + "setdir <path>" + Reset + " : Set directory for received files")
-				fmt.Println(Yellow + "exit" + Reset + "          : Close the server\n")
+				fmt.Println(Yellow + "pair" + Reset + "            : Show a fresh QR code to pair a device")
+				fmt.Println(Yellow + "devices" + Reset + "         : List paired devices")
+				fmt.Println(Yellow + "unpair <device>" + Reset + " : Remove a paired device (by name or id)")
+				fmt.Println(Yellow + "send <file>" + Reset + "     : Send a file (e.g. send \"C:\\photo.jpg\")")
+				fmt.Println(Yellow + "setdir <path>" + Reset + "   : Set directory for received files")
+				fmt.Println(Yellow + "exit" + Reset + "            : Close the server")
+				fmt.Println()
 			} else if text == "exit" {
 				fmt.Println(Yellow + "Shutting down..." + Reset)
 				os.Exit(0)
 			} else if text == "pair" {
-				ip := getLocalIP()
-				if ip != "" {
-					addr := fmt.Sprintf("%s:%d", ip, *port)
-					fmt.Printf("\n%s[Pairing]%s Scan this QR code from your phone:\n\n", Cyan, Reset)
-					qrterminal.GenerateHalfBlock(addr, qrterminal.L, os.Stdout)
-					fmt.Print("\n> ")
-				} else {
-					fmt.Printf("%sCould not determine local IP address%s\n> ", Red, Reset)
-				}
+				showPairing()
+			} else if text == "devices" {
+				printDevices()
+			} else if strings.HasPrefix(text, "unpair ") {
+				unpairDevice(strings.TrimSpace(strings.TrimPrefix(text, "unpair ")))
 			} else if strings.HasPrefix(text, "send ") {
 				filePath := strings.TrimPrefix(text, "send ")
 				filePath = strings.TrimSpace(filePath)
@@ -213,7 +208,75 @@ func main() {
 	}
 }
 
+// showPairing prints a QR code that opens the app and pairs the scanning device.
+func showPairing() {
+	code := newPairCode()
+	ip := getLocalIP()
+	if ip == "" {
+		fmt.Printf("\n%sCould not determine local IP address%s\n", Red, Reset)
+		fmt.Printf("  Pairing code: %s%s%s\n\n", Yellow, formatPairCode(code), Reset)
+		return
+	}
+	addr := fmt.Sprintf("%s:%d", ip, *port)
+	fmt.Printf("\n%s[Pairing]%s Scan this QR code from your phone:\n\n", Cyan, Reset)
+	qrterminal.GenerateHalfBlock(fmt.Sprintf("http://%s/#pair=%s", addr, code), qrterminal.L, os.Stdout)
+	fmt.Printf("\n  Or open %shttp://%s%s and enter the code %s%s%s\n", White, addr, Reset, Yellow, formatPairCode(code), Reset)
+	fmt.Printf("  The code is valid for %d minutes.\n\n", int(pairCodeTTL.Minutes()))
+}
+
+func deviceOnline(id string) bool {
+	clientsMu.Lock()
+	defer clientsMu.Unlock()
+	for client := range clients {
+		if client.device.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func printDevices() {
+	devices := listDevices()
+	if len(devices) == 0 {
+		fmt.Println("No paired devices. Type 'pair' to add one.")
+		return
+	}
+	fmt.Println(Cyan + "\n--- Paired devices ---" + Reset)
+	for _, d := range devices {
+		status := "last seen " + time.Unix(d.LastSeen, 0).Format("2006-01-02 15:04")
+		if deviceOnline(d.ID) {
+			status = Green + "online" + Reset
+		}
+		fmt.Printf("%s%-24s%s %s  %s\n", Yellow, d.Name, Reset, d.ID[:8], status)
+	}
+	fmt.Println()
+}
+
+func unpairDevice(query string) {
+	device := findDeviceByQuery(strings.Trim(query, "\"'"))
+	if device == nil {
+		fmt.Printf("%sNo paired device matches %q%s\n", Red, query, Reset)
+		return
+	}
+	removeDevice(device.ID)
+	dropSessions(device.ID)
+
+	clientsMu.Lock()
+	for client := range clients {
+		if client.device.ID == device.ID {
+			client.conn.Close()
+		}
+	}
+	clientsMu.Unlock()
+	fmt.Printf("%sUnpaired %s%s\n", Green, device.Name, Reset)
+}
+
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	session := authenticate(r)
+	if session == nil {
+		http.Error(w, "Session expired", http.StatusUnauthorized)
+		return
+	}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("Upgrade error:", err)
@@ -221,15 +284,17 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &Client{
-		conn: conn,
-		send: make(chan Message, 256),
+		conn:   conn,
+		send:   make(chan Message, 256),
+		device: session.Device,
 	}
+	touchDevice(session.Device)
 
 	clientsMu.Lock()
 	clients[client] = true
 	clientsMu.Unlock()
 
-	fmt.Printf("%s%s[Device Connected]%s %s\n> ", ClearLine, Green, Reset, r.RemoteAddr)
+	fmt.Printf("%s%s[Device Connected]%s %s (%s)\n> ", ClearLine, Green, Reset, client.device.Name, r.RemoteAddr)
 
 	go client.writePump()
 	client.readPump()
@@ -241,7 +306,7 @@ func (c *Client) readPump() {
 		delete(clients, c)
 		clientsMu.Unlock()
 		c.conn.Close()
-		fmt.Printf("%s%s[Device Disconnected]%s\n> ", ClearLine, Yellow, Reset)
+		fmt.Printf("%s%s[Device Disconnected]%s %s\n> ", ClearLine, Yellow, Reset, c.device.Name)
 	}()
 
 	for {
@@ -260,7 +325,7 @@ func (c *Client) readPump() {
 				if text, exists := payload["text"].(string); exists {
 					lastClipboardText = text
 					clipboard.WriteAll(text)
-					fmt.Printf("%s%s[Phone]:%s %s %s(Copied to Clipboard)%s\n> ", ClearLine, Blue, Reset, text, Cyan, Reset)
+					fmt.Printf("%s%s[%s]:%s %s %s(Copied to Clipboard)%s\n> ", ClearLine, Blue, c.device.Name, Reset, text, Cyan, Reset)
 				}
 			}
 		} else if msg.Type == "clipboard" {
@@ -269,7 +334,7 @@ func (c *Client) readPump() {
 				if text, exists := payload["text"].(string); exists {
 					lastClipboardText = text
 					clipboard.WriteAll(text)
-					fmt.Printf("%s%s[Phone Clipboard Synced]%s\n> ", ClearLine, Cyan, Reset)
+					fmt.Printf("%s%s[Clipboard Synced %s -> PC]%s\n> ", ClearLine, Cyan, c.device.Name, Reset)
 				}
 			}
 		}

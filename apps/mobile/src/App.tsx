@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { WebSocketTransport } from './lib/transport';
 import { Message } from './lib/protocol';
-import { ServerApi } from './lib/api';
+import { HttpError, Pairing, ServerApi, pairDevice } from './lib/api';
+import { randomHex } from './lib/crypto';
 import { CHUNK_SIZE, Upload, UploadQueue, UploadStatus, transferIdFor } from './lib/uploads';
 import { Send, Smartphone, File as FileIcon, Paperclip, QrCode, LogOut, Trash2, Download, Pause, Play, X, UploadCloud } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
@@ -12,18 +13,50 @@ const api = new ServerApi();
 const uploadQueue = new UploadQueue();
 const uploads = new Map<string, Upload>(); // live uploads by message id
 
-const connectTo = (address: string) => {
-  api.host = address.split('/')[0]; // fallback strip path
-  return transport.connect(address);
-};
+const defaultAddress = () => window.location.port ? window.location.host : `${window.location.hostname}:8080`;
+const savedAddress = () => localStorage.getItem('p2p_address') || defaultAddress();
 
-const getClientId = () => {
-  let id = localStorage.getItem('p2p_client_id');
+const getDeviceId = () => {
+  let id = localStorage.getItem('p2p_device_id');
   if (!id) {
-    id = Math.random().toString(36).slice(2, 10);
-    localStorage.setItem('p2p_client_id', id);
+    id = randomHex(8);
+    localStorage.setItem('p2p_device_id', id);
   }
   return id;
+};
+
+const guessDeviceName = () => {
+  const ua = navigator.userAgent;
+  if (/iPhone/.test(ua)) return 'iPhone';
+  if (/iPad/.test(ua)) return 'iPad';
+  if (/Android/.test(ua)) return /Mobile/.test(ua) ? 'Android phone' : 'Android tablet';
+  if (/Windows/.test(ua)) return 'Windows browser';
+  if (/Mac OS X/.test(ua)) return 'Mac browser';
+  if (/Linux/.test(ua)) return 'Linux browser';
+  return 'Browser';
+};
+
+const loadPairing = (): Pairing | null => {
+  try {
+    return JSON.parse(localStorage.getItem('p2p_pairing') || 'null');
+  } catch {
+    return null;
+  }
+};
+api.pairing = loadPairing();
+
+// A pairing QR code is a link to the app with the code in the fragment
+// (http://192.168.1.5:8080/#pair=CODE); older ones are a bare "ip:port".
+const parsePairingLink = (text: string): { host: string; code?: string } => {
+  try {
+    const url = new URL(text);
+    if (url.protocol === 'http:' || url.protocol === 'https:') {
+      return { host: url.host, code: new URLSearchParams(url.hash.slice(1)).get('pair') || undefined };
+    }
+  } catch {
+    // not a URL
+  }
+  return { host: text.trim() };
 };
 
 const ACTIVE_UPLOAD: string[] = ['queued', 'uploading', 'paused', 'error'];
@@ -52,7 +85,11 @@ interface ChatMessage {
 
 export default function App() {
   const [status, setStatus] = useState<'connected' | 'disconnected' | 'connecting' | 'error'>('connecting');
-  const [address, setAddress] = useState(() => localStorage.getItem('p2p_address') || `${window.location.hostname}:8080`);
+  const [address, setAddress] = useState(savedAddress);
+  const [pairing, setPairing] = useState<Pairing | null>(() => api.pairing);
+  const [pairCode, setPairCode] = useState('');
+  const [deviceName, setDeviceName] = useState(() => localStorage.getItem('p2p_device_name') || guessDeviceName());
+  const [connectError, setConnectError] = useState('');
   const [isScanning, setIsScanning] = useState(false);
   const [cameraError, setCameraError] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
@@ -106,6 +143,57 @@ export default function App() {
         return next;
       });
     }, 300);
+  };
+
+  const savePairing = (next: Pairing | null) => {
+    api.pairing = next;
+    setPairing(next);
+    if (next) localStorage.setItem('p2p_pairing', JSON.stringify(next));
+    else localStorage.removeItem('p2p_pairing');
+  };
+
+  const connectTo = async (target: string) => {
+    api.host = target.split('/')[0]; // fallback strip path
+    setConnectError('');
+    if (!api.pairing) {
+      setStatus('disconnected');
+      throw new Error('Not paired');
+    }
+    setStatus('connecting');
+    let url: string;
+    try {
+      url = await api.wsUrl();
+    } catch (err) {
+      if (err instanceof HttpError && err.code === 'not_paired') {
+        savePairing(null);
+        setConnectError('This device is no longer paired with the PC. Scan its QR code or enter a new pairing code.');
+        setStatus('disconnected');
+      } else {
+        setStatus('error');
+      }
+      throw err;
+    }
+    return transport.connect(url);
+  };
+
+  // Pairs with the PC at `host` (the code comes from its QR code or terminal) and connects.
+  const pairAndConnect = async (host: string, code: string) => {
+    setConnectError('');
+    setStatus('connecting');
+    setAddress(host);
+    try {
+      const name = deviceName.trim() || guessDeviceName();
+      localStorage.setItem('p2p_device_name', name);
+      savePairing(await pairDevice(host, code, getDeviceId(), name));
+    } catch (err) {
+      setStatus('disconnected');
+      setConnectError(err instanceof HttpError ? err.message : `Could not reach the PC at ${host}. Are you on the same Wi-Fi network?`);
+      return;
+    }
+    localStorage.setItem('p2p_address', host);
+    localStorage.setItem('p2p_auto_connect', 'true');
+    setPairCode('');
+    await connectTo(host).catch(console.error);
   };
 
   const fallbackCopyTextToClipboard = (text: string) => {
@@ -195,9 +283,15 @@ export default function App() {
       }
     });
 
-    if (localStorage.getItem('p2p_auto_connect') !== 'false') {
-      const target = localStorage.getItem('p2p_address') || `${window.location.hostname}:8080`;
-      connectTo(target).catch(console.error);
+    // Opened from the pairing QR code: the code is in the URL fragment.
+    const linkCode = new URLSearchParams(window.location.hash.slice(1)).get('pair');
+    if (linkCode) {
+      history.replaceState(null, '', window.location.pathname);
+      pairAndConnect(window.location.host, linkCode);
+    } else if (api.pairing && localStorage.getItem('p2p_auto_connect') !== 'false') {
+      connectTo(savedAddress()).catch(console.error);
+    } else {
+      setStatus('disconnected');
     }
 
     return () => transport.disconnect();
@@ -207,10 +301,9 @@ export default function App() {
     const handleVisibilityChange = async () => {
       if (document.visibilityState === 'visible') {
         let isReady = transport.isConnected();
-        if (!isReady && localStorage.getItem('p2p_auto_connect') !== 'false') {
-          const target = localStorage.getItem('p2p_address') || `${window.location.hostname}:8080`;
+        if (!isReady && api.pairing && localStorage.getItem('p2p_auto_connect') !== 'false') {
           try {
-            await connectTo(target);
+            await connectTo(savedAddress());
             isReady = true;
           } catch (e) { console.error(e); }
         }
@@ -244,10 +337,17 @@ export default function App() {
       html5QrCode.start({ facingMode: "environment" }, { fps: 10, qrbox: { width: 250, height: 250 } },
         (decodedText) => {
           html5QrCode.stop().then(() => setIsScanning(false)).catch(() => { });
-          setAddress(decodedText);
-          localStorage.setItem('p2p_address', decodedText);
-          localStorage.setItem('p2p_auto_connect', 'true');
-          connectTo(decodedText).catch(console.error);
+          const link = parsePairingLink(decodedText);
+          setAddress(link.host);
+          if (link.code) {
+            pairAndConnect(link.host, link.code);
+          } else if (api.pairing) {
+            localStorage.setItem('p2p_address', link.host);
+            localStorage.setItem('p2p_auto_connect', 'true');
+            connectTo(link.host).catch(console.error);
+          } else {
+            setConnectError('That QR code has no pairing code. Type "pair" on the PC to show a new one.');
+          }
         },
         () => { }
       ).catch(err => {
@@ -272,16 +372,20 @@ export default function App() {
     }
   }, [messages, status]);
 
-  const handleConnect = async (e: React.FormEvent, directAddress?: string) => {
-    if (e) e.preventDefault();
-    const addrToUse = directAddress || address;
-    localStorage.setItem('p2p_address', addrToUse);
-    localStorage.setItem('p2p_auto_connect', 'true');
-    try {
-      await connectTo(addrToUse);
-    } catch (e) {
-      console.error(e);
+  const handleConnect = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const host = address.trim();
+    if (pairCode.trim()) {
+      await pairAndConnect(host, pairCode);
+      return;
     }
+    if (!pairing) {
+      setConnectError('Enter the pairing code shown in the PC terminal (type "pair" there to get one).');
+      return;
+    }
+    localStorage.setItem('p2p_address', host);
+    localStorage.setItem('p2p_auto_connect', 'true');
+    await connectTo(host).catch(console.error);
   };
 
   const handleDisconnect = () => {
@@ -329,9 +433,8 @@ export default function App() {
     if (!transport.isConnected()) {
       setStatus('connecting');
       try {
-        const target = localStorage.getItem('p2p_address') || address;
         localStorage.setItem('p2p_auto_connect', 'true');
-        await connectTo(target);
+        await connectTo(savedAddress());
       } catch (err) {
         console.error("Failed to reconnect before upload", err);
         return;
@@ -376,7 +479,7 @@ export default function App() {
   };
 
   const sendFile = (file: File) => {
-    const transferId = transferIdFor(getClientId(), file);
+    const transferId = transferIdFor(getDeviceId(), file);
     const msgId = `msg-${transferId}`;
 
     // Same file while it is still in flight: just make sure it is moving.
@@ -437,7 +540,7 @@ export default function App() {
   const handleDownload = async (msgId: string, file: NonNullable<ChatMessage['file']>, forceNative = false) => {
     if (!file || file.isDownloading || (file.blobUrl && !forceNative)) return;
 
-    const url = api.downloadUrl(file.transferId);
+    const url = await api.downloadUrl(file.transferId);
 
     if (!forceNative && file.filename.match(/\.(jpg|jpeg|png|gif|webp)$/i) && file.totalSize < 20 * 1024 * 1024) {
       // For small images (<20MB), set the blobUrl so the UI displays it immediately
@@ -481,9 +584,11 @@ export default function App() {
               </div>
             ) : (
               <>
-                <h2 style={{ marginBottom: '0.5rem' }}>Connect to PC</h2>
+                <h2 style={{ marginBottom: '0.5rem' }}>{pairing ? 'Connect to PC' : 'Pair with PC'}</h2>
                 <div style={{ fontSize: '0.9rem', marginBottom: '2rem', textAlign: 'center', lineHeight: '1.4', color: 'var(--text-secondary)' }}>
-                  Ensure your phone and pc are on same network
+                  {pairing
+                    ? `Paired with ${pairing.serverName || 'your PC'} as "${pairing.deviceName}". Ensure both are on the same network.`
+                    : 'Scan the QR code shown in the PC terminal. Ensure your phone and pc are on same network.'}
                 </div>
 
                 {cameraError && (
@@ -492,7 +597,13 @@ export default function App() {
                   </div>
                 )}
 
-                {status === 'error' && !cameraError && (
+                {connectError && !cameraError && (
+                  <div style={{ padding: '0.75rem', background: 'rgba(239, 68, 68, 0.2)', border: '1px solid var(--error-color)', borderRadius: '8px', marginBottom: '1rem', color: 'var(--error-color)', fontSize: '0.875rem' }}>
+                    {connectError}
+                  </div>
+                )}
+
+                {status === 'error' && !cameraError && !connectError && (
                   <div style={{ padding: '0.75rem', background: 'rgba(239, 68, 68, 0.2)', border: '1px solid var(--error-color)', borderRadius: '8px', marginBottom: '1rem', color: 'var(--error-color)', fontSize: '0.875rem' }}>
                     Connection timed out. Are you on the exact same Wi-Fi network as your PC?
                   </div>
@@ -504,7 +615,7 @@ export default function App() {
                   style={{ marginBottom: '1.5rem', background: 'transparent', border: '1px solid var(--accent-color)', color: 'var(--accent-color)' }}
                 >
                   <QrCode size={18} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '8px' }} />
-                  Scan to Connect
+                  {pairing ? 'Scan to Connect' : 'Scan to Pair'}
                 </button>
 
                 <div style={{ margin: '1rem 0', opacity: 0.5, fontSize: '0.875rem' }}>OR ENTER MANUALLY</div>
@@ -520,12 +631,37 @@ export default function App() {
                       placeholder="192.168.1.x:8080"
                     />
                   </div>
+                  <div className="input-group">
+                    <label>Pairing Code{pairing ? ' (only to pair again)' : ''}</label>
+                    <input
+                      type="text"
+                      className="text-input"
+                      value={pairCode}
+                      onChange={e => setPairCode(e.target.value)}
+                      placeholder="XXXX-XXXX-XXXX-XXXX"
+                      autoCapitalize="characters"
+                      autoCorrect="off"
+                      spellCheck={false}
+                    />
+                  </div>
+                  {(!pairing || pairCode.trim()) && (
+                    <div className="input-group">
+                      <label>Name of This Device</label>
+                      <input
+                        type="text"
+                        className="text-input"
+                        value={deviceName}
+                        onChange={e => setDeviceName(e.target.value)}
+                        maxLength={40}
+                      />
+                    </div>
+                  )}
                   <button
                     type="submit"
                     className="primary-btn"
                     disabled={status === 'connecting'}
                   >
-                    {status === 'connecting' ? 'Connecting...' : 'Connect via Wi-Fi'}
+                    {status === 'connecting' ? 'Connecting...' : pairCode.trim() || !pairing ? 'Pair & Connect' : 'Connect via Wi-Fi'}
                   </button>
                 </form>
               </>

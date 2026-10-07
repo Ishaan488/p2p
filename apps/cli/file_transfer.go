@@ -46,8 +46,9 @@ type TransferState struct {
 	TotalSize   int64
 	File        *os.File
 	FilePath    string
-	IsDownload  bool  // true if Windows is sending to phone
-	LastActive  int64 // Unix timestamp
+	IsDownload  bool   // true if Windows is sending to phone
+	LastActive  int64  // Unix timestamp
+	Owner       string // id of the device uploading it
 
 	// fileMu lets chunks be written in parallel (RLock) while completion or
 	// cancellation (Lock) waits for in-flight writes before closing the file.
@@ -248,6 +249,15 @@ func lookupTransfer(id string) *TransferState {
 	return state
 }
 
+// lookupUpload returns an in-progress upload, but only to the device that started it.
+func lookupUpload(id string, s *Session) *TransferState {
+	state := lookupTransfer(id)
+	if state == nil || state.IsDownload || state.Owner != s.Device.ID {
+		return nil
+	}
+	return state
+}
+
 type uploadInitRequest struct {
 	TransferID  string `json:"transferId"`
 	Filename    string `json:"filename"`
@@ -265,10 +275,7 @@ type uploadStatus struct {
 
 // handleUploadInit starts an upload, or resumes it when the same transfer id
 // is announced again: the response lists the chunks the server already has.
-func handleUploadInit(w http.ResponseWriter, r *http.Request) {
-	if enableCORS(w, r) {
-		return
-	}
+func handleUploadInit(w http.ResponseWriter, r *http.Request, s *Session) {
 	var req uploadInitRequest
 	if err := readJSONBody(r, &req); err != nil || req.TransferID == "" {
 		httpError(w, http.StatusBadRequest, "Invalid request")
@@ -282,7 +289,7 @@ func handleUploadInit(w http.ResponseWriter, r *http.Request) {
 
 	transfersMu.Lock()
 	state, exists := transfers[req.TransferID]
-	if exists && (state.IsDownload || state.TotalSize != req.TotalSize || state.ChunkSize != req.ChunkSize) {
+	if exists && (state.IsDownload || state.Owner != s.Device.ID || state.TotalSize != req.TotalSize || state.ChunkSize != req.ChunkSize) {
 		transfersMu.Unlock()
 		httpError(w, http.StatusConflict, "Transfer id already in use")
 		return
@@ -305,6 +312,7 @@ func handleUploadInit(w http.ResponseWriter, r *http.Request) {
 			TotalSize:   req.TotalSize,
 			File:        f,
 			FilePath:    path,
+			Owner:       s.Device.ID,
 			received:    make([]bool, req.TotalChunks),
 		}
 		transfers[req.TransferID] = state
@@ -313,9 +321,9 @@ func handleUploadInit(w http.ResponseWriter, r *http.Request) {
 	transfersMu.Unlock()
 
 	if exists {
-		fmt.Printf("%s%s[Resuming file]:%s %s\n", ClearLine, Cyan, Reset, state.Filename)
+		fmt.Printf("%s%s[Resuming file]:%s %s from %s\n", ClearLine, Cyan, Reset, state.Filename, s.Device.Name)
 	} else {
-		fmt.Printf("%s%s[Receiving file]:%s %s\n", ClearLine, Cyan, Reset, state.Filename)
+		fmt.Printf("%s%s[Receiving file]:%s %s from %s\n", ClearLine, Cyan, Reset, state.Filename, s.Device.Name)
 	}
 
 	writeJSON(w, http.StatusOK, uploadStatus{
@@ -326,14 +334,10 @@ func handleUploadInit(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func handleUploadChunk(w http.ResponseWriter, r *http.Request) {
-	if enableCORS(w, r) {
-		return
-	}
-
+func handleUploadChunk(w http.ResponseWriter, r *http.Request, s *Session) {
 	// Phone uploading to Windows
-	state := lookupTransfer(r.URL.Query().Get("transferId"))
-	if state == nil || state.IsDownload {
+	state := lookupUpload(r.URL.Query().Get("transferId"), s)
+	if state == nil {
 		httpError(w, http.StatusNotFound, "Unknown transfer")
 		return
 	}
@@ -397,17 +401,14 @@ type transferRef struct {
 }
 
 // handleUploadComplete moves a fully received upload into the receive directory.
-func handleUploadComplete(w http.ResponseWriter, r *http.Request) {
-	if enableCORS(w, r) {
-		return
-	}
+func handleUploadComplete(w http.ResponseWriter, r *http.Request, s *Session) {
 	var req transferRef
 	if err := readJSONBody(r, &req); err != nil {
 		httpError(w, http.StatusBadRequest, "Invalid request")
 		return
 	}
-	state := lookupTransfer(req.TransferID)
-	if state == nil || state.IsDownload {
+	state := lookupUpload(req.TransferID, s)
+	if state == nil {
 		httpError(w, http.StatusNotFound, "Unknown transfer")
 		return
 	}
@@ -449,24 +450,18 @@ func handleUploadComplete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"filename": filepath.Base(finalPath)})
 }
 
-func handleUploadCancel(w http.ResponseWriter, r *http.Request) {
-	if enableCORS(w, r) {
-		return
-	}
+func handleUploadCancel(w http.ResponseWriter, r *http.Request, s *Session) {
 	var req transferRef
 	if err := readJSONBody(r, &req); err != nil {
 		httpError(w, http.StatusBadRequest, "Invalid request")
 		return
 	}
 
-	transfersMu.Lock()
-	state, exists := transfers[req.TransferID]
-	if exists && !state.IsDownload {
+	state := lookupUpload(req.TransferID, s)
+	if state != nil {
+		transfersMu.Lock()
 		delete(transfers, req.TransferID)
-	}
-	transfersMu.Unlock()
-
-	if exists && !state.IsDownload {
+		transfersMu.Unlock()
 		state.discard()
 		fmt.Printf("%s%s[Transfer cancelled]:%s %s\n> ", ClearLine, Yellow, Reset, state.Filename)
 	}
@@ -508,11 +503,7 @@ func moveIntoDir(src, dir, filename string) (string, error) {
 
 // handleDownloadFull streams a file the PC is sending. http.ServeFile honours
 // Range requests, so the phone's download manager can pause and resume.
-func handleDownloadFull(w http.ResponseWriter, r *http.Request) {
-	if enableCORS(w, r) {
-		return
-	}
-
+func handleDownloadFull(w http.ResponseWriter, r *http.Request, s *Session) {
 	state := lookupTransfer(r.URL.Query().Get("transferId"))
 	if state == nil || !state.IsDownload {
 		http.Error(w, "Unknown transfer", 404)
