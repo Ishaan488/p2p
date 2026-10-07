@@ -3,7 +3,7 @@ import { WebSocketTransport } from './lib/transport';
 import { Message } from './lib/protocol';
 import { ServerApi } from './lib/api';
 import { CHUNK_SIZE, Upload, UploadQueue, UploadStatus, transferIdFor } from './lib/uploads';
-import { Send, Smartphone, File as FileIcon, Paperclip, QrCode, LogOut, Trash2, Download, Pause, Play, X } from 'lucide-react';
+import { Send, Smartphone, File as FileIcon, Paperclip, QrCode, LogOut, Trash2, Download, Pause, Play, X, UploadCloud } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { Clipboard } from '@capacitor/clipboard';
 
@@ -65,6 +65,8 @@ export default function App() {
   });
   const [inputValue, setInputValue] = useState('');
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
+  const [isDragging, setIsDragging] = useState(false);
+  const dragDepth = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const formatFileSize = (bytes: number) => {
@@ -316,8 +318,8 @@ export default function App() {
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
 
     // Reset input so same file can be chosen again
     e.target.value = '';
@@ -336,7 +338,41 @@ export default function App() {
       }
     }
 
-    sendFile(file);
+    files.forEach(sendFile);
+  };
+
+  const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes('Files');
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth.current++;
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    if (!hasFiles(e)) return;
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth.current = 0;
+    setIsDragging(false);
+    // Folders show up as entries that cannot be read as a file, so leave them out.
+    Array.from(e.dataTransfer.items)
+      .filter(item => item.kind === 'file' && !item.webkitGetAsEntry?.()?.isDirectory)
+      .map(item => item.getAsFile())
+      .forEach(file => file && sendFile(file));
+  };
+
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const files = Array.from(e.clipboardData.files);
+    if (files.length === 0) return;
+    e.preventDefault();
+    files.forEach(sendFile);
   };
 
   const sendFile = (file: File) => {
@@ -501,7 +537,19 @@ export default function App() {
   }
 
   return (
-    <div className="app-container">
+    <div
+      className="app-container"
+      onDragEnter={handleDragEnter}
+      onDragOver={e => { if (hasFiles(e)) e.preventDefault(); }}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {isDragging && (
+        <div className="drop-overlay">
+          <UploadCloud size={40} />
+          <span>Drop files to send</span>
+        </div>
+      )}
       <header className="header">
         <div className="header-title">P2P Link</div>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
@@ -657,7 +705,7 @@ export default function App() {
 
       <form className="input-area" onSubmit={handleSend}>
         <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0.5rem' }}>
-          <input type="file" style={{ display: 'none' }} onChange={handleFileUpload} />
+          <input type="file" multiple style={{ display: 'none' }} onChange={handleFileUpload} />
           <Paperclip size={24} color="var(--text-secondary)" />
         </label>
         <input
@@ -665,6 +713,7 @@ export default function App() {
           className="text-input"
           value={inputValue}
           onChange={e => setInputValue(e.target.value)}
+          onPaste={handlePaste}
           placeholder="Type a message..."
         />
         <button type="submit" className="send-btn" disabled={!inputValue.trim()}>
