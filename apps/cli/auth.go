@@ -1,11 +1,16 @@
 package main
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"regexp"
@@ -17,11 +22,17 @@ import (
 
 // Pairing and authentication.
 //
-// The PC shows a short-lived pairing code (inside the QR). The code never
+// The PC shows a QR code holding a short-lived secret. The secret never
 // travels over the network: both sides derive a per-device key from it and the
-// device proves it knows the key. Every later connection starts with /hello,
+// device proves it knows the key. A device that only knows the PC's address
+// instead sends its own key, which the PC owner approves at the terminal. Every later connection starts with /hello,
 // which mixes fresh nonces from both sides into a session key; all other
 // requests carry a session id and an HMAC made with that key.
+//
+// Everything after /hello is also encrypted end to end with AES-256-GCM under
+// a key derived from the session key: request and response bodies, file
+// chunks and WebSocket frames. Each is bound to its context (path, transfer
+// and chunk, or frame counter) so it cannot be replayed somewhere else.
 
 const (
 	pairCodeLength   = 16
@@ -110,7 +121,58 @@ func sanitizeDeviceName(name string) string {
 type pairRequest struct {
 	DeviceID string `json:"deviceId"`
 	Name     string `json:"name"`
-	MAC      string `json:"mac"`
+	MAC      string `json:"mac"` // QR pairing: proves the device holds the secret in the QR code
+	Key      string `json:"key"` // manual pairing: a device key the PC owner must approve
+}
+
+// Manual pairing (typing the IP) is approved at the PC terminal.
+const approvalTimeout = 60 * time.Second
+
+var (
+	approvalMu      sync.Mutex
+	pendingApproval chan bool // non-nil while a request waits for y/n at the terminal
+)
+
+// answerApproval is called by the terminal when the user types y or n.
+// It reports whether there was a request waiting.
+func answerApproval(allow bool) bool {
+	approvalMu.Lock()
+	ch := pendingApproval
+	approvalMu.Unlock()
+	if ch == nil {
+		return false
+	}
+	select {
+	case ch <- allow:
+	default:
+	}
+	return true
+}
+
+func askApproval(name, addr string) bool {
+	approvalMu.Lock()
+	if pendingApproval != nil {
+		approvalMu.Unlock()
+		return false
+	}
+	ch := make(chan bool, 1)
+	pendingApproval = ch
+	approvalMu.Unlock()
+	defer func() {
+		approvalMu.Lock()
+		pendingApproval = nil
+		approvalMu.Unlock()
+	}()
+
+	fmt.Printf("%s%s[Pairing request]%s \"%s\" from %s wants to connect. Type %sy%s to allow or %sn%s to deny: ",
+		ClearLine, Yellow, Reset, name, addr, Green, Reset, Red, Reset)
+	select {
+	case allow := <-ch:
+		return allow
+	case <-time.After(approvalTimeout):
+		printAsync(Yellow, "○ Timeout", name, "pairing request expired")
+		return false
+	}
 }
 
 func handlePair(w http.ResponseWriter, r *http.Request) {
@@ -122,24 +184,40 @@ func handlePair(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "Invalid request")
 		return
 	}
-	code, valid := currentPairCode()
-	if !valid {
-		httpError(w, http.StatusForbidden, "Pairing code expired. Type 'pair' on the PC for a new one.")
-		return
-	}
 
-	key := deviceKeyFromCode(code, req.DeviceID)
-	want := hmacSHA256(key, []byte("pair\n"+req.DeviceID+"\n"+req.Name))
-	got, _ := hex.DecodeString(req.MAC)
-	if !hmac.Equal(want, got) {
-		fmt.Printf("%s%s[Pairing]%s Rejected attempt from %s (wrong code)\n> ", ClearLine, Red, Reset, r.RemoteAddr)
-		httpError(w, http.StatusForbidden, "Wrong pairing code")
-		return
+	var key []byte
+	if req.Key != "" {
+		var err error
+		if key, err = hex.DecodeString(req.Key); err != nil || len(key) != 32 {
+			httpError(w, http.StatusBadRequest, "Invalid request")
+			return
+		}
+		if !askApproval(sanitizeDeviceName(req.Name), r.RemoteAddr) {
+			httpError(w, http.StatusForbidden, "The PC did not approve this device")
+			return
+		}
+	} else {
+		code, valid := currentPairCode()
+		if !valid {
+			httpError(w, http.StatusForbidden, "This QR code has expired. Type 'pair' on the PC for a new one.")
+			return
+		}
+		key = deviceKeyFromCode(code, req.DeviceID)
+		want := hmacSHA256(key, []byte("pair\n"+req.DeviceID+"\n"+req.Name))
+		got, _ := hex.DecodeString(req.MAC)
+		if !hmac.Equal(want, got) {
+			printAsync(Red, "! Rejected", sanitizeDeviceName(req.Name), "invalid QR code")
+			httpError(w, http.StatusForbidden, "Invalid QR code. Scan the one currently shown on the PC.")
+			return
+		}
 	}
 
 	device := registerDevice(req.DeviceID, sanitizeDeviceName(req.Name), key)
 	dropSessions(device.ID)
-	fmt.Printf("%s%s[Paired]%s %s\n> ", ClearLine, Green, Reset, device.Name)
+	lastDisconnectMu.Lock()
+	deviceOnlineState[device.ID] = true
+	lastDisconnectMu.Unlock()
+	printAsync(Green, "● Paired", device.Name, "connected")
 
 	hostname, _ := os.Hostname()
 	writeJSON(w, http.StatusOK, map[string]string{
@@ -152,9 +230,64 @@ func handlePair(w http.ResponseWriter, r *http.Request) {
 
 type Session struct {
 	ID       string
-	Key      []byte
+	Key      []byte // authenticates requests (HMAC)
 	Device   *Device
 	LastUsed time.Time
+
+	aead      cipher.AEAD // encrypts everything the session carries
+	wsClaimed bool        // a session carries at most one WebSocket, so frame counters never repeat
+}
+
+const sealOverhead = 12 + 16 // nonce + GCM tag
+
+var errSealed = errors.New("could not decrypt")
+
+func newSession(device *Device, key []byte) *Session {
+	block, _ := aes.NewCipher(hkdf32(key, nil, "p2p-link encryption v1"))
+	aead, _ := cipher.NewGCM(block)
+	return &Session{ID: randomID(), Key: key, Device: device, LastUsed: time.Now(), aead: aead}
+}
+
+// seal encrypts plaintext bound to aad; the random nonce is prepended.
+func (s *Session) seal(plaintext []byte, aad string) []byte {
+	nonce := make([]byte, 12, len(plaintext)+sealOverhead)
+	rand.Read(nonce)
+	return s.aead.Seal(nonce, nonce, plaintext, []byte(aad))
+}
+
+func (s *Session) open(sealed []byte, aad string) ([]byte, error) {
+	if len(sealed) < sealOverhead {
+		return nil, errSealed
+	}
+	plaintext, err := s.aead.Open(nil, sealed[:12], sealed[12:], []byte(aad))
+	if err != nil {
+		return nil, errSealed
+	}
+	return plaintext, nil
+}
+
+// readRequest decrypts and decodes a JSON request body.
+func (s *Session) readRequest(r *http.Request, v interface{}) error {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+	if err != nil {
+		return err
+	}
+	plaintext, err := s.open(body, "req\n"+r.URL.Path+"\n"+r.URL.Query().Get("n"))
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(plaintext, v)
+}
+
+// writeResponse encrypts a JSON reply, bound to the request it answers.
+func (s *Session) writeResponse(w http.ResponseWriter, r *http.Request, v interface{}) {
+	data, _ := json.Marshal(v)
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Write(s.seal(data, "res\n"+r.URL.Path+"\n"+r.URL.Query().Get("n")))
+}
+
+func chunkAAD(transferID string, chunkIndex int) string {
+	return fmt.Sprintf("chunk\n%s\n%d", transferID, chunkIndex)
 }
 
 var (
@@ -191,12 +324,7 @@ func handleHello(w http.ResponseWriter, r *http.Request) {
 
 	serverNonce := make([]byte, 16)
 	rand.Read(serverNonce)
-	session := &Session{
-		ID:       randomID(),
-		Key:      hkdf32(device.Key, append(clientNonce, serverNonce...), "p2p-link session v1"),
-		Device:   device,
-		LastUsed: time.Now(),
-	}
+	session := newSession(device, hkdf32(device.Key, append(clientNonce, serverNonce...), "p2p-link session v1"))
 
 	sessionsMu.Lock()
 	var oldest *Session

@@ -1,7 +1,9 @@
+import { Cipher, utf8ToBytes } from './crypto';
+
 export type TransportStatus = 'connected' | 'disconnected' | 'connecting' | 'error';
 
 export interface Transport {
-  connect(url: string): Promise<void>;
+  connect(url: string, cipher: Cipher): Promise<void>;
   disconnect(): void;
   send(data: string): void;
   isConnected(): boolean;
@@ -13,8 +15,17 @@ export class WebSocketTransport implements Transport {
   private ws: WebSocket | null = null;
   private messageCallback: ((data: string) => void) | null = null;
   private statusCallback: ((status: TransportStatus) => void) | null = null;
+  // Sealing and opening are async, so both directions run through a queue
+  // that keeps frames in order.
+  private cipher: Cipher | null = null;
+  private outbox: Promise<void> = Promise.resolve();
+  private inbox: Promise<void> = Promise.resolve();
+  private sent = 0;
+  private received = 0;
 
-  async connect(url: string): Promise<void> {
+  // Every frame is encrypted with the session's cipher and numbered, so a
+  // frame that is forged, replayed or out of order fails to open.
+  async connect(url: string, cipher: Cipher): Promise<void> {
     return new Promise((resolve, reject) => {
       this.disconnect();
       this.setStatus('connecting');
@@ -27,7 +38,11 @@ export class WebSocketTransport implements Transport {
         reject(err);
         return;
       }
+      ws.binaryType = 'arraybuffer';
       this.ws = ws;
+      this.cipher = cipher;
+      this.outbox = this.inbox = Promise.resolve();
+      this.sent = this.received = 0;
 
       // Events from a socket that has since been replaced must not touch the status.
       const current = () => this.ws === ws;
@@ -67,9 +82,18 @@ export class WebSocketTransport implements Transport {
       };
 
       ws.onmessage = (event) => {
-        if (current() && this.messageCallback) {
-          this.messageCallback(event.data);
-        }
+        this.inbox = this.inbox.then(async () => {
+          if (!current()) return;
+          try {
+            const frame = await cipher.open(new Uint8Array(event.data as ArrayBuffer), `s2c\n${this.received++}`);
+            if (current() && this.messageCallback) {
+              this.messageCallback(new TextDecoder().decode(frame));
+            }
+          } catch {
+            // The stream can no longer be trusted (or is out of step): start over.
+            if (current()) ws.close();
+          }
+        });
       };
     });
   }
@@ -87,9 +111,13 @@ export class WebSocketTransport implements Transport {
   }
 
   send(data: string): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(data);
-    }
+    const ws = this.ws;
+    const cipher = this.cipher;
+    if (!ws || !cipher || ws.readyState !== WebSocket.OPEN) return;
+    this.outbox = this.outbox.then(async () => {
+      if (this.ws !== ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(await cipher.seal(utf8ToBytes(data), `c2s\n${this.sent++}`));
+    });
   }
 
   onMessage(callback: (data: string) => void): void {

@@ -1,4 +1,6 @@
 import { HttpError, ServerApi } from './api';
+import { SpeedTracker, calculateEta } from './telemetry';
+import { playTransferSuccessChime } from './audio';
 
 export const CHUNK_SIZE = 1024 * 1024;
 const PARALLEL_CHUNKS = 4;
@@ -11,6 +13,7 @@ export interface UploadProgress {
   sentBytes: number;
   totalBytes: number;
   speed: number; // bytes per second, 0 when not uploading
+  eta?: string;
   error?: string;
 }
 
@@ -47,10 +50,12 @@ const sleep = (ms: number, signal: AbortSignal) =>
 export class Upload {
   readonly totalChunks: number;
   status: UploadStatus = 'queued';
-  private sentBytes = 0;
-  private speed = 0;
+  sentBytes = 0;
+  speed = 0;
+  eta = '';
   private error?: string;
   private abort: AbortController | null = null;
+  private tracker = new SpeedTracker();
 
   constructor(
     private api: ServerApi,
@@ -67,6 +72,7 @@ export class Upload {
       sentBytes: this.sentBytes,
       totalBytes: this.file.size,
       speed: this.status === 'uploading' ? this.speed : 0,
+      eta: this.status === 'uploading' ? this.eta : undefined,
       error: this.error
     };
   }
@@ -74,6 +80,11 @@ export class Upload {
   private setStatus(status: UploadStatus, error?: string) {
     this.status = status;
     this.error = error;
+    if (status !== 'uploading') {
+      this.speed = 0;
+      this.eta = '';
+      this.tracker.reset();
+    }
     this.onProgress(this.progress);
   }
 
@@ -83,6 +94,8 @@ export class Upload {
     if (this.status === 'done' || this.status === 'canceled' || this.abort) return;
     const abort = new AbortController();
     this.abort = abort;
+    this.tracker.reset();
+
     try {
       // A second pass covers the server having lost the transfer mid-way (e.g. it restarted).
       for (let pass = 0; ; pass++) {
@@ -98,6 +111,7 @@ export class Upload {
       }
       this.sentBytes = this.file.size;
       this.setStatus('done');
+      playTransferSuccessChime();
     } catch (err) {
       if (!abort.signal.aborted) {
         this.setStatus('error', err instanceof Error ? err.message : String(err));
@@ -153,8 +167,6 @@ export class Upload {
   }
 
   private async sendChunks(missing: number[], signal: AbortSignal): Promise<void> {
-    const startedAt = Date.now();
-    let sentThisRun = 0;
     let next = 0;
 
     const worker = async () => {
@@ -163,8 +175,12 @@ export class Upload {
         await this.sendChunk(index, signal);
         const length = this.chunkLength(index);
         this.sentBytes += length;
-        sentThisRun += length;
-        this.speed = sentThisRun / Math.max((Date.now() - startedAt) / 1000, 0.25);
+
+        // Exponential Moving Average (EMA) dynamic telemetry calculation
+        this.speed = this.tracker.update(this.sentBytes);
+        const remainingBytes = Math.max(0, this.file.size - this.sentBytes);
+        this.eta = calculateEta(remainingBytes, this.speed);
+
         this.onProgress(this.progress);
       }
     };
@@ -196,38 +212,140 @@ export class Upload {
   }
 }
 
-// Sends files one at a time so each gets the full set of parallel chunk slots.
+export interface BatchStats {
+  activeCount: number;
+  pendingCount: number;
+  totalCount: number;
+  totalBytes: number;
+  sentBytes: number;
+  speed: number;
+  eta: string;
+}
+
+// Queue supporting sequential and controlled concurrent batch uploads
 export class UploadQueue {
   private pending: Upload[] = [];
-  private active: Upload | null = null;
+  private active = new Set<Upload>();
+  // 2 concurrent file transfers gives optimal throughput without saturated connection
+  private concurrency = 2;
+  private batchListeners = new Set<(stats: BatchStats) => void>();
+
+  setConcurrency(limit: number) {
+    this.concurrency = Math.max(1, limit);
+    this.pump();
+  }
+
+  onBatchChange(callback: (stats: BatchStats) => void): () => void {
+    this.batchListeners.add(callback);
+    return () => this.batchListeners.delete(callback);
+  }
+
+  getStats(): BatchStats {
+    let totalBytes = 0;
+    let sentBytes = 0;
+    let combinedSpeed = 0;
+
+    const all = [...Array.from(this.active), ...this.pending];
+    for (const u of all) {
+      totalBytes += u.file.size;
+      sentBytes += u.sentBytes;
+      if (u.status === 'uploading') combinedSpeed += u.speed;
+    }
+
+    const remaining = Math.max(0, totalBytes - sentBytes);
+    const eta = calculateEta(remaining, combinedSpeed);
+
+    return {
+      activeCount: this.active.size,
+      pendingCount: this.pending.length,
+      totalCount: all.length,
+      totalBytes,
+      sentBytes,
+      speed: combinedSpeed,
+      eta
+    };
+  }
+
+  private notifyBatch() {
+    const stats = this.getStats();
+    for (const listener of this.batchListeners) {
+      try {
+        listener(stats);
+      } catch {}
+    }
+  }
 
   enqueue(upload: Upload) {
-    // A paused upload may still be unwinding as the active one; queueing it
-    // again is fine, it simply starts over once that run has returned.
-    if (upload.status === 'uploading' || this.pending.includes(upload)) return;
+    if (this.active.has(upload) || this.pending.includes(upload)) return;
     upload.markQueued();
     this.pending.push(upload);
+    this.notifyBatch();
+    this.pump();
+  }
+
+  enqueueBatch(uploads: Upload[]) {
+    for (const u of uploads) {
+      if (!this.active.has(u) && !this.pending.includes(u)) {
+        u.markQueued();
+        this.pending.push(u);
+      }
+    }
+    this.notifyBatch();
     this.pump();
   }
 
   pause(upload: Upload) {
     this.pending = this.pending.filter(u => u !== upload);
+    this.active.delete(upload);
     upload.pause();
+    this.notifyBatch();
+    this.pump();
+  }
+
+  pauseAll() {
+    for (const u of Array.from(this.active)) {
+      u.pause();
+    }
+    this.active.clear();
+    for (const u of this.pending) {
+      u.pause();
+    }
+    this.pending = [];
+    this.notifyBatch();
   }
 
   cancel(upload: Upload) {
     this.pending = this.pending.filter(u => u !== upload);
+    this.active.delete(upload);
     upload.cancel();
+    this.notifyBatch();
+    this.pump();
+  }
+
+  cancelAll() {
+    for (const u of Array.from(this.active)) {
+      u.cancel();
+    }
+    this.active.clear();
+    for (const u of this.pending) {
+      u.cancel();
+    }
+    this.pending = [];
+    this.notifyBatch();
   }
 
   private pump() {
-    if (this.active) return;
-    const upload = this.pending.shift();
-    if (!upload) return;
-    this.active = upload;
-    upload.run().finally(() => {
-      this.active = null;
-      this.pump();
-    });
+    while (this.active.size < this.concurrency && this.pending.length > 0) {
+      const upload = this.pending.shift();
+      if (!upload) break;
+      this.active.add(upload);
+      this.notifyBatch();
+
+      upload.run().finally(() => {
+        this.active.delete(upload);
+        this.notifyBatch();
+        this.pump();
+      });
+    }
   }
 }

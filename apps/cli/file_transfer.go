@@ -73,7 +73,10 @@ func initDirs() {
 // Partial uploads are only resumable while the server is running (the chunk
 // map lives in memory), so anything left over from a previous run is garbage.
 func cleanTempDir() {
-	leftovers, _ := filepath.Glob(filepath.Join(tempDir, "*.part"))
+	transfersMu.Lock()
+	dir := tempDir
+	transfersMu.Unlock()
+	leftovers, _ := filepath.Glob(filepath.Join(dir, "*.part"))
 	for _, p := range leftovers {
 		os.Remove(p)
 	}
@@ -174,20 +177,57 @@ func getTempPath(id string) string {
 	return filepath.Join(tempDir, hex.EncodeToString(sum[:16])+".part")
 }
 
-// sanitizeFilename strips any directory components a client may have sent.
+var windowsReservedNames = map[string]bool{
+	"CON": true, "PRN": true, "AUX": true, "NUL": true,
+	"COM1": true, "COM2": true, "COM3": true, "COM4": true,
+	"COM5": true, "COM6": true, "COM7": true, "COM8": true, "COM9": true,
+	"LPT1": true, "LPT2": true, "LPT3": true, "LPT4": true,
+	"LPT5": true, "LPT6": true, "LPT7": true, "LPT8": true, "LPT9": true,
+}
+
+// sanitizeFilename strips any directory components a client may have sent,
+// removes Windows reserved chars, defangs device names, trims trailing dots/spaces,
+// and bounds the filename length.
 func sanitizeFilename(name string) string {
 	name = strings.ReplaceAll(name, "\\", "/")
-	name = name[strings.LastIndex(name, "/")+1:]
+	if idx := strings.LastIndex(name, "/"); idx >= 0 {
+		name = name[idx+1:]
+	}
 	name = strings.Map(func(r rune) rune {
 		if r < 32 || strings.ContainsRune(`<>:"|?*`, r) {
 			return '_'
 		}
 		return r
 	}, name)
-	name = strings.TrimRight(strings.TrimSpace(name), ".")
-	if name == "" {
+	name = strings.Trim(name, " \t\r\n.")
+	if name == "" || name == "." || name == ".." {
 		return "unnamed"
 	}
+
+	// Truncate overly long filenames while preserving extension
+	const maxLen = 200
+	if len(name) > maxLen {
+		ext := filepath.Ext(name)
+		base := strings.TrimSuffix(name, ext)
+		if len(ext) > 50 {
+			ext = ext[:50]
+		}
+		maxBase := maxLen - len(ext)
+		if maxBase < 1 {
+			maxBase = 1
+		}
+		if len(base) > maxBase {
+			base = base[:maxBase]
+		}
+		name = base + ext
+	}
+
+	// Defang Windows reserved device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
+	root := strings.ToUpper(strings.Split(name, ".")[0])
+	if windowsReservedNames[root] {
+		name = "_" + name
+	}
+
 	return name
 }
 
@@ -235,6 +275,7 @@ func httpError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
+// readJSONBody is for the two endpoints that run before a session exists.
 func readJSONBody(r *http.Request, v interface{}) error {
 	return json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(v)
 }
@@ -277,12 +318,25 @@ type uploadStatus struct {
 // is announced again: the response lists the chunks the server already has.
 func handleUploadInit(w http.ResponseWriter, r *http.Request, s *Session) {
 	var req uploadInitRequest
-	if err := readJSONBody(r, &req); err != nil || req.TransferID == "" {
+	if err := s.readRequest(r, &req); err != nil || req.TransferID == "" {
 		httpError(w, http.StatusBadRequest, "Invalid request")
 		return
 	}
-	if req.ChunkSize < minChunkSize || req.ChunkSize > maxChunkSize || req.TotalSize < 0 ||
-		int64(req.TotalChunks) != (req.TotalSize+req.ChunkSize-1)/req.ChunkSize {
+	if req.ChunkSize < minChunkSize || req.ChunkSize > maxChunkSize || req.TotalSize < 0 {
+		httpError(w, http.StatusBadRequest, "Invalid chunk layout")
+		return
+	}
+	if req.TotalSize > (int64(5)<<40) || req.TotalChunks > 5000000 {
+		httpError(w, http.StatusBadRequest, "File size or chunk count exceeds limit")
+		return
+	}
+	var expectedChunks int64
+	if req.TotalSize == 0 {
+		expectedChunks = 0
+	} else {
+		expectedChunks = (req.TotalSize + req.ChunkSize - 1) / req.ChunkSize
+	}
+	if int64(req.TotalChunks) != expectedChunks {
 		httpError(w, http.StatusBadRequest, "Invalid chunk layout")
 		return
 	}
@@ -297,6 +351,8 @@ func handleUploadInit(w http.ResponseWriter, r *http.Request, s *Session) {
 	if !exists {
 		initDirs()
 		path := getTempPath(req.TransferID)
+		cleanName := filepath.Base(filepath.Clean(req.Filename))
+		cleanName = sanitizeFilename(cleanName)
 		f, err := os.Create(path)
 		if err != nil {
 			transfersMu.Unlock()
@@ -306,7 +362,7 @@ func handleUploadInit(w http.ResponseWriter, r *http.Request, s *Session) {
 		}
 		state = &TransferState{
 			ID:          req.TransferID,
-			Filename:    sanitizeFilename(req.Filename),
+			Filename:    cleanName,
 			TotalChunks: req.TotalChunks,
 			ChunkSize:   req.ChunkSize,
 			TotalSize:   req.TotalSize,
@@ -320,13 +376,7 @@ func handleUploadInit(w http.ResponseWriter, r *http.Request, s *Session) {
 	state.LastActive = time.Now().Unix()
 	transfersMu.Unlock()
 
-	if exists {
-		fmt.Printf("%s%s[Resuming file]:%s %s from %s\n", ClearLine, Cyan, Reset, state.Filename, s.Device.Name)
-	} else {
-		fmt.Printf("%s%s[Receiving file]:%s %s from %s\n", ClearLine, Cyan, Reset, state.Filename, s.Device.Name)
-	}
-
-	writeJSON(w, http.StatusOK, uploadStatus{
+	s.writeResponse(w, r, uploadStatus{
 		TransferID:  state.ID,
 		ChunkSize:   state.ChunkSize,
 		TotalChunks: state.TotalChunks,
@@ -348,9 +398,15 @@ func handleUploadChunk(w http.ResponseWriter, r *http.Request, s *Session) {
 	}
 
 	want := state.chunkLength(chunkIndex)
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, want+1))
-	if err != nil || int64(len(body)) != want {
+	sealed, err := io.ReadAll(http.MaxBytesReader(w, r.Body, want+sealOverhead+1))
+	if err != nil {
 		httpError(w, http.StatusBadRequest, "Chunk size mismatch")
+		return
+	}
+	// The chunk is encrypted for this exact transfer and position.
+	body, err := s.open(sealed, chunkAAD(state.ID, chunkIndex))
+	if err != nil || int64(len(body)) != want {
+		httpError(w, http.StatusBadRequest, "Chunk rejected")
 		return
 	}
 
@@ -383,17 +439,31 @@ func handleUploadChunk(w http.ResponseWriter, r *http.Request, s *Session) {
 }
 
 func printProgressBar(filename string, current, total int) {
+	if total <= 0 {
+		return
+	}
 	percent := float64(current) / float64(total) * 100
-	completed := int(percent / 5) // 20 blocks total
-	if completed > 20 {
-		completed = 20
+	const barWidth = 14
+	completed := int((percent / 100.0) * barWidth)
+	if completed > barWidth {
+		completed = barWidth
 	}
-	bar := strings.Repeat("█", completed) + strings.Repeat("░", 20-completed)
-	// \r first, then \033[K to clear from cursor to end of line
-	fmt.Printf("\r\033[K%s[Receiving]%s %s %s %.1f%%", Cyan, Reset, filename, bar, percent)
-	if current == total {
-		fmt.Print("\n> ")
+	bar := strings.Repeat("█", completed) + strings.Repeat("░", barWidth-completed)
+
+	// Truncate long filenames to prevent line-wrapping on 80-column terminals
+	displayName := filename
+	if len(displayName) > 22 {
+		ext := filepath.Ext(displayName)
+		base := strings.TrimSuffix(displayName, ext)
+		if len(base) > 15 {
+			base = base[:12] + "..."
+		}
+		displayName = base + ext
 	}
+
+	// \r first, then \033[2K to clear entire line cleanly without adding a newline
+	fmt.Printf("\r\033[2K  %s%s%s  %s↓ Receiving%s %-22s %s[%s]%s %3.0f%%",
+		Dim, nowStamp(), Reset, Cyan, Reset, displayName, Dim, bar, Reset, percent)
 }
 
 type transferRef struct {
@@ -403,7 +473,7 @@ type transferRef struct {
 // handleUploadComplete moves a fully received upload into the receive directory.
 func handleUploadComplete(w http.ResponseWriter, r *http.Request, s *Session) {
 	var req transferRef
-	if err := readJSONBody(r, &req); err != nil {
+	if err := s.readRequest(r, &req); err != nil {
 		httpError(w, http.StatusBadRequest, "Invalid request")
 		return
 	}
@@ -442,17 +512,17 @@ func handleUploadComplete(w http.ResponseWriter, r *http.Request, s *Session) {
 	finalPath, err := moveIntoDir(state.FilePath, dir, state.Filename)
 	if err != nil {
 		os.Remove(state.FilePath)
-		fmt.Printf("%s%s[Error saving file]:%s %v\n> ", ClearLine, Red, Reset, err)
+		printAsync(Red, "! Error", state.Filename, fmt.Sprintf("save failed: %v", err))
 		httpError(w, http.StatusInternalServerError, "Failed to save file")
 		return
 	}
-	fmt.Printf("%s%s[File Received]:%s %s saved to %s\n> ", ClearLine, Green, Reset, state.Filename, finalPath)
-	writeJSON(w, http.StatusOK, map[string]string{"filename": filepath.Base(finalPath)})
+	printAsync(Green, "↓ File", state.Filename, fmt.Sprintf("%s · saved to received\\", formatSize(state.TotalSize)))
+	s.writeResponse(w, r, map[string]string{"filename": filepath.Base(finalPath)})
 }
 
 func handleUploadCancel(w http.ResponseWriter, r *http.Request, s *Session) {
 	var req transferRef
-	if err := readJSONBody(r, &req); err != nil {
+	if err := s.readRequest(r, &req); err != nil {
 		httpError(w, http.StatusBadRequest, "Invalid request")
 		return
 	}
@@ -463,71 +533,163 @@ func handleUploadCancel(w http.ResponseWriter, r *http.Request, s *Session) {
 		delete(transfers, req.TransferID)
 		transfersMu.Unlock()
 		state.discard()
-		fmt.Printf("%s%s[Transfer cancelled]:%s %s\n> ", ClearLine, Yellow, Reset, state.Filename)
+		printAsync(Yellow, "○ Cancelled", state.Filename, "")
 	}
-	w.WriteHeader(http.StatusOK)
+	s.writeResponse(w, r, map[string]bool{"ok": true})
 }
+
+var moveMu sync.Mutex
 
 // moveIntoDir moves src into dir under a collision-free name and returns the final path.
 func moveIntoDir(src, dir, filename string) (string, error) {
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return "", err
-	}
-	finalPath := getUniqueFilePath(dir, filename)
-	if err := os.Rename(src, finalPath); err == nil {
-		return finalPath, nil
-	}
+	moveMu.Lock()
+	defer moveMu.Unlock()
 
-	// Fallback to copy if rename fails across partitions
-	srcFile, err := os.Open(src)
+	cleanDir, err := filepath.Abs(dir)
 	if err != nil {
+		cleanDir = filepath.Clean(dir)
+	}
+	if err := os.MkdirAll(cleanDir, 0755); err != nil {
 		return "", err
 	}
-	defer srcFile.Close()
-	destFile, err := os.Create(finalPath)
-	if err != nil {
-		return "", err
+	cleanFilename := sanitizeFilename(filepath.Base(filepath.Clean(filename)))
+
+	ext := filepath.Ext(cleanFilename)
+	name := strings.TrimSuffix(cleanFilename, ext)
+
+	for counter := 0; counter < 10000; counter++ {
+		candidate := cleanFilename
+		if counter > 0 {
+			candidate = fmt.Sprintf("%s (%d)%s", name, counter, ext)
+		}
+		finalPath := filepath.Join(cleanDir, candidate)
+
+		// Path traversal check: verify finalPath is strictly contained within cleanDir
+		rel, err := filepath.Rel(cleanDir, finalPath)
+		if err != nil || strings.HasPrefix(rel, "..") || rel == "." {
+			return "", fmt.Errorf("invalid destination path: %s", finalPath)
+		}
+
+		// If destination already exists, try next counter
+		if _, err := os.Stat(finalPath); err == nil {
+			continue
+		}
+
+		// Try atomic rename
+		if err := os.Rename(src, finalPath); err == nil {
+			return finalPath, nil
+		}
+
+		// Fallback to exclusive copy across partitions (guarantees no overwrite)
+		if err := copyExclusive(src, finalPath); err == nil {
+			os.Remove(src)
+			return finalPath, nil
+		}
 	}
-	_, err = io.Copy(destFile, srcFile)
-	if closeErr := destFile.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		os.Remove(finalPath)
-		return "", err
-	}
-	srcFile.Close()
-	os.Remove(src)
-	return finalPath, nil
+	return "", fmt.Errorf("could not find unique filename after multiple attempts")
 }
 
-// handleDownloadFull streams a file the PC is sending. http.ServeFile honours
-// Range requests, so the phone's download manager can pause and resume.
-func handleDownloadFull(w http.ResponseWriter, r *http.Request, s *Session) {
+func copyExclusive(src, dest string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	destFile, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+
+	if _, err := io.Copy(destFile, srcFile); err != nil {
+		os.Remove(dest)
+		return err
+	}
+	return nil
+}
+
+// handleDownloadChunk serves one encrypted chunk of a file the PC is sending.
+func handleDownloadChunk(w http.ResponseWriter, r *http.Request, s *Session) {
 	state := lookupTransfer(r.URL.Query().Get("transferId"))
 	if state == nil || !state.IsDownload {
-		http.Error(w, "Unknown transfer", 404)
+		httpError(w, http.StatusNotFound, "Unknown transfer")
+		return
+	}
+	chunkIndex, err := strconv.Atoi(r.URL.Query().Get("chunkIndex"))
+	if err != nil || chunkIndex < 0 || chunkIndex >= state.TotalChunks {
+		httpError(w, http.StatusBadRequest, "Invalid chunk index")
 		return
 	}
 
-	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": state.Filename}))
-	http.ServeFile(w, r, state.FilePath)
+	cleanPath := filepath.Clean(state.FilePath)
+	file, err := os.Open(cleanPath)
+	if err != nil {
+		httpError(w, http.StatusGone, "File is no longer available")
+		return
+	}
+	defer file.Close()
+
+	buf := make([]byte, state.chunkLength(chunkIndex))
+	if _, err := io.ReadFull(io.NewSectionReader(file, int64(chunkIndex)*state.ChunkSize, int64(len(buf))), buf); err != nil {
+		httpError(w, http.StatusGone, "File changed since it was sent")
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Write(s.seal(buf, chunkAAD(state.ID, chunkIndex)))
+}
+
+// handleDownloadFull streams a file the PC is sending without encryption, for
+// the phone's own download manager (which cannot decrypt). http.ServeFile
+// honours Range requests, so that download can pause and resume.
+func handleDownloadFull(w http.ResponseWriter, r *http.Request, s *Session) {
+	state := lookupTransfer(r.URL.Query().Get("transferId"))
+	if state == nil || !state.IsDownload {
+		http.Error(w, "Unknown transfer", http.StatusNotFound)
+		return
+	}
+
+	cleanPath := filepath.Clean(state.FilePath)
+	cleanName := filepath.Base(filepath.Clean(state.Filename))
+	if cleanName == "." || cleanName == "" || cleanName == "/" || cleanName == "\\" {
+		cleanName = "download"
+	}
+
+	stat, err := os.Stat(cleanPath)
+	if err != nil || stat.IsDir() {
+		http.Error(w, "File is no longer available", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": cleanName}))
+	http.ServeFile(w, r, cleanPath)
 }
 
 func startSendTransfer(filePath string) error {
-	stat, err := os.Stat(filePath)
+	cleanPath := filepath.Clean(filePath)
+	absPath, err := filepath.Abs(cleanPath)
+	if err != nil {
+		return err
+	}
+	stat, err := os.Stat(absPath)
 	if err != nil {
 		return err
 	}
 	if stat.IsDir() {
-		return fmt.Errorf("%s is a directory", filePath)
+		return fmt.Errorf("%s is a directory", absPath)
 	}
 
-	filename := filepath.Base(filePath)
+	filename := filepath.Base(absPath)
+	filename = sanitizeFilename(filename)
 	transferId := randomID()
 	totalSize := stat.Size()
 	chunkSize := int64(defaultChunkSize)
-	totalChunks := int((totalSize + chunkSize - 1) / chunkSize)
+	var totalChunks int
+	if totalSize == 0 {
+		totalChunks = 0
+	} else {
+		totalChunks = int((totalSize + chunkSize - 1) / chunkSize)
+	}
 
 	transfersMu.Lock()
 	transfers[transferId] = &TransferState{
@@ -536,7 +698,7 @@ func startSendTransfer(filePath string) error {
 		TotalChunks: totalChunks,
 		ChunkSize:   chunkSize,
 		TotalSize:   totalSize,
-		FilePath:    filePath,
+		FilePath:    absPath,
 		IsDownload:  true,
 		LastActive:  time.Now().Unix(),
 	}
@@ -557,7 +719,11 @@ func startSendTransfer(filePath string) error {
 			"totalChunks": totalChunks,
 		},
 	}
-	broadcastMessage(msg)
-	fmt.Printf("%s%s[Sending file]:%s %s (Waiting for phone to download)\n", ClearLine, Cyan, Reset, filename)
+	delivered := broadcastMessage(msg)
+	if delivered > 0 {
+		printSync(Cyan, "↑ File", filename, formatSize(totalSize))
+	} else {
+		printSync(Yellow, "↑ File", filename, fmt.Sprintf("%s · queued — waiting for phone", formatSize(totalSize)))
+	}
 	return nil
 }

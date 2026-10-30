@@ -2,13 +2,19 @@ package main
 
 import (
 	"bufio"
+	"embed"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -18,36 +24,154 @@ import (
 	"github.com/mdp/qrterminal/v3"
 )
 
-var lastClipboardText string
+func init() {
+	mime.AddExtensionType(".js", "application/javascript")
+	mime.AddExtensionType(".mjs", "application/javascript")
+	mime.AddExtensionType(".css", "text/css")
+	mime.AddExtensionType(".svg", "image/svg+xml")
+	mime.AddExtensionType(".webmanifest", "application/manifest+json")
+	mime.AddExtensionType(".json", "application/json")
+	mime.AddExtensionType(".wasm", "application/wasm")
+}
+
+//go:embed all:dist
+var embeddedFS embed.FS
+
+var (
+	clipboardMu       sync.RWMutex
+	lastClipboardText string
+	startTime         = time.Now()
+
+	outboxMu          sync.Mutex
+	cliOutbox         []Message
+	lastDisconnectMap = make(map[string]time.Time)
+	deviceOnlineState = make(map[string]bool)
+	lastDisconnectMu  sync.Mutex
+)
+
+const (
+	Reset     = "\033[0m"
+	Bold      = "\033[1m"
+	Dim       = "\033[90m"
+	Red       = "\033[31m"
+	Green     = "\033[32m"
+	Yellow    = "\033[33m"
+	Blue      = "\033[94m"
+	Cyan      = "\033[36m"
+	White     = "\033[37m"
+	ClearLine = "\r\033[2K"
+)
+
+func nowStamp() string {
+	return time.Now().Format("15:04")
+}
+
+func formatSize(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+// printAsync prints a structured event line from a background goroutine and restores the prompt.
+func printAsync(badgeColor, badge, mainText, meta string) {
+	metaStr := ""
+	if meta != "" {
+		metaStr = fmt.Sprintf(" %s(%s)%s", Dim, meta, Reset)
+	}
+	fmt.Printf("\r\033[2K  %s%s%s  %s%-11s%s %s%s\np2p> ",
+		Dim, nowStamp(), Reset,
+		badgeColor, badge, Reset,
+		mainText, metaStr)
+}
+
+// printSync prints a structured event line synchronously inside the REPL loop (prompt is printed by loop).
+func printSync(badgeColor, badge, mainText, meta string) {
+	metaStr := ""
+	if meta != "" {
+		metaStr = fmt.Sprintf(" %s(%s)%s", Dim, meta, Reset)
+	}
+	fmt.Printf("  %s%s%s  %s%-11s%s %s%s\n",
+		Dim, nowStamp(), Reset,
+		badgeColor, badge, Reset,
+		mainText, metaStr)
+}
+
+func readClipboardWithRetry() (string, error) {
+	var err error
+	var text string
+	for attempt := 0; attempt < 3; attempt++ {
+		text, err = clipboard.ReadAll()
+		if err == nil {
+			return text, nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return "", err
+}
 
 func watchClipboard() {
+	// Seed initial clipboard state so pre-existing clipboard text isn't broadcast on boot
+	if initial, err := readClipboardWithRetry(); err == nil && initial != "" {
+		clipboardMu.Lock()
+		lastClipboardText = initial
+		clipboardMu.Unlock()
+	}
+
+	pollInterval := 1 * time.Second
 	for {
-		time.Sleep(1 * time.Second)
-		text, err := clipboard.ReadAll()
-		if err == nil && text != "" && text != lastClipboardText {
+		time.Sleep(pollInterval)
+		text, err := readClipboardWithRetry()
+		if err != nil {
+			if pollInterval < 3*time.Second {
+				pollInterval += 500 * time.Millisecond
+			}
+			continue
+		}
+		pollInterval = 1 * time.Second
+
+		clipboardMu.RLock()
+		prev := lastClipboardText
+		clipboardMu.RUnlock()
+
+		if text != "" && text != prev {
+			clipboardMu.Lock()
 			lastClipboardText = text
+			clipboardMu.Unlock()
+
 			msg := Message{
 				Type:      "clipboard",
 				ID:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
 				Timestamp: time.Now().Unix(),
 				Payload:   TextPayload{Text: text},
 			}
-			fmt.Printf("%s%s[Clipboard Synced PC -> Phone]%s\n> ", ClearLine, Cyan, Reset)
-			broadcastMessage(msg)
+			// Silently sync PC clipboard to connected devices without interrupting terminal input
+			broadcastOnlineOnly(msg)
 		}
 	}
 }
 
-const (
-	Reset     = "\033[0m"
-	Red       = "\033[31m"
-	Green     = "\033[32m"
-	Yellow    = "\033[33m"
-	Blue      = "\033[34m"
-	Cyan      = "\033[36m"
-	White     = "\033[37m"
-	ClearLine = "\033[2K\r"
-)
+func copyToClipboard(text string) {
+	if *noClipboard {
+		return
+	}
+	clipboardMu.Lock()
+	lastClipboardText = text
+	clipboardMu.Unlock()
+
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := clipboard.WriteAll(text); err == nil {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
@@ -56,9 +180,44 @@ var upgrader = websocket.Upgrader{
 }
 
 type Client struct {
-	conn   *websocket.Conn
-	send   chan Message
-	device *Device
+	conn    *websocket.Conn
+	send    chan Message
+	device  *Device
+	session *Session
+	mu      sync.Mutex
+	closed  bool
+}
+
+func (c *Client) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return
+	}
+	c.closed = true
+	close(c.send)
+	if c.conn != nil {
+		c.conn.Close()
+	}
+}
+
+func (c *Client) Enqueue(msg Message) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return false
+	}
+	select {
+	case c.send <- msg:
+		return true
+	default:
+		c.closed = true
+		close(c.send)
+		if c.conn != nil {
+			c.conn.Close()
+		}
+		return false
+	}
 }
 
 var (
@@ -66,38 +225,195 @@ var (
 	clientsMu sync.Mutex
 )
 
-func getLocalIP() string {
-	// Best method: Let OS pick the outbound IP (ignores WSL/Docker virtual adapters)
-	conn, err := net.Dial("udp", "8.8.8.8:80")
-	if err == nil {
-		defer conn.Close()
-		localAddr := conn.LocalAddr().(*net.UDPAddr)
-		return localAddr.IP.String()
+// localIPs lists the PC's LAN addresses, the one used for outbound traffic first
+// (that ignores WSL/Docker virtual adapters), then any other private IPv4 address.
+// If offline, returns 127.0.0.1 without hanging or blocking.
+func localIPs() []string {
+	var ips []string
+	add := func(ip net.IP) {
+		v4 := ip.To4()
+		if v4 == nil || ip.IsLoopback() || (v4[0] == 169 && v4[1] == 254) {
+			return
+		}
+		for _, have := range ips {
+			if have == v4.String() {
+				return
+			}
+		}
+		ips = append(ips, v4.String())
 	}
 
-	// Fallback if offline
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return ""
+	// Fast UDP dial with strict 200ms timeout to detect outbound interface without sending packets
+	if conn, err := net.DialTimeout("udp", "8.8.8.8:80", 200*time.Millisecond); err == nil {
+		if udpAddr, ok := conn.LocalAddr().(*net.UDPAddr); ok {
+			add(udpAddr.IP)
+		}
+		conn.Close()
 	}
-	for _, address := range addrs {
-		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			if ipnet.IP.To4() != nil {
-				ip := ipnet.IP.String()
-				// Ignore link-local (169.254.x.x) and common Docker (172.x.x.x) if possible in fallback
-				if !strings.HasPrefix(ip, "169.254.") && !strings.HasPrefix(ip, "172.") {
-					return ip
-				}
+
+	// Enumerate network interfaces for private LAN addresses
+	if addrs, err := net.InterfaceAddrs(); err == nil {
+		for _, address := range addrs {
+			if ipnet, ok := address.(*net.IPNet); ok && ipnet.IP.IsPrivate() {
+				add(ipnet.IP)
 			}
 		}
 	}
-	return ""
+
+	if len(ips) == 0 {
+		ips = append(ips, "127.0.0.1")
+	}
+
+	return ips
+}
+
+func setupListener(desiredPort int) (net.Listener, int, error) {
+	maxPort := desiredPort + 10
+	if maxPort > 65535 {
+		maxPort = 65535
+	}
+	var lastErr error
+	for p := desiredPort; p <= maxPort; p++ {
+		addr := fmt.Sprintf("0.0.0.0:%d", p)
+		l, err := net.Listen("tcp", addr)
+		if err == nil {
+			return l, p, nil
+		}
+		lastErr = err
+	}
+	return nil, desiredPort, fmt.Errorf("could not bind to ports %d-%d: %w", desiredPort, maxPort, lastErr)
+}
+
+func getFrontendHandler(devMode bool) http.Handler {
+	diskCandidates := []string{"../mobile/dist", "apps/mobile/dist", "mobile/dist", "./dist"}
+	var diskPath string
+	for _, candidate := range diskCandidates {
+		if info, err := os.Stat(filepath.Join(candidate, "index.html")); err == nil && !info.IsDir() {
+			diskPath = candidate
+			break
+		}
+	}
+
+	if devMode && diskPath != "" {
+		fmt.Printf("%s[Web UI]%s Serving frontend from disk (%s) [dev mode]\n", Cyan, Reset, diskPath)
+		return http.FileServer(http.Dir(diskPath))
+	}
+
+	sub, err := fs.Sub(embeddedFS, "dist")
+	if err == nil {
+		if f, err := sub.Open("index.html"); err == nil {
+			f.Close()
+			return http.FileServer(http.FS(sub))
+		}
+	}
+
+	if diskPath != "" {
+		fmt.Printf("%s[Web UI]%s Serving frontend from disk fallback (%s)\n", Cyan, Reset, diskPath)
+		return http.FileServer(http.Dir(diskPath))
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "Web UI assets not found. Please build mobile frontend or embed assets.", http.StatusNotFound)
+	})
+}
+
+func openBrowser(targetURL string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", targetURL)
+	case "darwin":
+		cmd = exec.Command("open", targetURL)
+	default:
+		cmd = exec.Command("xdg-open", targetURL)
+	}
+	err := cmd.Start()
+	if err != nil && runtime.GOOS == "windows" {
+		return exec.Command("explorer", targetURL).Start()
+	}
+	return err
+}
+
+func printStatus() {
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+
+	uptime := time.Since(startTime).Round(time.Second)
+	ips := localIPs()
+
+	devices := listDevices()
+	onlineCount := 0
+	for _, d := range devices {
+		if deviceOnline(d.ID) {
+			onlineCount++
+		}
+	}
+
+	transfersMu.Lock()
+	activeCount := len(transfers)
+	type transferInfo struct {
+		name     string
+		progress string
+		mode     string
+	}
+	var transferList []transferInfo
+	for _, t := range transfers {
+		mode := "receiving"
+		if t.IsDownload {
+			mode = "sending"
+		}
+		t.mu.Lock()
+		rec := t.receivedCount
+		t.mu.Unlock()
+		pct := 0.0
+		if t.TotalChunks > 0 {
+			pct = float64(rec) / float64(t.TotalChunks) * 100
+		}
+		transferList = append(transferList, transferInfo{
+			name:     t.Filename,
+			progress: fmt.Sprintf("%.1f%%", pct),
+			mode:     mode,
+		})
+	}
+	transfersMu.Unlock()
+
+	fmt.Println(Cyan + "\n--- Server Status ---" + Reset)
+	fmt.Printf("  Uptime:       %s%s%s\n", Green, uptime.String(), Reset)
+	fmt.Printf("  Active Port:  %s%d%s\n", Yellow, *port, Reset)
+	fmt.Printf("  Web UI:       %shttp://localhost:%d%s\n", Cyan, *port, Reset)
+	if len(ips) > 0 {
+		fmt.Printf("  LAN URLs:     %shttp://%s:%d%s\n", White, ips[0], *port, Reset)
+		for _, ip := range ips[1:] {
+			fmt.Printf("                %shttp://%s:%d%s\n", White, ip, *port, Reset)
+		}
+	}
+	fmt.Printf("  Memory:       Alloc: %.2f MB | Sys: %.2f MB | Goroutines: %d | GC Cycles: %d\n",
+		float64(mem.Alloc)/1024/1024,
+		float64(mem.Sys)/1024/1024,
+		runtime.NumGoroutine(),
+		mem.NumGC,
+	)
+	fmt.Printf("  Paired:       %d device(s) (%s%d online%s)\n",
+		len(devices),
+		Green, onlineCount, Reset,
+	)
+	if activeCount == 0 {
+		fmt.Printf("  Transfers:    0 active\n")
+	} else {
+		fmt.Printf("  Transfers:    %d active\n", activeCount)
+		for _, t := range transferList {
+			fmt.Printf("    - %s (%s, %s)\n", t.name, t.progress, t.mode)
+		}
+	}
+	fmt.Printf("  Storage Dir:  %s\n\n", receiveDir)
 }
 
 var (
-	port        = flag.Int("port", 8080, "port to listen on")
-	homeFlag    = flag.String("home", "", "directory for received files and app data (default ~/P2P)")
-	noClipboard = flag.Bool("no-clipboard", false, "disable clipboard sync")
+	port            = flag.Int("port", 8080, "port to listen on")
+	homeFlag        = flag.String("home", "", "directory for received files and app data (default ~/P2P)")
+	noClipboard     = flag.Bool("no-clipboard", false, "disable clipboard sync")
+	openBrowserFlag = flag.Bool("open", false, "open web UI in default browser on startup")
+	devModeFlag     = flag.Bool("dev", false, "serve web UI from disk (mobile/dist) instead of embedded")
 )
 
 func main() {
@@ -111,6 +427,14 @@ func main() {
 	loadState()
 	cleanTempDir()
 	startTransferJanitor()
+
+	initialPort := *port
+	listener, activePort, err := setupListener(initialPort)
+	if err != nil {
+		log.Fatalf("%sFailed to bind port: %v%s\n", Red, err, Reset)
+	}
+	*port = activePort
+
 	fmt.Print(Cyan + `
     ____ ___  ____     __    _       __  
    / __ \__ \/ __ \   / /   (_)___  / /__
@@ -118,7 +442,11 @@ func main() {
  / ____/ __/ ____/  / /___/ / / / /  ,<   
 /_/   /____/_/     /_____/_/_/ /_/_/|_|  
 ` + Reset)
-	fmt.Println(Green + "\n  Server running on port 8080" + Reset)
+
+	if activePort != initialPort {
+		fmt.Printf(Yellow+"  Port %d was busy. Switched to port %d\n"+Reset, initialPort, activePort)
+	}
+	fmt.Printf(Green+"  Server running on port %d"+Reset+" (http://localhost:%d)\n", activePort, activePort)
 	fmt.Println(White + "  Type '" + Yellow + "help" + White + "' for commands.\n" + Reset)
 
 	http.HandleFunc("/ws", handleWebSocket)
@@ -128,73 +456,92 @@ func main() {
 	http.HandleFunc("/upload", authed(handleUploadChunk))
 	http.HandleFunc("/upload_complete", authed(handleUploadComplete))
 	http.HandleFunc("/upload_cancel", authed(handleUploadCancel))
+	http.HandleFunc("/download", authed(handleDownloadChunk))
 	http.HandleFunc("/download_full", authed(handleDownloadFull))
 
-	// Serve the production React PWA
-	fs := http.FileServer(http.Dir("../mobile/dist"))
-	http.Handle("/", fs)
+	// Serve the React PWA (embedded with disk fallback)
+	http.Handle("/", getFrontendHandler(*devModeFlag))
 
 	if !*noClipboard {
 		go watchClipboard()
 	}
 
+	server := &http.Server{}
 	go func() {
-		listenAddr := fmt.Sprintf("0.0.0.0:%d", *port)
-		log.Println("Listening on " + listenAddr)
-		if err := http.ListenAndServe(listenAddr, nil); err != nil {
-			log.Fatal("ListenAndServe:", err)
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server error: %v", err)
 		}
 	}()
 
 	// Auto-display QR Code on startup
 	showPairing()
 
+	if *openBrowserFlag {
+		go func() {
+			time.Sleep(150 * time.Millisecond)
+			openBrowser(fmt.Sprintf("http://localhost:%d", *port))
+		}()
+	}
+
 	// CLI input for sending messages
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
-		fmt.Print("> ")
+		fmt.Print("p2p> ")
 		if !scanner.Scan() {
 			break
 		}
 		text := strings.TrimSpace(scanner.Text())
 		if text != "" {
+			if lower := strings.ToLower(text); (lower == "y" || lower == "n") && answerApproval(lower == "y") {
+				continue
+			}
 			if text == "help" {
-				fmt.Println(Cyan + "\n--- Commands ---" + Reset)
-				fmt.Println(Yellow + "pair" + Reset + "            : Show a fresh QR code to pair a device")
-				fmt.Println(Yellow + "devices" + Reset + "         : List paired devices")
-				fmt.Println(Yellow + "unpair <device>" + Reset + " : Remove a paired device (by name or id)")
-				fmt.Println(Yellow + "send <file>" + Reset + "     : Send a file (e.g. send \"C:\\photo.jpg\")")
-				fmt.Println(Yellow + "setdir <path>" + Reset + "   : Set directory for received files")
-				fmt.Println(Yellow + "exit" + Reset + "            : Close the server")
+				fmt.Println(Cyan + "\n  Commands" + Reset)
+				fmt.Println("  " + Yellow + "> <file>" + Reset + "        Send a file (or just paste/drop a file path directly)")
+				fmt.Println("  " + Yellow + "pair" + Reset + "            Show QR code to pair a phone")
+				fmt.Println("  " + Yellow + "devices" + Reset + "         List paired devices")
+				fmt.Println("  " + Yellow + "unpair <name>" + Reset + "   Remove a paired device")
+				fmt.Println("  " + Yellow + "status" + Reset + "          Show server & network info")
+				fmt.Println("  " + Yellow + "open" + Reset + "            Open web interface in browser")
+				fmt.Println("  " + Yellow + "setdir <path>" + Reset + "   Change folder for received files")
+				fmt.Println("  " + Yellow + "clear" + Reset + "           Clear terminal screen")
+				fmt.Println("  " + Yellow + "exit" + Reset + "            Stop server")
 				fmt.Println()
 			} else if text == "exit" {
-				fmt.Println(Yellow + "Shutting down..." + Reset)
+				fmt.Println(Dim + "  Shutting down..." + Reset)
 				os.Exit(0)
+			} else if text == "clear" || text == "cls" {
+				fmt.Print("\033[H\033[2J")
+			} else if text == "open" || text == "ui" {
+				url := fmt.Sprintf("http://localhost:%d", *port)
+				printSync(Green, "● Browser", url, "opened")
+				if err := openBrowser(url); err != nil {
+					printSync(Red, "! Error", fmt.Sprintf("Failed to open browser: %v", err), "")
+				}
+			} else if text == "status" || text == "info" {
+				printStatus()
 			} else if text == "pair" {
 				showPairing()
 			} else if text == "devices" {
 				printDevices()
-			} else if strings.HasPrefix(text, "unpair ") {
-				unpairDevice(strings.TrimSpace(strings.TrimPrefix(text, "unpair ")))
-			} else if strings.HasPrefix(text, "send ") {
-				filePath := strings.TrimPrefix(text, "send ")
-				filePath = strings.TrimSpace(filePath)
-				filePath = strings.Trim(filePath, "\"'")
-				err := startSendTransfer(filePath)
-				if err != nil {
-					fmt.Printf("Failed to send file: %v\n> ", err)
+			} else if strings.HasPrefix(strings.ToLower(text), "unpair ") {
+				unpairDevice(strings.TrimSpace(text[7:]))
+			} else if isSendCommand(text) {
+				filePath := extractFilePath(text)
+				fmt.Print("\033[1A\r\033[2K")
+				if err := startSendTransfer(filePath); err != nil {
+					printSync(Red, "! Error", fmt.Sprintf("Could not send file: %v", err), "")
 				}
-			} else if strings.HasPrefix(text, "setdir ") {
-				newDir := strings.TrimPrefix(text, "setdir ")
-				newDir = strings.TrimSpace(newDir)
+			} else if strings.HasPrefix(strings.ToLower(text), "setdir ") {
+				newDir := strings.TrimSpace(text[7:])
 				newDir = strings.Trim(newDir, "\"'")
-				err := setReceiveDir(newDir)
-				if err != nil {
-					fmt.Printf("%sFailed to set receive directory: %v%s\n> ", Red, err, Reset)
+				if err := setReceiveDir(newDir); err != nil {
+					printSync(Red, "! Error", fmt.Sprintf("Failed to set directory: %v", err), "")
 				} else {
-					fmt.Printf("%sReceive directory set to: %s%s\n> ", Green, newDir, Reset)
+					printSync(Green, "● Storage", newDir, "receive folder updated")
 				}
 			} else {
+				fmt.Print("\033[1A\r\033[2K")
 				msg := Message{
 					Version:   1,
 					Type:      "text",
@@ -202,26 +549,64 @@ func main() {
 					Timestamp: time.Now().Unix(),
 					Payload:   TextPayload{Text: text},
 				}
-				broadcastMessage(msg)
+				delivered := broadcastMessage(msg)
+				if delivered > 0 {
+					printSync(Cyan, "↑ Sent", text, "")
+				} else {
+					printSync(Yellow, "↑ Sent", text, "queued — waiting for phone")
+				}
 			}
 		}
 	}
 }
 
+func isSendCommand(input string) bool {
+	trimmed := strings.TrimSpace(input)
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, "send ") || strings.HasPrefix(trimmed, ">") {
+		return true
+	}
+	// Also detect if user dragged & dropped or pasted a valid file path directly into the prompt
+	cleaned := strings.Trim(trimmed, "\"'")
+	if len(cleaned) >= 3 && (strings.Contains(cleaned, "\\") || strings.Contains(cleaned, "/")) {
+		if info, err := os.Stat(cleaned); err == nil && !info.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+func extractFilePath(input string) string {
+	s := strings.TrimSpace(input)
+	for {
+		lower := strings.ToLower(s)
+		if strings.HasPrefix(lower, "send ") {
+			s = strings.TrimSpace(s[5:])
+		} else if strings.HasPrefix(s, ">") {
+			s = strings.TrimSpace(s[1:])
+		} else {
+			break
+		}
+	}
+	return strings.Trim(s, "\"'")
+}
+
 // showPairing prints a QR code that opens the app and pairs the scanning device.
 func showPairing() {
 	code := newPairCode()
-	ip := getLocalIP()
-	if ip == "" {
+	ips := localIPs()
+	if len(ips) == 0 {
 		fmt.Printf("\n%sCould not determine local IP address%s\n", Red, Reset)
-		fmt.Printf("  Pairing code: %s%s%s\n\n", Yellow, formatPairCode(code), Reset)
 		return
 	}
-	addr := fmt.Sprintf("%s:%d", ip, *port)
-	fmt.Printf("\n%s[Pairing]%s Scan this QR code from your phone:\n\n", Cyan, Reset)
+	addr := fmt.Sprintf("%s:%d", ips[0], *port)
+	fmt.Printf("\n  %sScan QR in P2P Link mobile app:%s\n\n", Cyan, Reset)
 	qrterminal.GenerateHalfBlock(fmt.Sprintf("http://%s/#pair=%s", addr, code), qrterminal.L, os.Stdout)
-	fmt.Printf("\n  Or open %shttp://%s%s and enter the code %s%s%s\n", White, addr, Reset, Yellow, formatPairCode(code), Reset)
-	fmt.Printf("  The code is valid for %d minutes.\n\n", int(pairCodeTTL.Minutes()))
+	fmt.Printf("\n  Manual IP : %s%s%s\n", Yellow, addr, Reset)
+	for _, ip := range ips[1:] {
+		fmt.Printf("  Alt IP    : %s%s:%d%s\n", Dim, ip, *port, Reset)
+	}
+	fmt.Printf("  %s──────────────────────────────────────────────────────%s\n\n", Dim, Reset)
 }
 
 func deviceOnline(id string) bool {
@@ -238,16 +623,16 @@ func deviceOnline(id string) bool {
 func printDevices() {
 	devices := listDevices()
 	if len(devices) == 0 {
-		fmt.Println("No paired devices. Type 'pair' to add one.")
+		fmt.Println("  No paired devices. Type 'pair' to add one.")
 		return
 	}
-	fmt.Println(Cyan + "\n--- Paired devices ---" + Reset)
+	fmt.Println(Cyan + "\n  Paired Devices" + Reset)
 	for _, d := range devices {
-		status := "last seen " + time.Unix(d.LastSeen, 0).Format("2006-01-02 15:04")
+		status := Dim + "last seen " + time.Unix(d.LastSeen, 0).Format("15:04") + Reset
 		if deviceOnline(d.ID) {
-			status = Green + "online" + Reset
+			status = Green + "● online" + Reset
 		}
-		fmt.Printf("%s%-24s%s %s  %s\n", Yellow, d.Name, Reset, d.ID[:8], status)
+		fmt.Printf("  %s%-22s%s %s%-10s%s %s\n", White, d.Name, Reset, Dim, d.ID[:8], Reset, status)
 	}
 	fmt.Println()
 }
@@ -255,24 +640,48 @@ func printDevices() {
 func unpairDevice(query string) {
 	device := findDeviceByQuery(strings.Trim(query, "\"'"))
 	if device == nil {
-		fmt.Printf("%sNo paired device matches %q%s\n", Red, query, Reset)
+		printSync(Red, "! Error", fmt.Sprintf("No paired device matches %q", query), "")
 		return
 	}
 	removeDevice(device.ID)
 	dropSessions(device.ID)
 
+	// Clean up any transfers owned by this device to avoid resource leaks
+	transfersMu.Lock()
+	var abandoned []*TransferState
+	for id, state := range transfers {
+		if state.Owner == device.ID {
+			abandoned = append(abandoned, state)
+			delete(transfers, id)
+		}
+	}
+	transfersMu.Unlock()
+	for _, state := range abandoned {
+		state.discard()
+	}
+
 	clientsMu.Lock()
 	for client := range clients {
 		if client.device.ID == device.ID {
-			client.conn.Close()
+			client.Close()
+			delete(clients, client)
 		}
 	}
 	clientsMu.Unlock()
-	fmt.Printf("%sUnpaired %s%s\n", Green, device.Name, Reset)
+	printSync(Green, "● Unpaired", device.Name, "")
 }
 
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	session := authenticate(r)
+	if session != nil {
+		sessionsMu.Lock()
+		if session.wsClaimed {
+			session = nil
+		} else {
+			session.wsClaimed = true
+		}
+		sessionsMu.Unlock()
+	}
 	if session == nil {
 		http.Error(w, "Session expired", http.StatusUnauthorized)
 		return
@@ -284,9 +693,10 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &Client{
-		conn:   conn,
-		send:   make(chan Message, 256),
-		device: session.Device,
+		conn:    conn,
+		send:    make(chan Message, 256),
+		device:  session.Device,
+		session: session,
 	}
 	touchDevice(session.Device)
 
@@ -294,7 +704,27 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	clients[client] = true
 	clientsMu.Unlock()
 
-	fmt.Printf("%s%s[Device Connected]%s %s (%s)\n> ", ClearLine, Green, Reset, client.device.Name, r.RemoteAddr)
+	// Flush any pending messages queued while phone was offline
+	outboxMu.Lock()
+	pending := cliOutbox
+	cliOutbox = nil
+	outboxMu.Unlock()
+
+	for _, m := range pending {
+		client.Enqueue(m)
+	}
+
+	lastDisconnectMu.Lock()
+	wasOnline := deviceOnlineState[session.Device.ID]
+	lastDisconnect := lastDisconnectMap[session.Device.ID]
+	deviceOnlineState[session.Device.ID] = true
+	lastDisconnectMu.Unlock()
+
+	if len(pending) > 0 {
+		printAsync(Green, "● Online", client.device.Name, fmt.Sprintf("delivered %d queued", len(pending)))
+	} else if !wasOnline && time.Since(lastDisconnect) > 4*time.Second {
+		printAsync(Green, "● Online", client.device.Name, "")
+	}
 
 	go client.writePump()
 	client.readPump()
@@ -305,36 +735,79 @@ func (c *Client) readPump() {
 		clientsMu.Lock()
 		delete(clients, c)
 		clientsMu.Unlock()
-		c.conn.Close()
-		fmt.Printf("%s%s[Device Disconnected]%s %s\n> ", ClearLine, Yellow, Reset, c.device.Name)
+		c.Close()
+
+		lastDisconnectMu.Lock()
+		lastDisconnectMap[c.device.ID] = time.Now()
+		lastDisconnectMu.Unlock()
+
+		// Debounce disconnect log: only show if device stays offline > 4.5s (not a quick tab switch)
+		go func(devId string, devName string) {
+			time.Sleep(4500 * time.Millisecond)
+			clientsMu.Lock()
+			online := false
+			for cl := range clients {
+				if cl.device.ID == devId {
+					online = true
+					break
+				}
+			}
+			clientsMu.Unlock()
+			if !online {
+				lastDisconnectMu.Lock()
+				wasOnline := deviceOnlineState[devId]
+				deviceOnlineState[devId] = false
+				lastDisconnectMu.Unlock()
+				if wasOnline {
+					printAsync(Yellow, "○ Offline", devName, "")
+				}
+			}
+		}(c.device.ID, c.device.Name)
 	}()
 
-	for {
-		var msg Message
-		err := c.conn.ReadJSON(&msg)
+	// Frames are encrypted and numbered per direction: anything replayed,
+	// reordered, dropped or forged fails to decrypt and ends the connection.
+	for counter := 0; ; counter++ {
+		_, frame, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Printf("error: %v", err)
 			}
 			break
 		}
+		plaintext, err := c.session.open(frame, fmt.Sprintf("c2s\n%d", counter))
+		if err != nil {
+			printAsync(Red, "! Security", c.device.Name, "dropped undecryptable frame")
+			break
+		}
+		var msg Message
+		if json.Unmarshal(plaintext, &msg) != nil {
+			continue
+		}
 
 		if msg.Type == "text" {
 			payload, ok := msg.Payload.(map[string]interface{})
 			if ok {
 				if text, exists := payload["text"].(string); exists {
-					lastClipboardText = text
-					clipboard.WriteAll(text)
-					fmt.Printf("%s%s[%s]:%s %s %s(Copied to Clipboard)%s\n> ", ClearLine, Blue, c.device.Name, Reset, text, Cyan, Reset)
+					copyToClipboard(text)
+					printAsync(Blue, "↓ Received", text, "copied")
 				}
 			}
 		} else if msg.Type == "clipboard" {
 			payload, ok := msg.Payload.(map[string]interface{})
 			if ok {
 				if text, exists := payload["text"].(string); exists {
-					lastClipboardText = text
-					clipboard.WriteAll(text)
-					fmt.Printf("%s%s[Clipboard Synced %s -> PC]%s\n> ", ClearLine, Cyan, c.device.Name, Reset)
+					clipboardMu.RLock()
+					prev := lastClipboardText
+					clipboardMu.RUnlock()
+					if text != "" && text != prev {
+						copyToClipboard(text)
+						display := strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", " "), "\n", " ")
+						if len(display) > 42 {
+							display = display[:39] + "..."
+						}
+						printAsync(Cyan, "↓ Clipboard", fmt.Sprintf("%q", display), "")
+					}
 				}
 			}
 		}
@@ -343,30 +816,45 @@ func (c *Client) readPump() {
 
 func (c *Client) writePump() {
 	defer func() {
-		c.conn.Close()
+		c.Close()
 	}()
-	for {
+	for counter := 0; ; counter++ {
 		msg, ok := <-c.send
 		if !ok {
 			c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 			return
 		}
-		err := c.conn.WriteJSON(msg)
+		data, err := json.Marshal(msg)
 		if err != nil {
+			return
+		}
+		frame := c.session.seal(data, fmt.Sprintf("s2c\n%d", counter))
+		if err := c.conn.WriteMessage(websocket.BinaryMessage, frame); err != nil {
 			return
 		}
 	}
 }
 
-func broadcastMessage(msg Message) {
+func broadcastOnlineOnly(msg Message) int {
 	clientsMu.Lock()
-	defer clientsMu.Unlock()
+	delivered := 0
 	for client := range clients {
-		select {
-		case client.send <- msg:
-		default:
-			close(client.send)
+		if client.Enqueue(msg) {
+			delivered++
+		} else {
 			delete(clients, client)
 		}
 	}
+	clientsMu.Unlock()
+	return delivered
+}
+
+func broadcastMessage(msg Message) int {
+	delivered := broadcastOnlineOnly(msg)
+	if delivered == 0 {
+		outboxMu.Lock()
+		cliOutbox = append(cliOutbox, msg)
+		outboxMu.Unlock()
+	}
+	return delivered
 }

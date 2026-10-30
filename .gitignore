@@ -8,6 +8,10 @@ dist-ssr/
 apps/cli/*.exe
 apps/cli/p2p
 apps/cli/p2p.exe
+/p2p.exe
+p2p.exe
+p2p.exe~
+*.exe~
 
 # OS
 .DS_Store
@@ -38,3 +42,4 @@ docs/roadmap.md
 *.keystore
 .gradle/
 local.properties
+dist-apk/

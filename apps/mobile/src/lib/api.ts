@@ -1,4 +1,6 @@
-import { bytesToHex, deviceKeyFromCode, hexToBytes, hmacHex, randomBytes, sessionKey, signRequest } from './crypto';
+import {
+  Cipher, bytesToHex, chunkContext, deviceKeyFromCode, hexToBytes, hmacHex, randomBytes, randomHex, sessionKey, signRequest, utf8ToBytes
+} from './crypto';
 
 export class HttpError extends Error {
   code?: string; // machine-readable reason from the server, e.g. 'not_paired'
@@ -20,44 +22,71 @@ export interface Pairing {
 interface Session {
   id: string;
   key: Uint8Array;
+  cipher: Cipher;
+}
+
+interface SignedRequest {
+  url: string;
+  nonce: string;
+  session: Session;
 }
 
 const REQUEST_TIMEOUT = 5000;
+const APPROVAL_TIMEOUT = 70000; // the PC waits up to 60 s for its owner to approve
 
+// Errors are the one thing the server sends in the clear (a session may not
+// exist yet), so they carry a message and a code but never data to act on.
+async function failure(res: Response, fallback: string): Promise<HttpError> {
+  const body = await res.json().catch(() => undefined);
+  return new HttpError(res.status, body?.error || `${fallback} (${res.status})`, body);
+}
+
+// Used by the two calls that run before a session exists.
 async function postJSON(url: string, body: unknown, signal?: AbortSignal): Promise<any> {
   // The body is sent without a JSON content type on purpose: it keeps the
   // request "simple" so cross-origin calls skip preflight.
   const res = await fetch(url, { method: 'POST', body: JSON.stringify(body), signal });
-  const text = await res.text();
-  let data: any;
-  try {
-    data = text ? JSON.parse(text) : undefined;
-  } catch {
-    data = undefined;
-  }
-  if (!res.ok) {
-    throw new HttpError(res.status, data?.error || `Request failed (${res.status})`, data);
-  }
-  return data;
+  if (!res.ok) throw await failure(res, 'Request failed');
+  return res.json();
 }
 
-// Pairs this device with the PC at `host` using the code shown in its terminal.
-// The code itself is never sent: both sides derive the device key from it.
-export async function pairDevice(host: string, code: string, deviceId: string, deviceName: string): Promise<Pairing> {
-  const key = deviceKeyFromCode(code, deviceId);
+// True when a request never got an answer (wrong address, firewall, Wi-Fi
+// isolation), as opposed to the PC replying with an error.
+export const isNetworkError = (err: unknown) => !(err instanceof HttpError);
+
+// Pairs with the PC at `host` using the secret from its QR code. The secret
+// itself is never sent: both sides derive the device key from it.
+export async function pairWithQr(host: string, secret: string, deviceId: string, deviceName: string): Promise<Pairing> {
+  const key = deviceKeyFromCode(secret, deviceId);
   const res = await postJSON(`http://${host}/pair`, {
     deviceId,
     name: deviceName,
     mac: hmacHex(key, `pair\n${deviceId}\n${deviceName}`)
   }, AbortSignal.timeout(REQUEST_TIMEOUT));
+  return finishPairing(res, key, deviceId);
+}
+
+// Pairs with the PC at `host` knowing only its address: this device picks its
+// own key, and the person at the PC approves the request in the terminal.
+export async function pairWithApproval(host: string, deviceId: string, deviceName: string): Promise<Pairing> {
+  const key = randomBytes(32);
+  const res = await postJSON(`http://${host}/pair`, {
+    deviceId,
+    name: deviceName,
+    key: bytesToHex(key)
+  }, AbortSignal.timeout(APPROVAL_TIMEOUT));
+  return finishPairing(res, key, deviceId);
+}
+
+function finishPairing(res: any, key: Uint8Array, deviceId: string): Pairing {
   if (res.proof !== hmacHex(key, `paired\n${res.serverId}`)) {
-    throw new Error('The PC could not prove it knows the pairing code');
+    throw new Error('The PC could not prove it knows this device');
   }
   return { serverId: res.serverId, serverName: res.serverName, deviceId, deviceName: res.deviceName, key: bytesToHex(key) };
 }
 
 // HTTP side of the protocol: file data and transfer control. Every request is
-// tied to a session and signed with its key.
+// tied to a session, signed with its key, and its content is encrypted.
 export class ServerApi {
   host = '';
   private currentPairing: Pairing | null = null;
@@ -89,7 +118,7 @@ export class ServerApi {
       if (res.proof !== hmacHex(key, 'server')) {
         throw new Error('The PC failed to prove its identity');
       }
-      return { id: res.sessionId as string, key };
+      return { id: res.sessionId as string, key, cipher: new Cipher(key) };
     })();
     this.session = session;
     session.catch(() => {
@@ -98,11 +127,14 @@ export class ServerApi {
     return session;
   }
 
-  private async signedUrl(method: string, path: string, params: Record<string, string> = {}, scheme = 'http'): Promise<string> {
+  // Every request carries a one-off nonce: it is covered by the signature and
+  // ties the encrypted reply to this particular request.
+  private async sign(method: string, path: string, params: Record<string, string> = {}, scheme = 'http'): Promise<SignedRequest> {
     const session = await (this.session || this.openSession());
-    const signed = { ...params, sid: session.id };
+    const nonce = randomHex(8);
+    const signed = { ...params, sid: session.id, n: nonce };
     const query = new URLSearchParams({ ...signed, mac: signRequest(session.key, method, path, signed) });
-    return `${scheme}://${this.host}${path}?${query}`;
+    return { url: `${scheme}://${this.host}${path}?${query}`, nonce, session };
   }
 
   // Runs a request, transparently opening a new session once if the PC no
@@ -118,28 +150,46 @@ export class ServerApi {
   }
 
   call<T = unknown>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
-    return this.withSession(async () => postJSON(await this.signedUrl('POST', path), body, signal));
+    return this.withSession(async () => {
+      const { url, nonce, session } = await this.sign('POST', path);
+      const sealed = await session.cipher.seal(utf8ToBytes(JSON.stringify(body)), `req\n${path}\n${nonce}`);
+      const res = await fetch(url, { method: 'POST', body: sealed as BodyInit, signal });
+      if (!res.ok) throw await failure(res, 'Request failed');
+      const reply = await session.cipher.open(new Uint8Array(await res.arrayBuffer()), `res\n${path}\n${nonce}`);
+      return JSON.parse(new TextDecoder().decode(reply)) as T;
+    });
   }
 
   uploadChunk(transferId: string, chunkIndex: number, data: Blob, signal?: AbortSignal): Promise<void> {
     return this.withSession(async () => {
-      const url = await this.signedUrl('POST', '/upload', { transferId, chunkIndex: String(chunkIndex) });
-      const res = await fetch(url, { method: 'POST', body: data, signal });
-      if (!res.ok) {
-        const body = await res.json().catch(() => undefined);
-        throw new HttpError(res.status, body?.error || `Chunk upload failed (${res.status})`, body);
-      }
+      const { url, session } = await this.sign('POST', '/upload', { transferId, chunkIndex: String(chunkIndex) });
+      const sealed = await session.cipher.seal(new Uint8Array(await data.arrayBuffer()), chunkContext(transferId, chunkIndex));
+      const res = await fetch(url, { method: 'POST', body: sealed as BodyInit, signal });
+      if (!res.ok) throw await failure(res, 'Chunk upload failed');
     });
   }
 
-  downloadUrl(transferId: string): Promise<string> {
-    return this.signedUrl('GET', '/download_full', { transferId });
+  downloadChunk(transferId: string, chunkIndex: number, signal?: AbortSignal): Promise<Uint8Array> {
+    return this.withSession(async () => {
+      const { url, session } = await this.sign('GET', '/download', { transferId, chunkIndex: String(chunkIndex) });
+      const res = await fetch(url, { signal });
+      if (!res.ok) throw await failure(res, 'Chunk download failed');
+      return session.cipher.open(new Uint8Array(await res.arrayBuffer()), chunkContext(transferId, chunkIndex));
+    });
+  }
+
+  // Link for the device's own download manager. It is authenticated but the
+  // file travels unencrypted, because nothing outside the app can decrypt it.
+  async directDownloadUrl(transferId: string): Promise<string> {
+    return (await this.sign('GET', '/download_full', { transferId })).url;
   }
 
   // A WebSocket cannot report why a handshake was refused, so always start it
-  // from a brand new session: that surfaces "not paired" and "unreachable" up front.
-  async wsUrl(): Promise<string> {
+  // from a brand new session: that surfaces "not paired" and "unreachable" up
+  // front. The session is then dedicated to that socket.
+  async openSocket(): Promise<{ url: string; cipher: Cipher }> {
     await this.openSession();
-    return this.signedUrl('GET', '/ws', {}, 'ws');
+    const { url, session } = await this.sign('GET', '/ws', {}, 'ws');
+    return { url, cipher: session.cipher };
   }
 }
