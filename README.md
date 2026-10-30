@@ -31,8 +31,17 @@ It features a high-performance **Go host engine** on desktop with embedded front
 - **Hardened Path Traversal Protection**: Multi-layered defense against directory escape attacks (`../../`), Windows reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`), illegal filesystem characters (`<>:"/\|?*`), and filename truncation limits.
 - **Zero-RAM File Streaming**: Chunks (1 MB) are verified, decrypted, and written directly to disk via random-access offsets (`WriteAt`), keeping server and client memory footprints completely flat regardless of whether you transfer a 10 MB photo or a 60 GB 4K video.
 
-### 4. Rich Media Previews & Modern UI/UX
-- **Image Lightbox**: Interactive image viewer with pan/drag, pinch-to-zoom, mouse-wheel zoom, `+`/`-`/`0` shortcuts, file dimensions/size badge, and `Esc` dismissal.
+### 4. Clean Desktop Terminal UX & Instant Fast Transfers
+- **Structured Scannable Feed**: High-signal, noise-free terminal interface with precise `HH:MM` timestamps, clean status/directional badges (`● Online`, `↑ Sent`, `↓ Received`, `↓ File`, `↑ File`), and zero redundant system log spam.
+- **In-Place Live Progress**: File uploads and downloads update dynamically in a single row without multi-line console flooding.
+- **Fast Send Shorthand (`> <filepath>`) & Direct Path Drop**: Send any file, image, or video with `> "C:\file.mp4"`, `> "file.zip"`, or simply paste / drag-and-drop the file path directly into the prompt without typing `send`.
+- **Silent Clipboard Sync & Deduplication**: Syncs PC clipboard quietly to connected devices in the background without interrupting prompt typing or echoing sync updates.
+- **Offline Outbox & Auto-Delivery**: Content sent while devices are temporarily disconnected queues automatically in an outbox and delivers immediately upon reconnection.
+
+### 5. Rich Media Previews & Modern UI/UX (Apple / Google Grade)
+- **Non-Chat Transfer Workspace**: Structured dark workspace cards with sender direction pills, type indicators (`APK`, `Image`, `Video`, `Clipboard`, `Text`), timestamps, and 1-tap `Copy` and `Save` buttons.
+- **Native Android Downloads Integration**: Custom `FileSaverPlugin` utilizing Android `MediaStore.Downloads` and system `DownloadManager` so files and media saved on phone appear instantly in the phone's native **Files / Downloads** app.
+- **Redesigned Lightbox**: Floating bottom glass zoom dock (`-`, `100%`, `+`, `Reset`), mobile touch pan gestures, and persistent header `Save` button.
 - **Inline Audio Player**: Embedded waveform player for `.mp3`, `.wav`, `.aac`, `.ogg`, `.flac`, `.opus` with seek scrubber, elapsed/total timers, and mute toggle.
 - **Inline Video Player**: HTML5 video playback for `.mp4`, `.webm`, `.mov`.
 - **Inline PDF Viewer**: Document badge with file size indicator, quick in-app modal reader, and external viewer support.
@@ -56,13 +65,15 @@ Ensure your PC and phone are connected to the same Wi-Fi or phone hotspot.
 
 2. **Useful CLI Commands**:
    Type any of these commands directly into the PC terminal:
+   - `> <filepath>` or paste path: Sends a file from PC to connected devices (e.g. `> "C:\Photos\vacation.jpg"` or drag & drop directly).
    - `open` or `ui` : Opens the Web UI in your default desktop browser.
    - `status` or `info` : Displays real-time server uptime, active port, memory allocation, paired devices, and active transfers.
    - `pair` : Displays a fresh QR code for pairing a new device.
    - `devices` : Lists all paired devices and their online/offline status.
    - `unpair <device>` : Unpairs a device by name or ID.
-   - `send <filepath>` : Sends a file from PC to connected devices (e.g. `send "C:\Photos\vacation.jpg"`).
+   - `send <filepath>` : Traditional syntax for sending files.
    - `setdir <path>` : Changes the directory where received files are saved (default: `~/P2P/received`).
+   - `clear` or `cls` : Clears the terminal screen.
    - `exit` : Gracefully shuts down the server.
 
 ---
