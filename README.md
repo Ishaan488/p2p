@@ -1,206 +1,231 @@
-# P2P Link (Pro)
+# P2P Link
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.21%2B-00ADD8?logo=go)](https://go.dev/)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react)](https://react.dev/)
 [![Capacitor](https://img.shields.io/badge/Capacitor-Android%208.5-119EFF?logo=capacitor)](https://capacitorjs.com/)
+[![Platforms](https://img.shields.io/badge/Platforms-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-green)](#cross-platform-support)
 [![Zero Dependencies](https://img.shields.io/badge/Android%20Studio-Not%20Required-success)](#android-build--installation-no-android-studio-needed)
 
-**P2P Link** is an ultra-fast, zero-RAM, peer-to-peer file transfer, real-time messaging, and clipboard synchronization system designed as an industry-grade alternative to AirDrop and Snapdrop for PC-to-Mobile communication.
+**P2P Link** is an ultra-fast, encrypted, local peer-to-peer file transfer, real-time messaging, and clipboard synchronization platform designed as an enterprise-grade alternative to Apple AirDrop, Snapdrop, and Quick Share for PC-to-Mobile communication.
 
-It features a high-performance **Go host engine** on desktop with embedded frontend web assets, and an **OLED dark-mode React client** that operates both as an installable Progressive Web App (PWA) and as a native Android APK (built via Capacitor and Gradle CLI without Android Studio).
-
----
-
-## Key Highlights & Architectural Features
-
-### 1. Instant Desktop Launch (< 10ms)
-- **Standalone Binary (`p2p.exe`)**: Compiled with Go's `//go:embed all:dist` and stripped symbols (`-ldflags="-s -w"`), resulting in a compact ~9 MB single executable.
-- **Zero Startup Recompilation**: Replaces slow `go run .` multi-second compile times with instant (<10ms) execution.
-- **Dynamic Port Stepping**: Defaults to port `8080`. If port 8080 is occupied by another service, it automatically steps through `8081`..`8090` without failing.
-- **Zero-Delay Hotspot & Offline Startup**: Bypasses WAN DNS blocking with non-blocking interface inspection (`net.DialTimeout(..., 200ms)` and `net.InterfaceAddrs()`), ensuring instantaneous startup even when offline or connected to isolated phone hotspots.
-
-### 2. Android Build Without Android Studio
-- **100% CLI Toolchain**: Compiles and packages production Android APKs via Node.js / batch scripts calling the Gradle wrapper (`gradlew.bat`) directly with `JAVA_HOME` and `ANDROID_HOME` configuration.
-- **One-Command APK Generation**: `scripts\build-apk.bat` (or `npm run android:build`) compiles Vite assets, runs `cap sync android`, and generates `dist-apk\p2p-debug.apk` in ~1-2 minutes.
-- **One-Command Phone Deployment**: `scripts\install-phone.bat` (or `npm run android:install`) automatically detects connected Android devices via ADB, installs the APK, and launches the app on screen.
-
-### 3. Industry-Grade Security & Protocol
-- **End-to-End Encryption**: AES-256-GCM symmetric session keys derived via HKDF-SHA256 from ephemeral pairing codes.
-- **Cryptographic Nonce & Sequence Tracking**: Bidirectional sequence counters (`c2s` / `s2c`) prevent message replay, reordering, and tampering.
-- **Hardened Path Traversal Protection**: Multi-layered defense against directory escape attacks (`../../`), Windows reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`), illegal filesystem characters (`<>:"/\|?*`), and filename truncation limits.
-- **Zero-RAM File Streaming**: Chunks (1 MB) are verified, decrypted, and written directly to disk via random-access offsets (`WriteAt`), keeping server and client memory footprints completely flat regardless of whether you transfer a 10 MB photo or a 60 GB 4K video.
-
-### 4. Clean Desktop Terminal UX & Instant Fast Transfers
-- **Structured Scannable Feed**: High-signal, noise-free terminal interface with precise `HH:MM` timestamps, clean status/directional badges (`● Online`, `↑ Sent`, `↓ Received`, `↓ File`, `↑ File`), and zero redundant system log spam.
-- **In-Place Live Progress**: File uploads and downloads update dynamically in a single row without multi-line console flooding.
-- **Fast Send Shorthand (`> <filepath>`) & Direct Path Drop**: Send any file, image, or video with `> "C:\file.mp4"`, `> "file.zip"`, or simply paste / drag-and-drop the file path directly into the prompt without typing `send`.
-- **Silent Clipboard Sync & Deduplication**: Syncs PC clipboard quietly to connected devices in the background without interrupting prompt typing or echoing sync updates.
-- **Offline Outbox & Auto-Delivery**: Content sent while devices are temporarily disconnected queues automatically in an outbox and delivers immediately upon reconnection.
-
-### 5. Rich Media Previews & Modern UI/UX (Apple / Google Grade)
-- **Non-Chat Transfer Workspace**: Structured dark workspace cards with sender direction pills, type indicators (`APK`, `Image`, `Video`, `Clipboard`, `Text`), timestamps, and 1-tap `Copy` and `Save` buttons.
-- **Native Android Downloads Integration**: Custom `FileSaverPlugin` utilizing Android `MediaStore.Downloads` and system `DownloadManager` so files and media saved on phone appear instantly in the phone's native **Files / Downloads** app.
-- **Redesigned Lightbox**: Floating bottom glass zoom dock (`-`, `100%`, `+`, `Reset`), mobile touch pan gestures, and persistent header `Save` button.
-- **Inline Audio Player**: Embedded waveform player for `.mp3`, `.wav`, `.aac`, `.ogg`, `.flac`, `.opus` with seek scrubber, elapsed/total timers, and mute toggle.
-- **Inline Video Player**: HTML5 video playback for `.mp4`, `.webm`, `.mov`.
-- **Inline PDF Viewer**: Document badge with file size indicator, quick in-app modal reader, and external viewer support.
-- **Code & Text Snippet Viewer**: Syntax-labeled code preview with line numbers and 1-click clipboard copy for source files (`.go`, `.ts`, `.tsx`, `.js`, `.py`, `.rs`, `.json`, `.md`, `.txt`, `.yaml`, etc.).
-- **Batch Transfer HUD**: Real-time multi-file drag-and-drop queue with cumulative progress bar, EMA speed tracker, remaining ETA calculation, and "Pause All" / "Resume All" controls.
-- **Synthesized Audio Chimes & Haptics**: Pleasant crystal two-tone chime synthesized dynamically via Web Audio API oscillators on transfer completion (zero external audio file dependencies), plus native Android haptic vibration.
-- **Android Hardware Back-Button Support**: Managed modal stack ensures pressing the Android back button closes lightboxes, viewers, and the QR scanner without closing the app; double-tap at root exits safely.
+It couples a high-throughput **Go host engine** on desktop with embedded frontend web assets and an **OLED dark-mode React client** that functions both as an installable Progressive Web App (PWA) and as a native Android app (compiled via Capacitor and Gradle CLI without Android Studio).
 
 ---
 
-## Quick Start (User Guide)
+## 🚀 Key Feature Matrix
 
-### Running on Desktop (PC)
-
-Ensure your PC and phone are connected to the same Wi-Fi or phone hotspot.
-
-1. **Launch the Server**:
-   Double-click **`Start P2P.bat`** in the root directory.
-   - If `p2p.exe` is not already compiled, it will automatically build it once, then launch instantly.
-   - An ASCII banner, active port, and pairing QR code will appear in the terminal.
-
-2. **Useful CLI Commands**:
-   Type any of these commands directly into the PC terminal:
-   - `> <filepath>` or paste path: Sends a file from PC to connected devices (e.g. `> "C:\Photos\vacation.jpg"` or drag & drop directly).
-   - `open` or `ui` : Opens the Web UI in your default desktop browser.
-   - `status` or `info` : Displays real-time server uptime, active port, memory allocation, paired devices, and active transfers.
-   - `pair` : Displays a fresh QR code for pairing a new device.
-   - `devices` : Lists all paired devices and their online/offline status.
-   - `unpair <device>` : Unpairs a device by name or ID.
-   - `send <filepath>` : Traditional syntax for sending files.
-   - `setdir <path>` : Changes the directory where received files are saved (default: `~/P2P/received`).
-   - `clear` or `cls` : Clears the terminal screen.
-   - `exit` : Gracefully shuts down the server.
+| Phase | Milestone | Capabilities Delivered |
+| :--- | :--- | :--- |
+| **Phase 1** | **Core Reliability** | Auto-resume on Wi-Fi drop/reconnect • Android Foreground Service (transfers continue screen-off) • Android Share Target ("Share → P2P Link") • Transfer approval/rejection • Device trust whitelist • Persistent transfer history |
+| **Phase 2** | **Security Hardening** | Ephemeral pairing codes with rate-limiting & lockout • Anti-replay nonces & sequence counter validation • Pinned TLS (HTTPS/WSS) • Two-way remote unpair (`/unpair`) • Continuous Go fuzz testing on protocol parsers |
+| **Phase 3** | **Usability & Frictionless UX** | mDNS ZeroConf auto-discovery (`_p2plink._tcp`) • UDP LAN broadcast fallback (`:8089`) • Safe ZIP folder streaming with Zip Slip protection • Cross-platform clipboard sync (Windows/macOS/Linux) • Full `Makefile` and POSIX shell tooling |
+| **Phase 4** | **Scale & Performance** | Multi-device concurrent routing (`--to <device>`) • Per-device isolated outboxes • Pre-flight SHA-256 deduplication (0 bytes sent for duplicates) • Parallel worker chunk streaming • Flat $\mathcal{O}(1)$ memory footprint for 60GB+ files • Built-in `pprof` profiling diagnostics |
 
 ---
 
-### Connecting on Phone
+## ⚡ Architecture & Highlights
 
-1. **Via Mobile Browser (PWA)**:
-   - Open your mobile browser and navigate to the address shown in your PC terminal (e.g. `http://192.168.1.5:8080`).
-   - Tap **"Scan QR to Pair"** and scan the QR code in your PC terminal.
-   - *Optional:* Tap your browser menu and choose **"Add to Home Screen"** to install it as an app.
+### 1. Instant Desktop Launch (< 10ms) & Cross-Platform Engine
+* **Single Standalone Executable**: Compiled with Go's `//go:embed all:dist` and stripped debug symbols (`-ldflags="-s -w"`), packaging the entire server and UI into a single self-contained ~15 MB executable (`p2p.exe` on Windows or `p2p` on macOS/Linux).
+* **Cross-Platform Toolchain**: Fully buildable on Windows, Linux, and macOS via `Makefile` or shell scripts without depending on Windows `.bat` files.
+* **Dynamic Port Allocation**: Defaults to `8080` and automatically claims adjacent ports (`8081`–`8090`) if busy.
+* **Non-Blocking Network Initialization**: Rapid 200ms interface inspection eliminates WAN DNS delays when offline or running on phone hotspots.
 
-2. **Via Native Android App (APK)**:
-   - Build and install the APK using the CLI toolchain (instructions below).
-   - Open the app, grant Camera permission when prompted, and scan the PC terminal QR code.
-   - The phone pairs permanently; subsequent launches auto-connect in under 1 second.
+### 2. Multi-Device Targeting & Isolated Outboxes
+* **Concurrent Multi-Peer Support**: One PC can connect to multiple phones and tablets concurrently.
+* **Per-Device Routing**: Target transfers directly to specific devices with `--to <name|id>` (e.g. `send movie.mp4 --to Pixel`).
+* **Device-Isolated Outboxes**: An offline phone never stalls or delays transfers intended for other devices; targeted messages remain queued in the offline peer's bucket and flush automatically upon reconnection.
+
+### 3. Pre-Flight Content Deduplication (0-Byte Transmit)
+* Before streaming chunk payloads, the client computes an incremental SHA-256 hash using `@noble/hashes` without loading the full file into memory.
+* The desktop checks the local hash index (`/upload_check_hash`). If the file already exists on the destination, chunk transmission is bypassed entirely, completing instantly (100%) and recording in transfer history as `Deduplicated (Skipped)`.
+
+### 4. Line-Rate Parallel Streams with Flat $\mathcal{O}(1)$ Memory
+* Uploads and downloads stream across parallel workers (4–8 concurrent chunks).
+* Direct random-access disk writes (`os.File.WriteAt`) with read-write mutexes ensure that out-of-order chunks assemble seamlessly.
+* Server and client memory overhead remains strictly flat ($< 15\text{ MB}$) regardless of whether the file is 5 MB or 60 GB+.
+
+### 5. Zero-Configuration Auto-Discovery
+* **Dual-Channel Discovery**: Uses standard mDNS (`_p2plink._tcp.local`) for instant local peer discovery, backed by a UDP broadcast probe (`:8089`) for networks where multicast is restricted.
+* **Intelligent Network Fallback**: Clearly identifies campus / enterprise Wi-Fi AP Client Isolation and guides users to 1-tap QR pairing or manual IP entry.
+
+### 6. Android Build Without Android Studio
+* **100% CLI Toolchain**: Compiles and packages production Android APKs via standard Node.js and Gradle wrapper commands (`gradlew assembleDebug`).
+* **One-Command Build & Install**: Run `scripts\build-apk.bat` (or `make apk`) followed by `scripts\install-phone.bat` (or `make install`) to compile and push directly to connected phones via ADB.
+
+### 7. Industry-Grade Security
+* **AES-256-GCM Encryption**: Every chunk, JSON payload, and WebSocket frame is sealed with authenticated encryption derived via HKDF-SHA256.
+* **Anti-Replay Nonce Tracking**: One-off cryptographic nonces and frame sequence counters prevent reordering, replay attacks, and man-in-the-middle tampering.
+* **Brute-Force Lockout**: Pairing endpoints strictly enforce rate limits and lockout policies after 5 failed attempts.
+* **Filesystem Defenses**: Sanitization strips directory traversal sequences (`../../`), defangs Windows reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`), and enforces path containment.
 
 ---
 
-## Android Build & Installation (No Android Studio Needed)
+## 🖥️ Desktop CLI User Guide
 
-You do **not** need Android Studio installed. The project uses standard Android SDK command-line tools and the Gradle wrapper.
+### Starting the Server
 
-### Prerequisites (Already set up on your machine)
-- Java JDK 22 (`C:\Program Files\Java\jdk-22`)
-- Android SDK (`E:\Android\Sdk`)
+```bash
+# Windows (One-Click)
+Start P2P.bat
 
-### 1. Build the Android APK
-From the root directory, simply run:
-```cmd
-scripts\build-apk.bat
+# Windows / Linux / macOS (Executable)
+./p2p.exe        # Windows
+./p2p            # Linux / macOS
+
+# With optional pprof profiler enabled (127.0.0.1:6060)
+./p2p.exe -pprof
 ```
-*(Or from `apps/mobile`: `npm run android:build`)*
 
-This script automatically:
-1. Builds the latest React web assets (`npm run build`).
-2. Syncs web assets to the native Android Capacitor project (`cap sync android`).
-3. Runs the Gradle wrapper (`gradlew.bat assembleDebug`).
-4. Outputs the finished APK to:
+### CLI Commands Reference
+
+Type commands directly into the interactive `p2p>` prompt:
+
+| Command | Action | Example |
+| :--- | :--- | :--- |
+| `send <path>` | Send file or directory to all connected devices | `send "C:\Movies\clip.mp4"` |
+| `send <path> --to <peer>` | Send file or directory to a specific device | `send "report.pdf" --to Pixel` |
+| `> <path> [--to <peer>]` | Shorthand for fast file sending | `> "photo.jpg" --to "iPhone 15"` |
+| `msg <text> [--to <peer>]` | Send text message to all or specific device | `msg "Meeting Link" --to Pixel` |
+| `<drag-and-drop path>` | Paste or drop any file path into terminal | `"D:\Backups\archive.zip"` |
+| `devices` | List paired devices, online state, and IP | `devices` |
+| `trust <device>` | Auto-accept file transfers without terminal prompt | `trust "Pixel 7"` |
+| `untrust <device>` | Require interactive terminal approval per transfer | `untrust "Pixel 7"` |
+| `unpair <device>` | Revoke and unpair a device | `unpair "Pixel 7"` |
+| `history` | Display recent transfer history | `history` |
+| `status` or `info` | Display uptime, RAM usage, goroutines, active transfers | `status` |
+| `setdir <path>` | Change folder where received files are saved | `setdir "D:\Downloads"` |
+| `pair` | Display QR code and manual IP for mobile pairing | `pair` |
+| `open` or `ui` | Open the desktop web workspace in default browser | `open` |
+| `clear` or `cls` | Clear terminal screen | `clear` |
+| `exit` | Gracefully shut down the server | `exit` |
+
+---
+
+## 📱 Mobile App Guide (Android & PWA)
+
+### Option 1: Native Android App (Recommended)
+1. Build the APK without Android Studio:
+   ```cmd
+   scripts\build-apk.bat
    ```
-   dist-apk\p2p-debug.apk
+   *(Or on Linux/macOS: `./scripts/build-apk.sh` or `make apk`)*
+2. Install to connected phone via ADB:
+   ```cmd
+   scripts\install-phone.bat
    ```
+   *(Or on Linux/macOS: `./scripts/install-phone.sh` or `make install`)*
+3. Open **P2P Link** on your phone, tap **"Scan QR Code"**, and point the camera at your desktop terminal.
+4. **Android Share Target**: Select photos, documents, or text in any Android app, tap **Share**, and choose **P2P Link** to transmit directly to your PC.
+5. **Background Transfers**: Transfers continue seamlessly with the screen off via the Android Foreground Service.
 
-### 2. Install & Launch on Your Phone
-1. Connect your Android phone to your PC via USB with **USB Debugging** enabled in Developer Options (or connect over Wi-Fi via `adb connect <phone-ip>:<port>`).
-2. Run:
-```cmd
-scripts\install-phone.bat
-```
-*(Or from `apps/mobile`: `npm run android:install`)*
-
-The script checks for connected devices via ADB, installs `dist-apk\p2p-debug.apk`, and immediately starts the app on your phone.
-
----
-
-## Desktop Standalone Binary Build
-
-To re-compile the standalone `p2p.exe` binary after making code or UI modifications:
-
-```cmd
-build-desktop.bat
-```
-
-This compiles `apps/cli` with embedded assets into `e:\personal\p2p\p2p.exe`.
+### Option 2: Browser Progressive Web App (PWA)
+1. Open Chrome, Safari, or Firefox on your phone and navigate to the PC IP shown in the terminal (e.g. `http://192.168.1.15:8080`).
+2. Scan the terminal pairing QR code or enter the pairing code.
+3. Tap **"Add to Home Screen"** to install as a standalone OLED web app.
 
 ---
 
-## Verification & Automated Test Suite
+## 🌐 Network Topology & Troubleshooting
 
-The Go backend includes a comprehensive test suite covering security, protocol compliance, concurrency, and filesystem protections:
+### Campus, College & Enterprise Wi-Fi (AP Client Isolation)
+Most university and public Wi-Fi networks enable **AP (Client) Isolation**, which intentionally drops broadcast/multicast packets (blocking mDNS and auto-discovery) and prevents devices on the same Wi-Fi from communicating directly.
 
-To run tests:
+* **Fix 1 (Direct Pairing)**: Tap **"Scan QR Code"** in the mobile app to connect via the exact IP and token, bypassing discovery.
+* **Fix 2 (Manual IP)**: Enter the PC LAN IP displayed in the terminal (e.g. `10.x.x.x:8080`) instead of `localhost:8080`.
+* **Fix 3 (Phone Hotspot)**: Turn on your phone's Wi-Fi hotspot and connect your PC to it. Mobile hotspots do not enforce AP isolation, enabling full wire-speed transfers (up to 80–120 MB/s).
+
+### Firewall Configuration (Windows)
+If Windows Firewall blocks inbound local traffic:
+* Run `Start P2P.bat` as Administrator once, or execute:
+  ```powershell
+  New-NetFirewallRule -DisplayName "P2P Link" -Direction Inbound -LocalPort 8080-8090 -Protocol TCP -Action Allow
+  ```
+
+---
+
+## 🛠️ Developer & Build Toolchain
+
+### Cross-Platform Make Targets
+```bash
+make desktop       # Builds standalone desktop binary (p2p)
+make apk           # Builds production Android APK (dist-apk/p2p-debug.apk)
+make install       # Installs APK to connected Android phone via ADB
+make test          # Runs complete automated unit, scale, and security test suite
+make clean         # Cleans build artifacts and temp files
+```
+
+### Windows Batch Scripts
+* `Start P2P.bat` — One-click launcher (auto-compiles if needed and boots in <10ms).
+* `build-desktop.bat` — Compiles standalone `p2p.exe` with embedded assets.
+* `scripts\build-apk.bat` — Compiles the Android APK via Gradle wrapper.
+* `scripts\install-phone.bat` — Pushes APK to phone via ADB.
+
+---
+
+## 🧪 Comprehensive Verification & Test Suite
+
+The test suite covers protocol compliance, multi-device routing, cryptographic security, file sanitization, and scale limits:
+
 ```bash
 cd apps/cli
 go test -v ./...
 ```
 
-**Tested Scenarios (20 passing tests):**
-- Zero-byte file transfers (upload and download)
-- Chunk encryption validation and tampering detection
-- Out-of-order chunk writing and offset accuracy
-- Resumable upload chunk range reporting
-- Clean temp file cleanup on cancel/timeout
-- Path traversal defanging (`../../`, hidden traversal, directory separation)
-- Windows reserved device name defanging (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`)
-- Automatic collision resolution for duplicate filenames (`file (1).ext`)
-- Concurrent collision resolution under high load
-- Dynamic port allocation stepping
-- Thread-safe client connection management and broadcast pumps
-- Embedded web frontend and asset serving
+### Tested Scenarios
+* **Multi-Device Targeted Routing** (`TestPhase4_MultiDeviceTargeting`): Verifies messages and transfers route exclusively to the targeted device without leaking to peers.
+* **Device-Isolated Outboxes** (`TestPhase4_DeviceIsolatedOutbox`): Verifies offline devices do not block others and properly dequeue messages on reconnect.
+* **Pre-Flight Deduplication** (`TestPhase4_ContentDeduplication`): Verifies pre-flight hash verification skips chunk transmission for identical files.
+* **Out-of-Order Parallel Chunk Assembly** (`TestPhase4_ParallelOutOfOrderChunks`): Verifies concurrent random-offset chunk writes assemble into bit-exact files.
+* **Flat $\mathcal{O}(1)$ Memory Footprint** (`TestPhase4_FlatMemoryScaling`): Verifies streaming multi-chunk files keeps heap memory flat without buffering.
+* **100+ Concurrent Transfer Stress Test** (`TestPhase4_100SimultaneousTransfers`): Verifies 100 simultaneous transfers complete with zero deadlocks or race conditions.
+* **Pprof Diagnostic Endpoint** (`TestPhase4_PprofEndpoint`): Verifies runtime heap and goroutine profilers are available.
+* **Fuzz Testing**: Continuous fuzzing on filename sanitization (`FuzzSanitizeFilename`), pairing code normalization (`FuzzNormalizePairCode`), chunk AAD binding (`FuzzChunkAAD`), and request HMAC signatures (`FuzzRequestSignature`).
+* **Security & Path Traversal**: Verified defenses against directory escape (`../../`), Zip Slip, Windows reserved names, and unauthenticated endpoint hits.
 
 ---
 
-## Directory Structure
+## 📂 Project Structure
 
 ```
 p2p/
-├── p2p.exe                     # Standalone compiled desktop host binary (~9 MB)
-├── Start P2P.bat               # One-click desktop launcher (instant launch)
-├── build-desktop.bat           # Standalone desktop binary compiler
+├── p2p.exe                          # Standalone desktop host binary (~15 MB)
+├── Start P2P.bat                    # Instant desktop launcher
+├── build-desktop.bat / .sh          # Desktop standalone binary compiler
+├── Makefile                         # Cross-platform build automation
 ├── dist-apk/
-│   └── p2p-debug.apk           # Compiled native Android APK (~4.3 MB)
+│   └── p2p-debug.apk                # Production native Android APK (~4.3 MB)
 ├── scripts/
-│   ├── build-apk.bat           # Automated Android APK build script (CLI)
-│   ├── build-apk.js            # Node.js APK build runner
-│   └── install-phone.bat       # ADB install and launch script
+│   ├── build-apk.bat / .sh          # Android APK build script (CLI, No Studio)
+│   ├── build-apk.js                 # Node.js APK build runner
+│   └── install-phone.bat / .sh      # ADB deployment script
 ├── apps/
-│   ├── cli/                    # Go backend host server
-│   │   ├── main.go             # Server initialization, CLI repl, web server
-│   │   ├── file_transfer.go    # Streaming, chunking, sanitization, disk I/O
-│   │   ├── auth.go             # AES-256-GCM / HMAC crypto session manager
-│   │   ├── state.go            # Paired device state persistence
-│   │   ├── dist/               # Embedded web assets (synced from mobile)
-│   │   ├── protocol_test.go    # Protocol unit tests
-│   │   ├── security_test.go    # Security and path traversal tests
-│   │   └── server_test.go      # Dynamic port and concurrency tests
-│   └── mobile/                 # React 18 + TypeScript + Vite + Capacitor
+│   ├── cli/                         # High-performance Go host backend
+│   │   ├── main.go                  # Server bootstrap, interactive REPL, routing
+│   │   ├── auth.go                  # AES-256-GCM / HMAC session manager
+│   │   ├── dedup.go                 # Pre-flight SHA-256 content deduplication
+│   │   ├── file_transfer.go         # Zero-RAM chunk streaming & WriteAt I/O
+│   │   ├── folder_transfer.go       # ZIP folder packaging with Zip Slip defenses
+│   │   ├── discovery.go             # mDNS ZeroConf & UDP LAN broadcast
+│   │   ├── clipboard_image_*.go     # Multi-OS image clipboard sync (Win/Mac/Linux)
+│   │   ├── protocol.go              # Shared wire protocol & message structs
+│   │   ├── state.go                 # Device pairing persistence
+│   │   ├── dist/                    # Embedded web assets (synced from mobile)
+│   │   ├── phase3_test.go           # Usability & folder transfer tests
+│   │   ├── phase4_test.go           # Multi-device, dedup, and scale tests
+│   │   └── security_phase2_test.go  # Security, rate-limit, and fuzz tests
+│   └── mobile/                      # React 18 + TypeScript + Vite + Capacitor
 │       ├── src/
-│       │   ├── App.tsx         # Main chat, batch HUD, modal and transfer UI
-│       │   ├── index.css       # Dark OLED styles and shimmer animations
-│       │   ├── components/     # Lightbox, Audio, Video, PDF, Code, Batch HUD
-│       │   └── lib/            # Crypto, telemetry, backButton, audio, transport
-│       └── android/            # Capacitor native Android Gradle wrapper
+│       │   ├── App.tsx              # OLED workspace, transfer HUD, modal manager
+│       │   ├── components/          # Lightbox, Audio, Video, PDF, Code, Batch HUD
+│       │   └── lib/                 # Crypto, uploads, downloads, telemetry, discovery
+│       └── android/                 # Native Android Gradle wrapper project
 └── README.md
 ```
 
 ---
 
-## License
+## 📄 License
 
-MIT License. Designed and crafted for high-performance peer-to-peer productivity.
+Distributed under the [MIT License](LICENSE).
