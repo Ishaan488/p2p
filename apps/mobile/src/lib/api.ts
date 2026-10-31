@@ -21,6 +21,18 @@ export interface Pairing {
   certFingerprint?: string;
 }
 
+export interface ServerSettings {
+  bandwidthLimitBps: number;
+  maxConcurrency: number;
+  clipboardSyncEnabled: boolean;
+  sensitiveFilterEnabled: boolean;
+  receiveDir: string;
+  pcAlias: string;
+  deviceAlias: string;
+  contextMenuEnabled: boolean;
+  autostartEnabled: boolean;
+}
+
 interface Session {
   id: string;
   key: Uint8Array;
@@ -180,6 +192,18 @@ export class ServerApi {
       const reply = await session.cipher.open(new Uint8Array(await res.arrayBuffer()), `res\n${path}\n${nonce}`);
       return JSON.parse(new TextDecoder().decode(reply)) as T;
     });
+  }
+
+  async updateDeviceAlias(deviceAlias: string, pcAlias?: string): Promise<{ ok: boolean; deviceName: string; pcName: string }> {
+    return this.call('/device_alias', { deviceAlias, pcAlias });
+  }
+
+  async getSettings(): Promise<ServerSettings> {
+    return this.call('/settings', {});
+  }
+
+  async updateSettings(settings: Partial<ServerSettings>): Promise<ServerSettings> {
+    return this.call('/settings', settings);
   }
 
   uploadChunk(transferId: string, chunkIndex: number, data: Blob, signal?: AbortSignal): Promise<void> {

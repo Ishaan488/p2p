@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import {
   ArrowDownLeft,
   ArrowUpRight,
+  ArrowUp,
+  RotateCcw,
   Copy,
   Check,
   Download,
@@ -48,6 +50,7 @@ export interface TransferItem {
     blobUrl?: string;
     thumbnailUrl?: string;
     status?: string;
+    priority?: 'high' | 'normal' | 'low';
     speed?: number;
     eta?: string;
     error?: string;
@@ -76,6 +79,7 @@ interface TransferCardProps {
   onPauseUpload: (id: string) => void;
   onResumeUpload: (id: string) => void;
   onCancelUpload: (id: string, transferId: string) => void;
+  onTogglePriority?: (id: string) => void;
   onToast: (text: string, type?: 'info' | 'success' | 'warning') => void;
 }
 
@@ -139,6 +143,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
   onPauseUpload,
   onResumeUpload,
   onCancelUpload,
+  onTogglePriority,
   onToast
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -543,14 +548,25 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                   {file.eta ? ` · ${file.eta}` : ''}
                 </>
               )}
-              {file.status === 'queued' && 'Queued...'}
-              {file.status === 'paused' && 'Paused'}
+              {file.status === 'queued' && (file.priority === 'high' ? 'Queued · High Priority' : 'Queued...')}
+              {file.status === 'paused' && (file.priority === 'high' ? 'Paused · High Priority' : 'Paused')}
               {file.status === 'interrupted' && 'Interrupted — auto-resumes on reconnect'}
               {file.status === 'canceled' && 'Canceled'}
               {file.status === 'error' && (file.error || 'Transfer failed')}
             </span>
 
             <div className="progress-controls">
+              {(file.status === 'queued' || file.status === 'paused') && onTogglePriority && (
+                <button
+                  type="button"
+                  className={`progress-ctrl-btn ${file.priority === 'high' ? 'priority-active' : ''}`}
+                  onClick={() => onTogglePriority(item.id)}
+                  title={file.priority === 'high' ? 'High Priority (Tap to reset)' : 'Prioritize in queue'}
+                  aria-label="Prioritize transfer"
+                >
+                  <ArrowUp size={11} />
+                </button>
+              )}
               {file.status === 'uploading' && (
                 <button
                   type="button"
@@ -562,15 +578,15 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                   <Pause size={11} />
                 </button>
               )}
-              {file.status === 'paused' && (
+              {(file.status === 'paused' || file.status === 'error' || file.status === 'interrupted') && (
                 <button
                   type="button"
                   className="progress-ctrl-btn"
                   onClick={() => onResumeUpload(item.id)}
-                  title="Resume"
-                  aria-label="Resume"
+                  title={file.status === 'error' ? 'Retry transfer' : 'Resume'}
+                  aria-label={file.status === 'error' ? 'Retry transfer' : 'Resume'}
                 >
-                  <Play size={11} />
+                  {file.status === 'error' ? <RotateCcw size={11} /> : <Play size={11} />}
                 </button>
               )}
               {file.status !== 'canceled' && file.status !== 'done' && (

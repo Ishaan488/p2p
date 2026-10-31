@@ -14,15 +14,33 @@ import (
 type Device struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
-	Key      []byte `json:"key"` // long-term secret derived from the pairing code
+	Alias    string `json:"alias,omitempty"` // custom user-assigned alias (FR 4)
+	Key      []byte `json:"key"`             // long-term secret derived from the pairing code
 	PairedAt int64  `json:"pairedAt"`
 	LastSeen int64  `json:"lastSeen"`
 	Trusted  bool   `json:"trusted"` // if true, transfers are accepted automatically without prompting
 }
 
+// DisplayName returns the custom alias if set, otherwise the device's original name.
+func (d *Device) DisplayName() string {
+	if d == nil {
+		return ""
+	}
+	if strings.TrimSpace(d.Alias) != "" {
+		return d.Alias
+	}
+	return d.Name
+}
+
 type appState struct {
-	ServerID string    `json:"serverId"`
-	Devices  []*Device `json:"devices"`
+	ServerID                string    `json:"serverId"`
+	ServerAlias             string    `json:"serverAlias,omitempty"`
+	Devices                 []*Device `json:"devices"`
+	BandwidthLimitBps       int64     `json:"bandwidthLimitBps,omitempty"`       // 0 = unlimited (FR 54)
+	MaxConcurrency          int       `json:"maxConcurrency,omitempty"`          // 0 = adaptive (FR 54, NFR 7)
+	ClipboardSyncDisabled   bool      `json:"clipboardSyncDisabled,omitempty"`   // FR 35
+	SensitiveFilterDisabled bool      `json:"sensitiveFilterDisabled,omitempty"` // FR 36 (enabled by default when false)
+	CustomReceiveDir        string    `json:"customReceiveDir,omitempty"`        // FR 24
 }
 
 var (
@@ -51,6 +69,14 @@ func loadState() {
 	if state.ServerID == "" {
 		state.ServerID = randomID()
 		saveStateLocked()
+	}
+	if state.CustomReceiveDir != "" {
+		if err := os.MkdirAll(state.CustomReceiveDir, 0755); err == nil {
+			receiveDir = state.CustomReceiveDir
+		}
+	}
+	if state.BandwidthLimitBps > 0 {
+		setBandwidthLimitBps(state.BandwidthLimitBps)
 	}
 }
 
@@ -90,10 +116,33 @@ func getServerID() string {
 	return state.ServerID
 }
 
-// findDeviceByQuery matches a device by exact name or by id prefix.
+func setServerAlias(alias string) string {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	clean := sanitizeDeviceName(alias)
+	if strings.TrimSpace(alias) == "" {
+		clean = ""
+	}
+	state.ServerAlias = clean
+	saveStateLocked()
+	return clean
+}
+
+func getServerAlias() string {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	return state.ServerAlias
+}
+
+// findDeviceByQuery matches a device by alias, exact name, or by id prefix.
 func findDeviceByQuery(query string) *Device {
 	stateMu.Lock()
 	defer stateMu.Unlock()
+	for _, d := range state.Devices {
+		if d.Alias != "" && strings.EqualFold(d.Alias, query) {
+			return d
+		}
+	}
 	for _, d := range state.Devices {
 		if strings.EqualFold(d.Name, query) {
 			return d
@@ -105,6 +154,24 @@ func findDeviceByQuery(query string) *Device {
 		}
 	}
 	return nil
+}
+
+// setDeviceAlias assigns or clears a custom alias for a paired device (FR 4).
+func setDeviceAlias(query, alias string) (*Device, bool) {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	cleanAlias := sanitizeDeviceName(alias)
+	if strings.TrimSpace(alias) == "" {
+		cleanAlias = ""
+	}
+	for _, d := range state.Devices {
+		if d.ID == query || strings.EqualFold(d.Name, query) || (d.Alias != "" && strings.EqualFold(d.Alias, query)) || strings.HasPrefix(d.ID, query) {
+			d.Alias = cleanAlias
+			saveStateLocked()
+			return d, true
+		}
+	}
+	return nil, false
 }
 
 // registerDevice stores a newly paired device, replacing an earlier pairing of the same id.
@@ -163,7 +230,7 @@ func setDeviceTrust(id string, trusted bool) bool {
 	stateMu.Lock()
 	defer stateMu.Unlock()
 	for _, d := range state.Devices {
-		if d.ID == id || strings.EqualFold(d.Name, id) {
+		if d.ID == id || strings.EqualFold(d.Name, id) || (d.Alias != "" && strings.EqualFold(d.Alias, id)) {
 			d.Trusted = trusted
 			saveStateLocked()
 			return true

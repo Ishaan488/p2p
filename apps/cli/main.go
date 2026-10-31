@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -130,6 +131,9 @@ func watchClipboard() {
 	pollInterval := 1 * time.Second
 	for {
 		time.Sleep(pollInterval)
+		if !isClipboardSyncEnabled() {
+			continue
+		}
 		text, err := readClipboardWithRetry()
 		if err != nil {
 			if pollInterval < 3*time.Second {
@@ -148,6 +152,14 @@ func watchClipboard() {
 			lastClipboardText = text
 			clipboardMu.Unlock()
 
+			// Check for sensitive clipboard content (FR 36)
+			if isSensitiveClipboardFilterEnabled() {
+				if sensitive, reason := isSensitiveClipboard(text); sensitive {
+					printAsync(Yellow, "○ ClipGuard", "Blocked sensitive clipboard sync", reason)
+					continue
+				}
+			}
+
 			msg := Message{
 				Type:      "clipboard",
 				ID:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
@@ -164,7 +176,7 @@ func watchClipboard() {
 }
 
 func copyToClipboard(text string) {
-	if *noClipboard {
+	if !isClipboardSyncEnabled() {
 		return
 	}
 	clipboardMu.Lock()
@@ -383,7 +395,14 @@ func printStatus() {
 	}
 	transfersMu.Unlock()
 
+	bwLimit := getBandwidthLimitBps()
+	bwStr := "Unlimited"
+	if bwLimit > 0 {
+		bwStr = formatSize(bwLimit) + "/s"
+	}
+
 	fmt.Println(Cyan + "\n--- Server Status ---" + Reset)
+	fmt.Printf("  Node Name:    %s%s%s\n", White, getServerName(), Reset)
 	fmt.Printf("  Uptime:       %s%s%s\n", Green, uptime.String(), Reset)
 	fmt.Printf("  Active Port:  %s%d%s\n", Yellow, *port, Reset)
 	fmt.Printf("  Web UI:       %s%s://localhost:%d%s\n", Cyan, httpScheme(), *port, Reset)
@@ -403,6 +422,9 @@ func printStatus() {
 		len(devices),
 		Green, onlineCount, Reset,
 	)
+	fmt.Printf("  Bandwidth:    %s\n", bwStr)
+	fmt.Printf("  Clipboard:    Sync=%v | SensitiveFilter=%v\n", isClipboardSyncEnabled(), isSensitiveClipboardFilterEnabled())
+	fmt.Printf("  OS Menu:      ExplorerMenu=%v | Autostart=%v\n", isExplorerContextMenuInstalled(), isOSAutostartEnabled())
 	if activeCount == 0 {
 		fmt.Printf("  Transfers:    0 active\n")
 	} else {
@@ -415,14 +437,22 @@ func printStatus() {
 }
 
 var (
-	port            = flag.Int("port", 8080, "port to listen on")
-	homeFlag        = flag.String("home", "", "directory for received files and app data (default ~/P2P)")
-	noClipboard     = flag.Bool("no-clipboard", false, "disable clipboard sync")
-	openBrowserFlag = flag.Bool("open", false, "open web UI in default browser on startup")
-	devModeFlag     = flag.Bool("dev", false, "serve web UI from disk (mobile/dist) instead of embedded")
-	tlsFlag         = flag.Bool("tls", false, "enable HTTPS/WSS with self-signed TLS and cert pinning")
-	pprofFlag       = flag.Bool("pprof", false, "enable pprof profiling endpoint on 127.0.0.1:6060")
-	debugFlag       = flag.Bool("debug", false, "enable verbose debug logging and profiling")
+	port                     = flag.Int("port", 8080, "port to listen on")
+	homeFlag                 = flag.String("home", "", "directory for received files and app data (default ~/P2P)")
+	noClipboard              = flag.Bool("no-clipboard", false, "disable clipboard sync")
+	openBrowserFlag          = flag.Bool("open", false, "open web UI in default browser on startup")
+	devModeFlag              = flag.Bool("dev", false, "serve web UI from disk (mobile/dist) instead of embedded")
+	tlsFlag                  = flag.Bool("tls", false, "enable HTTPS/WSS with self-signed TLS and cert pinning")
+	pprofFlag                = flag.Bool("pprof", false, "enable pprof profiling endpoint on 127.0.0.1:6060")
+	debugFlag                = flag.Bool("debug", false, "enable verbose debug logging and profiling")
+	sendFlag                 = flag.String("send", "", "send a file or folder directly via running instance or on startup")
+	toFlag                   = flag.String("to", "", "target device name, alias, or ID for --send")
+	trayFlag                 = flag.Bool("tray", false, "run with system tray integration (hides console if started from autostart)")
+	noTrayFlag               = flag.Bool("no-tray", false, "disable Windows system tray icon")
+	installContextMenuFlag   = flag.Bool("install-context-menu", false, "register Windows Explorer 'Send via P2P Link' context menu")
+	uninstallContextMenuFlag = flag.Bool("uninstall-context-menu", false, "remove Windows Explorer 'Send via P2P Link' context menu")
+	autostartFlag            = flag.String("autostart", "", "configure launch on OS startup ('on' or 'off')")
+	bandwidthFlag            = flag.Int64("bandwidth", 0, "bandwidth limit in MB/s (0 = unlimited)")
 )
 
 func httpScheme() string {
@@ -439,11 +469,51 @@ func main() {
 		receiveDir = filepath.Join(baseDir, "received")
 		tempDir = filepath.Join(baseDir, "temp")
 	}
+
+	// One-shot OS integration CLI flags (FR 42, FR 47)
+	if *installContextMenuFlag {
+		if err := installExplorerContextMenu(); err != nil {
+			log.Fatalf("Failed to install Explorer context menu: %v\n", err)
+		}
+		fmt.Println("Windows Explorer context menu ('Send via P2P Link') installed successfully.")
+		return
+	}
+	if *uninstallContextMenuFlag {
+		_ = uninstallExplorerContextMenu()
+		fmt.Println("Windows Explorer context menu uninstalled.")
+		return
+	}
+	if *autostartFlag != "" {
+		enable := strings.EqualFold(*autostartFlag, "on") || strings.EqualFold(*autostartFlag, "true") || *autostartFlag == "1"
+		if err := setOSAutostart(enable); err != nil {
+			log.Fatalf("Failed to update autostart: %v\n", err)
+		}
+		fmt.Printf("OS Autostart set to: %v\n", enable)
+		return
+	}
+
+	// Support direct file/folder sending from Explorer Context Menu or CLI without opening UI (FR 42, FR 46)
+	directSendPath := strings.TrimSpace(*sendFlag)
+	if directSendPath == "" && flag.NArg() >= 2 && strings.EqualFold(flag.Arg(0), "send") {
+		directSendPath = flag.Arg(1)
+	}
+	if directSendPath != "" {
+		if trySendViaRunningInstance(directSendPath, *toFlag, *port) {
+			fmt.Printf("Queued %q via active P2P Link instance.\n", filepath.Base(directSendPath))
+			return
+		}
+	}
+
 	initDirs()
 	loadState()
 	loadHistory()
-	cleanTempDir()
+	recovered := recoverOrSweepTempDir()
+	initLocalIPCToken()
 	startTransferJanitor()
+
+	if *bandwidthFlag > 0 {
+		setBandwidthLimitBps(*bandwidthFlag * 1024 * 1024)
+	}
 
 	initialPort := *port
 	listener, activePort, err := setupListener(initialPort)
@@ -466,12 +536,15 @@ func main() {
     ____ ___  ____     __    _       __  
    / __ \__ \/ __ \   / /   (_)___  / /__
   / /_/ /_/ / /_/ /  / /   / / __ \/ //_/
- / ____/ __/ ____/  / /___/ / / / /  ,<   
+ / ____/ __/ ____/  / /___/ / / / / ,<   
 /_/   /____/_/     /_____/_/_/ /_/_/|_|  
 ` + Reset)
 
 	if activePort != initialPort {
 		fmt.Printf(Yellow+"  Port %d was busy. Switched to port %d\n"+Reset, initialPort, activePort)
+	}
+	if recovered > 0 {
+		fmt.Printf(Green+"  Recovered %d pending transfer(s) from previous session\n"+Reset, recovered)
 	}
 	if *pprofFlag || *debugFlag {
 		go func() {
@@ -501,12 +574,23 @@ func main() {
 	http.HandleFunc("/upload_cancel", authed(handleUploadCancel))
 	http.HandleFunc("/download", authed(handleDownloadChunk))
 	http.HandleFunc("/download_full", authed(handleDownloadFull))
+	http.HandleFunc("/device_alias", authed(handleDeviceAlias))
+	http.HandleFunc("/settings", authed(handleSettings))
+	http.HandleFunc("/local/send", handleLocalSend)
 
 	// Serve the React PWA (embedded with disk fallback)
 	http.Handle("/", getFrontendHandler(*devModeFlag))
 
 	if !*noClipboard {
 		go watchClipboard()
+	}
+
+	if !*noTrayFlag {
+		startSystemTray(activePort)
+		if *trayFlag {
+			// When launched via OS startup with --tray, hide the console window automatically
+			toggleConsoleVisibility()
+		}
 	}
 
 	server := &http.Server{}
@@ -528,6 +612,17 @@ func main() {
 	// Auto-display QR Code on startup
 	showPairing()
 
+	// If launched with --send and no existing instance was running, queue the transfer now
+	if directSendPath != "" {
+		var targetDev *Device
+		if *toFlag != "" {
+			targetDev = resolveDeviceTarget(*toFlag)
+		}
+		if err := startSendTransferTargeted(directSendPath, targetDev); err != nil {
+			printSync(Red, "! Error", fmt.Sprintf("Failed to queue %s: %v", directSendPath, err), "")
+		}
+	}
+
 	if *openBrowserFlag {
 		go func() {
 			time.Sleep(150 * time.Millisecond)
@@ -547,63 +642,149 @@ func main() {
 			if answerApproval(text) {
 				continue
 			}
-			if text == "help" {
+			lowerText := strings.ToLower(text)
+			if lowerText == "help" {
 				fmt.Println(Cyan + "\n  Commands" + Reset)
-				fmt.Println("  " + Yellow + "send <path> [--to <device>]" + Reset + "  Send file or folder to all or specific device")
-				fmt.Println("  " + Yellow + "> <path> [--to <device>]" + Reset + "     Quick send file or folder")
-				fmt.Println("  " + Yellow + "msg <text> [--to <device>]" + Reset + "   Send text message to all or specific device")
-				fmt.Println("  " + Yellow + "devices" + Reset + "                  List paired & active devices")
-				fmt.Println("  " + Yellow + "trust <device>" + Reset + "          Trust device (auto-accept transfers)")
-				fmt.Println("  " + Yellow + "untrust <device>" + Reset + "        Require approval for each transfer")
-				fmt.Println("  " + Yellow + "unpair <device>" + Reset + "         Remove a paired device")
-				fmt.Println("  " + Yellow + "history" + Reset + "                  Show recent transfer history")
-				fmt.Println("  " + Yellow + "status" + Reset + "                   Show server & network info")
-				fmt.Println("  " + Yellow + "open" + Reset + "                     Open web interface in browser")
-				fmt.Println("  " + Yellow + "setdir <path>" + Reset + "            Change folder for received files")
-				fmt.Println("  " + Yellow + "clear" + Reset + "                    Clear terminal screen")
-				fmt.Println("  " + Yellow + "exit" + Reset + "                     Stop server")
+				fmt.Println("  " + Yellow + "send <path> [--to <device|#n>]" + Reset + " Send file or folder to all or specific device")
+				fmt.Println("  " + Yellow + "> <path> [--to <device|#n>]" + Reset + "    Quick send file or folder")
+				fmt.Println("  " + Yellow + "msg <text> [--to <device>]" + Reset + "     Send text message to all or specific device")
+				fmt.Println("  " + Yellow + "devices" + Reset + "                    List paired & active devices (with #index & alias)")
+				fmt.Println("  " + Yellow + "alias <device> <new_name>" + Reset + "  Assign a custom alias to a paired device")
+				fmt.Println("  " + Yellow + "pcalias <new_name>" + Reset + "         Assign a custom display name to this PC")
+				fmt.Println("  " + Yellow + "trust <device>" + Reset + "            Trust device (auto-accept transfers)")
+				fmt.Println("  " + Yellow + "untrust <device>" + Reset + "          Require approval for each transfer")
+				fmt.Println("  " + Yellow + "unpair <device>" + Reset + "           Remove a paired device")
+				fmt.Println("  " + Yellow + "bandwidth <MB/s|unlimited>" + Reset + " Set transfer speed limit (e.g. 'bandwidth 10')")
+				fmt.Println("  " + Yellow + "clipboard <on|off>" + Reset + "         Toggle automatic clipboard synchronization")
+				fmt.Println("  " + Yellow + "clipfilter <on|off>" + Reset + "        Toggle sensitive clipboard content filter")
+				fmt.Println("  " + Yellow + "context-menu <on|off>" + Reset + "      Toggle Windows Explorer right-click 'Send via P2P'")
+				fmt.Println("  " + Yellow + "autostart <on|off>" + Reset + "         Toggle launch automatically on system startup")
+				fmt.Println("  " + Yellow + "tray" + Reset + "                       Hide/restore console window to system tray")
+				fmt.Println("  " + Yellow + "history [clear]" + Reset + "            Show or clear recent transfer history")
+				fmt.Println("  " + Yellow + "status" + Reset + "                     Show server, bandwidth & network info")
+				fmt.Println("  " + Yellow + "open" + Reset + "                       Open web interface in browser")
+				fmt.Println("  " + Yellow + "setdir <path>" + Reset + "              Change folder for received files")
+				fmt.Println("  " + Yellow + "clear" + Reset + "                      Clear terminal screen")
+				fmt.Println("  " + Yellow + "exit" + Reset + "                       Stop server")
 				fmt.Println()
-			} else if text == "exit" {
+			} else if lowerText == "exit" || lowerText == "quit" {
 				fmt.Println(Dim + "  Shutting down..." + Reset)
+				stopSystemTray()
 				os.Exit(0)
-			} else if text == "clear" || text == "cls" {
+			} else if lowerText == "clear" || lowerText == "cls" {
 				fmt.Print("\033[H\033[2J")
-			} else if text == "open" || text == "ui" {
+			} else if lowerText == "open" || lowerText == "ui" {
 				url := fmt.Sprintf("%s://localhost:%d", httpScheme(), *port)
 				printSync(Green, "● Browser", url, "opened")
 				if err := openBrowser(url); err != nil {
 					printSync(Red, "! Error", fmt.Sprintf("Failed to open browser: %v", err), "")
 				}
-			} else if text == "status" || text == "info" {
+			} else if lowerText == "status" || lowerText == "info" {
 				printStatus()
-			} else if text == "pair" {
+			} else if lowerText == "pair" {
 				showPairing()
-			} else if text == "devices" {
+			} else if lowerText == "devices" {
 				printDevices()
-			} else if text == "history" || text == "log" {
+			} else if lowerText == "tray" {
+				toggleConsoleVisibility()
+			} else if lowerText == "history" || lowerText == "log" {
 				printTransferHistory()
-			} else if strings.HasPrefix(strings.ToLower(text), "trust ") {
+			} else if lowerText == "history clear" || lowerText == "clear history" {
+				historyMu.Lock()
+				history = nil
+				_ = os.Remove(historyPath())
+				historyMu.Unlock()
+				printSync(Green, "● History", "Transfer history cleared", "")
+			} else if strings.HasPrefix(lowerText, "alias ") || strings.HasPrefix(lowerText, "rename ") {
+				rest := strings.TrimSpace(text[strings.Index(text, " ")+1:])
+				parts := strings.SplitN(rest, " ", 2)
+				if len(parts) < 2 {
+					printSync(Red, "! Usage", "alias <device> <new_alias>", "")
+					continue
+				}
+				target, newAlias := strings.Trim(parts[0], "\"'"), strings.Trim(parts[1], "\"'")
+				if dev, ok := setDeviceAlias(target, newAlias); ok {
+					_ = syncQuickSendShortcuts()
+					printSync(Green, "● Alias", fmt.Sprintf("%s → %s", dev.Name, dev.DisplayName()), "saved")
+				} else {
+					printSync(Red, "! Error", fmt.Sprintf("No paired device matches %q", target), "")
+				}
+			} else if strings.HasPrefix(lowerText, "pcalias ") {
+				newAlias := strings.Trim(strings.TrimSpace(text[8:]), "\"'")
+				saved := setServerAlias(newAlias)
+				printSync(Green, "● PC Alias", getServerName(), fmt.Sprintf("alias=%q", saved))
+			} else if strings.HasPrefix(lowerText, "bandwidth ") {
+				arg := strings.TrimSpace(lowerText[10:])
+				if arg == "unlimited" || arg == "0" || arg == "off" {
+					setBandwidthLimitBps(0)
+					stateMu.Lock()
+					state.BandwidthLimitBps = 0
+					saveStateLocked()
+					stateMu.Unlock()
+					printSync(Green, "● Bandwidth", "Unlimited", "rate limiting disabled")
+				} else if mbps, err := strconv.ParseFloat(arg, 64); err == nil && mbps > 0 {
+					bps := int64(mbps * 1024 * 1024)
+					setBandwidthLimitBps(bps)
+					stateMu.Lock()
+					state.BandwidthLimitBps = bps
+					saveStateLocked()
+					stateMu.Unlock()
+					printSync(Green, "● Bandwidth", fmt.Sprintf("%.1f MB/s cap", mbps), "active")
+				} else {
+					printSync(Red, "! Usage", "bandwidth <MB/s|unlimited>", "")
+				}
+			} else if strings.HasPrefix(lowerText, "clipboard ") {
+				arg := strings.TrimSpace(lowerText[10:])
+				enable := arg == "on" || arg == "true" || arg == "1" || arg == "enable"
+				setClipboardSyncEnabled(enable)
+				printSync(Green, "● Clipboard", fmt.Sprintf("Auto-sync %s", map[bool]string{true: "enabled", false: "disabled"}[enable]), "")
+			} else if strings.HasPrefix(lowerText, "clipfilter ") {
+				arg := strings.TrimSpace(lowerText[11:])
+				enable := arg == "on" || arg == "true" || arg == "1" || arg == "enable"
+				setSensitiveClipboardFilterEnabled(enable)
+				printSync(Green, "● ClipGuard", fmt.Sprintf("Sensitive filter %s", map[bool]string{true: "enabled", false: "disabled"}[enable]), "")
+			} else if strings.HasPrefix(lowerText, "context-menu ") {
+				arg := strings.TrimSpace(lowerText[13:])
+				if arg == "on" || arg == "enable" || arg == "install" {
+					if err := installExplorerContextMenu(); err != nil {
+						printSync(Red, "! Error", fmt.Sprintf("Failed: %v", err), "")
+					} else {
+						printSync(Green, "● Explorer", "Added 'Send via P2P Link' to Windows right-click menu", "")
+					}
+				} else {
+					_ = uninstallExplorerContextMenu()
+					printSync(Yellow, "○ Explorer", "Removed Windows right-click menu", "")
+				}
+			} else if strings.HasPrefix(lowerText, "autostart ") {
+				arg := strings.TrimSpace(lowerText[10:])
+				enable := arg == "on" || arg == "enable" || arg == "true"
+				if err := setOSAutostart(enable); err != nil {
+					printSync(Red, "! Error", fmt.Sprintf("Failed: %v", err), "")
+				} else {
+					printSync(Green, "● Autostart", fmt.Sprintf("Launch on startup: %v", enable), "")
+				}
+			} else if strings.HasPrefix(lowerText, "trust ") {
 				target := strings.TrimSpace(text[6:])
 				if setDeviceTrust(target, true) {
 					printSync(Green, "● Trusted", target, "transfers auto-accepted")
 				} else {
 					printSync(Red, "! Error", fmt.Sprintf("No paired device matches %q", target), "")
 				}
-			} else if strings.HasPrefix(strings.ToLower(text), "untrust ") {
+			} else if strings.HasPrefix(lowerText, "untrust ") {
 				target := strings.TrimSpace(text[8:])
 				if setDeviceTrust(target, false) {
 					printSync(Yellow, "○ Untrusted", target, "per-transfer approval required")
 				} else {
 					printSync(Red, "! Error", fmt.Sprintf("No paired device matches %q", target), "")
 				}
-			} else if strings.HasPrefix(strings.ToLower(text), "unpair ") {
+			} else if strings.HasPrefix(lowerText, "unpair ") {
 				unpairDevice(strings.TrimSpace(text[7:]))
 			} else if isSendCommand(text) {
 				filePath, targetQuery := extractFilePathAndTarget(text)
 				fmt.Print("\033[1A\r\033[2K")
 				var targetDevice *Device
 				if targetQuery != "" {
-					targetDevice = findDeviceByQuery(targetQuery)
+					targetDevice = resolveDeviceTarget(targetQuery)
 					if targetDevice == nil {
 						printSync(Red, "! Error", fmt.Sprintf("No paired device matches %q (type 'devices')", targetQuery), "")
 						continue
@@ -612,12 +793,16 @@ func main() {
 				if err := startSendTransferTargeted(filePath, targetDevice); err != nil {
 					printSync(Red, "! Error", fmt.Sprintf("Could not send file: %v", err), "")
 				}
-			} else if strings.HasPrefix(strings.ToLower(text), "setdir ") {
+			} else if strings.HasPrefix(lowerText, "setdir ") {
 				newDir := strings.TrimSpace(text[7:])
 				newDir = strings.Trim(newDir, "\"'")
 				if err := setReceiveDir(newDir); err != nil {
 					printSync(Red, "! Error", fmt.Sprintf("Failed to set directory: %v", err), "")
 				} else {
+					stateMu.Lock()
+					state.CustomReceiveDir = receiveDir
+					saveStateLocked()
+					stateMu.Unlock()
 					printSync(Green, "● Storage", newDir, "receive folder updated")
 				}
 			} else {
@@ -628,7 +813,7 @@ func main() {
 				}
 				var targetDevice *Device
 				if targetQuery != "" {
-					targetDevice = findDeviceByQuery(targetQuery)
+					targetDevice = resolveDeviceTarget(targetQuery)
 					if targetDevice == nil {
 						printSync(Red, "! Error", fmt.Sprintf("No paired device matches %q (type 'devices')", targetQuery), "")
 						continue
@@ -647,7 +832,7 @@ func main() {
 				delivered := broadcastMessage(msg)
 				targetLabel := ""
 				if targetDevice != nil {
-					targetLabel = fmt.Sprintf(" → %s", targetDevice.Name)
+					targetLabel = fmt.Sprintf(" → %s", targetDevice.DisplayName())
 				}
 				if delivered > 0 {
 					printSync(Cyan, "↑ Sent", cleanText+targetLabel, "")
@@ -657,6 +842,18 @@ func main() {
 			}
 		}
 	}
+}
+
+// resolveDeviceTarget supports quick-send by 1-based index (#1, 1) as well as alias, name, or ID prefix (FR 48).
+func resolveDeviceTarget(query string) *Device {
+	q := strings.TrimPrefix(strings.TrimSpace(query), "#")
+	if idx, err := strconv.Atoi(q); err == nil && idx >= 1 {
+		devices := listDevices()
+		if idx <= len(devices) {
+			return findDevice(devices[idx-1].ID)
+		}
+	}
+	return findDeviceByQuery(query)
 }
 
 func parseTargetFlag(input string) (string, string) {
@@ -770,7 +967,7 @@ func printDevices() {
 		return
 	}
 	fmt.Println(Cyan + "\n  Paired Devices" + Reset)
-	for _, d := range devices {
+	for i, d := range devices {
 		status := Dim + "last seen " + time.Unix(d.LastSeen, 0).Format("15:04") + Reset
 		addr := ""
 		if deviceOnline(d.ID) {
@@ -783,13 +980,18 @@ func printDevices() {
 		if d.Trusted {
 			trust = Green + "[trusted]" + Reset
 		}
-		fmt.Printf("  %s%-18s%s %s%-10s%s %-16s %-14s %s\n", White, d.Name, Reset, Dim, d.ID[:8], Reset, trust, status, addr)
+		display := d.DisplayName()
+		if d.Alias != "" && d.Alias != d.Name {
+			display = fmt.Sprintf("%s (%s)", d.Alias, d.Name)
+		}
+		fmt.Printf("  %s#%d%s %s%-22s%s %s%-10s%s %-16s %-14s %s\n",
+			Yellow, i+1, Reset, White, display, Reset, Dim, d.ID[:8], Reset, trust, status, addr)
 	}
-	fmt.Printf("  %sTip: Send to specific device using 'send <path> --to <name>'%s\n\n", Dim, Reset)
+	fmt.Printf("  %sTip: Quick-send using 'send <path> --to #1' or assign alias via 'alias #1 MyPhone'%s\n\n", Dim, Reset)
 }
 
 func unpairDevice(query string) {
-	device := findDeviceByQuery(strings.Trim(query, "\"'"))
+	device := resolveDeviceTarget(strings.Trim(query, "\"'"))
 	if device == nil {
 		printSync(Red, "! Error", fmt.Sprintf("No paired device matches %q", query), "")
 		return
@@ -819,7 +1021,7 @@ func unpairDevice(query string) {
 		}
 	}
 	clientsMu.Unlock()
-	printSync(Green, "● Unpaired", device.Name, "")
+	printSync(Green, "● Unpaired", device.DisplayName(), "")
 }
 
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -880,9 +1082,9 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	lastDisconnectMu.Unlock()
 
 	if len(pending) > 0 {
-		printAsync(Green, "● Online", client.device.Name, fmt.Sprintf("delivered %d queued", len(pending)))
+		printAsync(Green, "● Online", client.device.DisplayName(), fmt.Sprintf("delivered %d queued", len(pending)))
 	} else if !wasOnline && time.Since(lastDisconnect) > 4*time.Second {
-		printAsync(Green, "● Online", client.device.Name, "")
+		printAsync(Green, "● Online", client.device.DisplayName(), "")
 	}
 
 	go client.writePump()
@@ -921,7 +1123,7 @@ func (c *Client) readPump() {
 					printAsync(Yellow, "○ Offline", devName, "")
 				}
 			}
-		}(c.device.ID, c.device.Name)
+		}(c.device.ID, c.device.DisplayName())
 	}()
 
 	// Frames are encrypted and numbered per direction: anything replayed,
@@ -936,7 +1138,7 @@ func (c *Client) readPump() {
 		}
 		plaintext, err := c.session.open(frame, fmt.Sprintf("c2s\n%d", counter))
 		if err != nil {
-			printAsync(Red, "! Security", c.device.Name, "dropped undecryptable frame")
+			printAsync(Red, "! Security", c.device.DisplayName(), "dropped undecryptable frame")
 			break
 		}
 		var msg Message
@@ -953,9 +1155,18 @@ func (c *Client) readPump() {
 				}
 			}
 		} else if msg.Type == "clipboard" {
+			if !isClipboardSyncEnabled() {
+				continue
+			}
 			payload, ok := msg.Payload.(map[string]interface{})
 			if ok {
 				if text, exists := payload["text"].(string); exists {
+					if isSensitiveClipboardFilterEnabled() {
+						if sensitive, reason := isSensitiveClipboard(text); sensitive {
+							printAsync(Yellow, "○ ClipGuard", "Blocked incoming sensitive clipboard", reason)
+							continue
+						}
+					}
 					clipboardMu.RLock()
 					prev := lastClipboardText
 					clipboardMu.RUnlock()

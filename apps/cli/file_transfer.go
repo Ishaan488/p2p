@@ -72,16 +72,10 @@ func initDirs() {
 	os.MkdirAll(tempDir, 0755)
 }
 
-// Partial uploads are only resumable while the server is running (the chunk
-// map lives in memory), so anything left over from a previous run is garbage.
+// cleanTempDir recovers any non-expired pending transfers that have a valid
+// .meta.json manifest (FR 19, NFR 16), and sweeps any orphaned .part files.
 func cleanTempDir() {
-	transfersMu.Lock()
-	dir := tempDir
-	transfersMu.Unlock()
-	leftovers, _ := filepath.Glob(filepath.Join(dir, "*.part"))
-	for _, p := range leftovers {
-		os.Remove(p)
-	}
+	recoverOrSweepTempDir()
 }
 
 func randomID() string {
@@ -115,7 +109,7 @@ func startTransferJanitor() {
 	}()
 }
 
-// discard closes an upload and deletes its partial data.
+// discard closes an upload and deletes its partial data and manifest.
 func (s *TransferState) discard() {
 	if s.IsDownload {
 		return
@@ -126,6 +120,7 @@ func (s *TransferState) discard() {
 		s.closed = true
 		s.File.Close()
 		os.Remove(s.FilePath)
+		s.removeMeta()
 	}
 }
 
@@ -363,7 +358,7 @@ func handleUploadInit(w http.ResponseWriter, r *http.Request, s *Session) {
 					Filename:  cleanName,
 					Size:      req.TotalSize,
 					Direction: "Received",
-					Device:    s.Device.Name,
+					Device:    s.Device.DisplayName(),
 					Status:    "Rejected",
 				})
 				httpError(w, http.StatusForbidden, "Transfer rejected by user")
@@ -371,7 +366,7 @@ func handleUploadInit(w http.ResponseWriter, r *http.Request, s *Session) {
 			}
 			if always {
 				setDeviceTrust(s.Device.ID, true)
-				printAsync(Green, "● Trusted", s.Device.Name, "transfers auto-accepted")
+				printAsync(Green, "● Trusted", s.Device.DisplayName(), "transfers auto-accepted")
 			}
 			transfersMu.Lock()
 		}
@@ -400,6 +395,8 @@ func handleUploadInit(w http.ResponseWriter, r *http.Request, s *Session) {
 	}
 	state.LastActive = time.Now().Unix()
 	transfersMu.Unlock()
+
+	state.saveMeta()
 
 	s.writeResponse(w, r, uploadStatus{
 		TransferID:  state.ID,
@@ -435,6 +432,9 @@ func handleUploadChunk(w http.ResponseWriter, r *http.Request, s *Session) {
 		return
 	}
 
+	// Enforce bandwidth limit if configured (FR 54)
+	waitForBandwidth(int64(len(body)))
+
 	// Write chunk exactly at its designated offset (100% robust against out-of-order chunks)
 	state.fileMu.RLock()
 	if state.closed {
@@ -457,6 +457,8 @@ func handleUploadChunk(w http.ResponseWriter, r *http.Request, s *Session) {
 	}
 	count := state.receivedCount
 	state.mu.Unlock()
+
+	state.saveMeta()
 
 	w.WriteHeader(http.StatusOK)
 
@@ -528,6 +530,7 @@ func handleUploadComplete(w http.ResponseWriter, r *http.Request, s *Session) {
 	}
 	state.closed = true
 	state.File.Close()
+	state.removeMeta()
 	state.fileMu.Unlock()
 
 	transfersMu.Lock()
@@ -553,7 +556,7 @@ func handleUploadComplete(w http.ResponseWriter, r *http.Request, s *Session) {
 		Filename:  state.Filename,
 		Size:      state.TotalSize,
 		Direction: "Received",
-		Device:    s.Device.Name,
+		Device:    s.Device.DisplayName(),
 		Status:    "Completed",
 	})
 	s.writeResponse(w, r, map[string]string{"filename": filepath.Base(finalPath)})
@@ -578,7 +581,7 @@ func handleUploadCancel(w http.ResponseWriter, r *http.Request, s *Session) {
 			Filename:  state.Filename,
 			Size:      state.TotalSize,
 			Direction: "Received",
-			Device:    s.Device.Name,
+			Device:    s.Device.DisplayName(),
 			Status:    "Cancelled",
 		})
 	}
@@ -682,6 +685,10 @@ func handleDownloadChunk(w http.ResponseWriter, r *http.Request, s *Session) {
 		httpError(w, http.StatusGone, "File changed since it was sent")
 		return
 	}
+
+	// Enforce bandwidth limit if configured (FR 54)
+	waitForBandwidth(int64(len(buf)))
+
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Write(s.seal(buf, chunkAAD(state.ID, chunkIndex)))
 }
@@ -782,7 +789,7 @@ func startSendTransferTargeted(filePath string, targetDevice *Device) error {
 	delivered := broadcastMessage(msg)
 	targetLabel := "all devices"
 	if targetDevice != nil {
-		targetLabel = targetDevice.Name
+		targetLabel = targetDevice.DisplayName()
 	}
 	if delivered > 0 {
 		printSync(Cyan, "↑ File", filename, fmt.Sprintf("%s → %s", formatSize(totalSize), targetLabel))

@@ -1,15 +1,29 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { WebSocketTransport } from './lib/transport';
 import { Message } from './lib/protocol';
-import { HttpError, Pairing, ServerApi, isNetworkError, pairWithApproval, pairWithQr } from './lib/api';
+import { HttpError, Pairing, ServerApi, ServerSettings, isNetworkError, pairWithApproval, pairWithQr } from './lib/api';
 import { randomHex } from './lib/crypto';
-import { downloadEncrypted, saveToDeviceDownloads, downloadWithSystemManager } from './lib/downloads';
-import { CHUNK_SIZE, Upload, UploadQueue, transferIdFor, BatchStats } from './lib/uploads';
+import {
+  downloadEncrypted,
+  saveToDeviceDownloads,
+  downloadWithSystemManager,
+  getDownloadSubDir,
+  setDownloadSubDir
+} from './lib/downloads';
+import {
+  Upload,
+  UploadQueue,
+  UploadPriority,
+  transferIdFor,
+  BatchStats,
+  getClientBandwidthLimitBps,
+  setClientBandwidthLimitBps
+} from './lib/uploads';
 import {
   QrCode, LogOut,
   Trash2, UploadCloud, Lock, Wifi,
   ShieldCheck, ShieldAlert, Unlink, MoreVertical,
-  Sun, Moon, Monitor, Laptop, Edit3
+  Sun, Moon, Monitor, Laptop, Edit3, Sliders
 } from 'lucide-react';
 import { BrandLogo } from './components/BrandLogo';
 import { checkPendingShare, onSharedData } from './lib/shareTarget';
@@ -20,7 +34,16 @@ import { backButtonManager } from './lib/backButton';
 import {
   getMediaKind, extractTextSnippet
 } from './lib/telemetry';
-import { saveBlobToCache, getBlobFromCache, generateThumbnailDataUrl, generateVideoThumbnailDataUrl } from './lib/storage';
+import {
+  saveBlobToCache,
+  getBlobFromCache,
+  generateThumbnailDataUrl,
+  generateVideoThumbnailDataUrl,
+  savePendingUpload,
+  loadPendingUploads,
+  removePendingUpload,
+  isSensitiveClipboardText
+} from './lib/storage';
 import { startAutoDiscovery, DiscoveredDevice } from './lib/discovery';
 import { ToastContainer, ToastMessage } from './components/Toast';
 import { MediaViewer, MediaViewerProps } from './components/MediaViewer';
@@ -29,6 +52,7 @@ import { TransferCard, TransferItem } from './components/TransferCard';
 import { TransferActionPanel } from './components/TransferActionPanel';
 import { SendTextModal } from './components/SendTextModal';
 import { ConfirmationDialog } from './components/ConfirmationDialog';
+import { PreferencesModal } from './components/PreferencesModal';
 
 function isImageFilename(name: string): boolean {
   return /\.(jpg|jpeg|png|gif|webp|svg|bmp)$/i.test(name);
@@ -139,6 +163,19 @@ export default function App() {
   const [isPcTrusted, setIsPcTrusted] = useState<boolean>(() => localStorage.getItem('p2p_trust_pc') !== 'false');
   const [isEditingIp, setIsEditingIp] = useState(false);
 
+  // User-configurable Transfer & Privacy Preferences (FR 4, 24, 35, 36, 42, 47, 54)
+  const [isPrefsOpen, setIsPrefsOpen] = useState(false);
+  const [downloadSubDir, setDownloadSubDirState] = useState<string>(() => getDownloadSubDir());
+  const [bandwidthLimitBps, setBandwidthLimitState] = useState<number>(() => getClientBandwidthLimitBps());
+  const [concurrencyMode, setConcurrencyModeState] = useState<'auto' | number>(() => uploadQueue.getConcurrencyMode());
+  const [clipboardSyncEnabled, setClipboardSyncEnabled] = useState<boolean>(
+    () => localStorage.getItem('p2p_clipboard_sync') !== 'false'
+  );
+  const [sensitiveFilterEnabled, setSensitiveFilterEnabled] = useState<boolean>(
+    () => localStorage.getItem('p2p_sensitive_filter') !== 'false'
+  );
+  const [serverSettings, setServerSettings] = useState<ServerSettings | null>(null);
+
   // Theme support: light | dark | system
   const [theme, setTheme] = useState<'dark' | 'light' | 'system'>(() => {
     return (localStorage.getItem('p2p_theme') as 'dark' | 'light' | 'system') || 'dark';
@@ -188,6 +225,7 @@ export default function App() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const dragDepth = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   const [activeMedia, setActiveMedia] = useState<Omit<MediaViewerProps, 'onClose'> | null>(null);
 
@@ -227,6 +265,38 @@ export default function App() {
   const dismissToast = (id: string) => {
     setToasts(prev => prev.filter(t => t.id !== id));
   };
+
+  // Recover pending transfers persisted before an application restart (FR 19, NFR 16)
+  useEffect(() => {
+    let mounted = true;
+    loadPendingUploads().then(restored => {
+      if (!mounted || restored.length === 0) return;
+      for (const { meta, file } of restored) {
+        if (uploads.has(meta.messageId)) continue;
+        const upload = new Upload(api, file, meta.transferId, p => {
+          const progress = p.status === 'queued' ? {} : { progress: p.totalBytes ? (p.sentBytes / p.totalBytes) * 100 : 100 };
+          updateFile(meta.messageId, {
+            status: p.status,
+            priority: p.priority,
+            speed: p.speed,
+            eta: p.eta,
+            error: p.error,
+            ...progress
+          });
+          if (p.status === 'done' || p.status === 'canceled') {
+            uploads.delete(meta.messageId);
+          }
+        }, meta.priority);
+
+        uploads.set(meta.messageId, upload);
+        updateFile(meta.messageId, { status: 'paused', priority: meta.priority });
+      }
+      if (transport.isConnected()) {
+        uploadQueue.resumeInterrupted(uploads.values());
+      }
+    });
+    return () => { mounted = false; };
+  }, []);
 
   // Auto-discovery
   useEffect(() => {
@@ -300,10 +370,17 @@ export default function App() {
     return () => { active = false; };
   }, [messages.length]);
 
-  // Flush offline outbox when connection is restored
+  // Sync server settings & flush offline outbox when connection is restored
   useEffect(() => {
     if (status === 'connected' && transport.isConnected()) {
       uploadQueue.resumeInterrupted(uploads.values());
+      api.getSettings().then(s => {
+        setServerSettings(s);
+        if (s.pcAlias && pairing && s.pcAlias !== pairing.serverName) {
+          savePairing({ ...pairing, serverName: s.pcAlias });
+        }
+      }).catch(() => {});
+
       if (pendingOutbox.length > 0) {
         for (const msg of pendingOutbox) {
           transport.send(JSON.stringify(msg));
@@ -369,6 +446,7 @@ export default function App() {
     if (upload) {
       uploadQueue.cancel(upload);
     } else {
+      removePendingUpload(transferId).catch(() => {});
       api.call('/upload_cancel', { transferId }).catch(() => { });
       updateFile(id, { status: 'canceled' });
     }
@@ -499,8 +577,16 @@ export default function App() {
             }, 100);
           }
         } else if (msg.type === 'clipboard') {
+          if (localStorage.getItem('p2p_clipboard_sync') === 'false') return;
           const text = (msg.payload?.text || '').trim();
           if (!text) return;
+          if (localStorage.getItem('p2p_sensitive_filter') !== 'false') {
+            const check = isSensitiveClipboardText(text);
+            if (check.sensitive) {
+              showToast(`Skipped sensitive clipboard (${check.reason})`, 'warning');
+              return;
+            }
+          }
           const fallback = () => {
             setMessages(prev => [...prev, {
               id: msg.id,
@@ -543,7 +629,7 @@ export default function App() {
     return () => transport.disconnect();
   }, []);
 
-  // Foreground resume auto-reconnect
+  // Foreground resume auto-reconnect & configurable clipboard sync (FR 35, FR 36)
   useEffect(() => {
     const handleVisibilityChange = async () => {
       if (document.visibilityState === 'visible') {
@@ -557,10 +643,14 @@ export default function App() {
           }
         }
 
-        if (isReady) {
+        if (isReady && localStorage.getItem('p2p_clipboard_sync') !== 'false') {
           try {
             const { value } = await Clipboard.read();
             if (value && value.trim().length > 0) {
+              if (localStorage.getItem('p2p_sensitive_filter') !== 'false') {
+                const check = isSensitiveClipboardText(value);
+                if (check.sensitive) return;
+              }
               const msg = {
                 type: 'clipboard',
                 id: `msg-${Date.now()}`,
@@ -584,7 +674,7 @@ export default function App() {
     if (saveToDisk && usesDirectDownload(file)) {
       try {
         const url = await api.directDownloadUrl(file.transferId);
-        const enqueued = await downloadWithSystemManager(url, file.filename);
+        const enqueued = await downloadWithSystemManager(url, file.filename, undefined, downloadSubDir);
         if (enqueued) {
           updateFile(id, { isDownloading: false, progress: 100 });
           showToast(`Direct download queued in system manager: ${file.filename}`, 'success');
@@ -618,8 +708,9 @@ export default function App() {
       updateFile(id, { isDownloading: false, progress: 100, blobUrl: url, thumbnailUrl: thumb });
 
       if (saveToDisk) {
-        await saveToDeviceDownloads(blob, file.filename);
-        showToast(`Saved ${file.filename} to Downloads`, 'success');
+        await saveToDeviceDownloads(blob, file.filename, undefined, downloadSubDir);
+        const targetLabel = downloadSubDir ? `Downloads/${downloadSubDir}` : 'Downloads';
+        showToast(`Saved ${file.filename} to ${targetLabel}`, 'success');
       }
     } catch (err) {
       updateFile(id, {
@@ -737,6 +828,37 @@ export default function App() {
     showToast('Sent to desktop', 'success');
   };
 
+  const handleQuickSendClipboard = async () => {
+    try {
+      const { value } = await Clipboard.read();
+      if (value && value.trim()) {
+        handleSendText(value.trim());
+        return;
+      }
+    } catch {}
+    if (navigator.clipboard?.readText) {
+      try {
+        const val = await navigator.clipboard.readText();
+        if (val && val.trim()) {
+          handleSendText(val.trim());
+          return;
+        }
+      } catch {}
+    }
+    showToast('Clipboard is empty or requires permission', 'warning');
+  };
+
+  const handleOpenFilePicker = (accept = '*/*', isFolder = false) => {
+    if (isFolder && folderInputRef.current) {
+      folderInputRef.current.click();
+      return;
+    }
+    if (fileInputRef.current) {
+      fileInputRef.current.accept = accept || '*/*';
+      fileInputRef.current.click();
+    }
+  };
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
@@ -757,7 +879,7 @@ export default function App() {
     if (files.length > 1) {
       showToast(`Queueing ${files.length} files for upload`, 'info');
     }
-    files.forEach(sendFile);
+    files.forEach(f => sendFile(f));
   };
 
   const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes('Files');
@@ -788,11 +910,11 @@ export default function App() {
 
     if (files.length > 0) {
       showToast(`Queueing ${files.length} dropped file${files.length > 1 ? 's' : ''}`, 'info');
-      files.forEach(sendFile);
+      files.forEach(f => sendFile(f));
     }
   };
 
-  const sendFile = async (file: File) => {
+  const sendFile = async (file: File, priority: UploadPriority = 'normal') => {
     const transferId = transferIdFor(getDeviceId(), file);
     const msgId = `msg-${transferId}`;
 
@@ -801,6 +923,9 @@ export default function App() {
       uploadQueue.enqueue(running);
       return;
     }
+
+    // Persist pending upload metadata & blob for cold restart recovery (FR 19, NFR 16)
+    savePendingUpload(transferId, msgId, file, priority).catch(() => {});
 
     const kind = getMediaKind(file.name);
     let blobUrl: string | undefined = undefined;
@@ -830,15 +955,16 @@ export default function App() {
       const progress = p.status === 'queued' ? {} : { progress: p.totalBytes ? (p.sentBytes / p.totalBytes) * 100 : 100 };
       updateFile(msgId, {
         status: p.status,
+        priority: p.priority,
         speed: p.speed,
         eta: p.eta,
         error: p.error,
         ...progress
       });
-      if (p.status === 'done' || p.status === 'canceled' || p.status === 'error') {
+      if (p.status === 'done' || p.status === 'canceled') {
         uploads.delete(msgId);
       }
-    });
+    }, priority);
 
     uploads.set(msgId, upload);
 
@@ -853,8 +979,9 @@ export default function App() {
           transferId,
           totalSize: file.size,
           totalChunks: upload.totalChunks,
-          chunkSize: CHUNK_SIZE,
+          chunkSize: upload.chunkSize,
           status: upload.status,
+          priority: upload.priority,
           blobUrl,
           thumbnailUrl,
           mediaKind: kind,
@@ -872,6 +999,78 @@ export default function App() {
     });
 
     uploadQueue.enqueue(upload);
+  };
+
+  const handleTogglePriority = (id: string) => {
+    const u = uploads.get(id);
+    if (!u) return;
+    const next = uploadQueue.toggleUploadPriority(u);
+    updateFile(id, { priority: next });
+    showToast(next === 'high' ? 'Prioritized to front of queue' : 'Priority reset to Normal', 'info');
+  };
+
+  const handleSavePreferences = async (prefs: {
+    deviceAlias: string;
+    pcAlias: string;
+    downloadSubDir: string;
+    pcReceiveDir: string;
+    bandwidthLimitBps: number;
+    concurrencyMode: 'auto' | number;
+    clipboardSyncEnabled: boolean;
+    sensitiveFilterEnabled: boolean;
+    contextMenuEnabled: boolean;
+    autostartEnabled: boolean;
+  }) => {
+    // 1. Save local settings
+    if (prefs.deviceAlias) {
+      setDeviceName(prefs.deviceAlias);
+      localStorage.setItem('p2p_device_name', prefs.deviceAlias);
+    }
+    setDownloadSubDir(prefs.downloadSubDir);
+    setDownloadSubDirState(prefs.downloadSubDir);
+
+    setClientBandwidthLimitBps(prefs.bandwidthLimitBps);
+    setBandwidthLimitState(prefs.bandwidthLimitBps);
+
+    uploadQueue.setConcurrency(prefs.concurrencyMode);
+    setConcurrencyModeState(prefs.concurrencyMode);
+
+    setClipboardSyncEnabled(prefs.clipboardSyncEnabled);
+    localStorage.setItem('p2p_clipboard_sync', prefs.clipboardSyncEnabled ? 'true' : 'false');
+
+    setSensitiveFilterEnabled(prefs.sensitiveFilterEnabled);
+    localStorage.setItem('p2p_sensitive_filter', prefs.sensitiveFilterEnabled ? 'true' : 'false');
+
+    if (pairing) {
+      const updatedPairing: Pairing = {
+        ...pairing,
+        deviceName: prefs.deviceAlias || pairing.deviceName,
+        serverName: prefs.pcAlias || pairing.serverName
+      };
+      savePairing(updatedPairing);
+    }
+
+    // 2. Sync with desktop server if connected
+    if (status === 'connected' && transport.isConnected()) {
+      try {
+        const updated = await api.updateSettings({
+          bandwidthLimitBps: prefs.bandwidthLimitBps,
+          maxConcurrency: prefs.concurrencyMode === 'auto' ? 0 : prefs.concurrencyMode,
+          clipboardSyncEnabled: prefs.clipboardSyncEnabled,
+          sensitiveFilterEnabled: prefs.sensitiveFilterEnabled,
+          receiveDir: prefs.pcReceiveDir || undefined,
+          pcAlias: prefs.pcAlias,
+          deviceAlias: prefs.deviceAlias,
+          contextMenuEnabled: prefs.contextMenuEnabled,
+          autostartEnabled: prefs.autostartEnabled
+        });
+        setServerSettings(updated);
+      } catch (err) {
+        console.warn('Could not sync settings to desktop:', err);
+      }
+    }
+
+    showToast('Preferences saved', 'success');
   };
 
   const handleBatchPauseAll = () => {
@@ -941,6 +1140,16 @@ export default function App() {
                 {status === 'connecting' ? 'Connecting' : status === 'error' ? 'Offline' : 'Standby'}
               </span>
             </div>
+
+            <button
+              type="button"
+              className="header-action-btn"
+              onClick={() => setIsPrefsOpen(true)}
+              title="Transfer & Device Settings"
+              aria-label="Settings"
+            >
+              <Sliders size={16} />
+            </button>
 
             <button
               type="button"
@@ -1030,6 +1239,15 @@ export default function App() {
                       >
                         <Edit3 size={14} />
                         <span>Change IP</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setIsPrefsOpen(true)}
+                        className="ghost-pill-btn"
+                      >
+                        <Sliders size={14} />
+                        <span>Rename</span>
                       </button>
 
                       <button
@@ -1199,6 +1417,21 @@ export default function App() {
           </footer>
         </main>
 
+        <PreferencesModal
+          isOpen={isPrefsOpen}
+          isConnected={false}
+          deviceName={pairing?.deviceName || deviceName}
+          pcName={pairing?.serverName || 'Desktop PC'}
+          downloadSubDir={downloadSubDir}
+          bandwidthLimitBps={bandwidthLimitBps}
+          concurrencyMode={concurrencyMode}
+          clipboardSyncEnabled={clipboardSyncEnabled}
+          sensitiveFilterEnabled={sensitiveFilterEnabled}
+          serverSettings={serverSettings}
+          onClose={() => setIsPrefsOpen(false)}
+          onSave={handleSavePreferences}
+        />
+
         <ConfirmationDialog
           isOpen={confirmDialog.isOpen}
           title={confirmDialog.title}
@@ -1263,7 +1496,9 @@ export default function App() {
             </div>
             <div className="brand-peer-row">
               <span className="peer-live-dot" />
-              <span className="peer-name">Connected · Local Wi-Fi</span>
+              <span className="peer-name">
+                Connected · {pairing?.deviceName || deviceName}
+              </span>
             </div>
           </div>
         </div>
@@ -1298,17 +1533,17 @@ export default function App() {
               <>
                 <div className="menu-scrim" onClick={() => setIsMenuOpen(false)} />
                 <div className="overflow-menu-dropdown">
-                  <div className="menu-group-header">SESSION</div>
+                  <div className="menu-group-header">SESSION & PREFERENCES</div>
                   <button
                     type="button"
                     className="menu-item"
                     onClick={() => {
                       setIsMenuOpen(false);
-                      handleDisconnect();
+                      setIsPrefsOpen(true);
                     }}
                   >
-                    <LogOut size={15} />
-                    <span>Disconnect</span>
+                    <Sliders size={15} />
+                    <span>Transfer & Device Settings</span>
                   </button>
 
                   <button
@@ -1324,6 +1559,18 @@ export default function App() {
                   >
                     {isPcTrusted ? <ShieldCheck size={15} color="var(--accent)" /> : <ShieldAlert size={15} />}
                     <span>{isPcTrusted ? 'Auto-Accept Files: On' : 'Auto-Accept Files: Off'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="menu-item"
+                    onClick={() => {
+                      setIsMenuOpen(false);
+                      handleDisconnect();
+                    }}
+                  >
+                    <LogOut size={15} />
+                    <span>Disconnect</span>
                   </button>
 
                   <div className="menu-group-header">APPEARANCE</div>
@@ -1486,7 +1733,7 @@ export default function App() {
             </h3>
             <p className="empty-description">
               {messages.length === 0
-                ? 'Send files, photos, videos, or text directly over local Wi-Fi.'
+                ? 'Send files, photos, videos, folders, or text directly over local Wi-Fi.'
                 : `No transfers in "${filter}" yet.`}
             </p>
           </div>
@@ -1537,6 +1784,7 @@ export default function App() {
                       if (u) uploadQueue.enqueue(u);
                     }}
                     onCancelUpload={cancelUpload}
+                    onTogglePriority={handleTogglePriority}
                     onToast={showToast}
                   />
                 ))}
@@ -1546,7 +1794,7 @@ export default function App() {
         })}
       </main>
 
-      {/* Hidden Native File Input */}
+      {/* Hidden Native File & Folder Inputs */}
       <input
         ref={fileInputRef}
         type="file"
@@ -1554,11 +1802,20 @@ export default function App() {
         style={{ display: 'none' }}
         onChange={handleFileUpload}
       />
+      <input
+        ref={folderInputRef}
+        type="file"
+        multiple
+        {...({ webkitdirectory: '', directory: '' } as any)}
+        style={{ display: 'none' }}
+        onChange={handleFileUpload}
+      />
 
-      {/* 4. Purpose-Built Transfer Action Panel (Replacing Chat Composer) */}
+      {/* 4. Purpose-Built Transfer Action Panel (with Category Filters & Quick-Send) */}
       <TransferActionPanel
-        onOpenFilePicker={() => fileInputRef.current?.click()}
+        onOpenFilePicker={handleOpenFilePicker}
         onOpenSendText={() => setIsSendTextOpen(true)}
+        onQuickSendClipboard={handleQuickSendClipboard}
       />
 
       {/* 5. Dedicated Text & Link Entry Modal */}
@@ -1568,7 +1825,23 @@ export default function App() {
         onSend={handleSendText}
       />
 
-      {/* 6. Native Confirmation Dialog */}
+      {/* 6. Transfer & Device Preferences Modal */}
+      <PreferencesModal
+        isOpen={isPrefsOpen}
+        isConnected={true}
+        deviceName={pairing?.deviceName || deviceName}
+        pcName={pairing?.serverName || 'Desktop PC'}
+        downloadSubDir={downloadSubDir}
+        bandwidthLimitBps={bandwidthLimitBps}
+        concurrencyMode={concurrencyMode}
+        clipboardSyncEnabled={clipboardSyncEnabled}
+        sensitiveFilterEnabled={sensitiveFilterEnabled}
+        serverSettings={serverSettings}
+        onClose={() => setIsPrefsOpen(false)}
+        onSave={handleSavePreferences}
+      />
+
+      {/* 7. Native Confirmation Dialog */}
       <ConfirmationDialog
         isOpen={confirmDialog.isOpen}
         title={confirmDialog.title}

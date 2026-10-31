@@ -5,6 +5,24 @@ import { playTransferSuccessChime } from './audio';
 import { startTransferForeground, stopTransferForeground, updateTransferForeground } from './foregroundService';
 
 const PARALLEL_CHUNKS = 4;
+const DOWNLOAD_SUBDIR_KEY = 'p2p_download_subdir';
+
+export function getDownloadSubDir(): string {
+  try {
+    return localStorage.getItem(DOWNLOAD_SUBDIR_KEY) ?? 'P2P Link';
+  } catch {
+    return 'P2P Link';
+  }
+}
+
+export function setDownloadSubDir(subDir: string): void {
+  try {
+    const clean = subDir.replace(/[\\<>:"|?*]/g, '').replace(/\.\./g, '').trim();
+    localStorage.setItem(DOWNLOAD_SUBDIR_KEY, clean);
+  } catch {
+    // ignore storage errors
+  }
+}
 
 export interface DownloadInfo {
   transferId: string;
@@ -17,11 +35,13 @@ interface FileSaverPlugin {
     filename: string;
     base64Data: string;
     mimeType?: string;
+    subDir?: string;
   }): Promise<{ success: boolean; path: string }>;
   downloadWithSystemManager(options: {
     url: string;
     filename: string;
     mimeType?: string;
+    subDir?: string;
   }): Promise<{ enqueued: boolean }>;
 }
 
@@ -125,21 +145,22 @@ export function saveBlob(blob: Blob, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
-// Saves a file to the device's public Downloads directory.
-// On Android native app: writes directly to /storage/emulated/0/Download via MediaStore.
-// On Desktop/Browser: triggers standard browser save flow.
+// Saves a file to the device's public Downloads directory (or configured subfolder — FR 24).
 export async function saveToDeviceDownloads(
   blob: Blob,
   filename: string,
-  mimeType?: string
+  mimeType?: string,
+  customSubDir?: string
 ): Promise<{ success: boolean; path?: string }> {
+  const subDir = customSubDir !== undefined ? customSubDir : getDownloadSubDir();
   if (Capacitor.isNativePlatform()) {
     try {
       const base64Data = await blobToBase64(blob);
       const res = await FileSaver.saveToDownloads({
         filename,
         base64Data,
-        mimeType: mimeType || blob.type || 'application/octet-stream'
+        mimeType: mimeType || blob.type || 'application/octet-stream',
+        subDir
       });
       return { success: true, path: res.path };
     } catch (err) {
@@ -155,14 +176,17 @@ export async function saveToDeviceDownloads(
 export async function downloadWithSystemManager(
   url: string,
   filename: string,
-  mimeType?: string
+  mimeType?: string,
+  customSubDir?: string
 ): Promise<boolean> {
+  const subDir = customSubDir !== undefined ? customSubDir : getDownloadSubDir();
   if (Capacitor.isNativePlatform()) {
     try {
       await FileSaver.downloadWithSystemManager({
         url,
         filename,
-        mimeType: mimeType || '*/*'
+        mimeType: mimeType || '*/*',
+        subDir
       });
       return true;
     } catch (err) {

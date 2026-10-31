@@ -123,8 +123,14 @@ func startUDPDiscovery(port int, pcName string, deviceID string, scheme string, 
 
 			req := strings.TrimSpace(string(buf[:n]))
 			if strings.HasPrefix(req, DiscoverReqMsg) {
+				displayName := pcName
+				if alias := getServerAlias(); alias != "" {
+					displayName = alias
+				} else if displayName == "" {
+					displayName = getServerName()
+				}
 				info := DiscoveryInfo{
-					Name:        pcName,
+					Name:        displayName,
 					DeviceID:    deviceID,
 					Port:        port,
 					Scheme:      scheme,
@@ -167,8 +173,10 @@ func handleDiscover(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(info)
 }
 
-
 func getServerName() string {
+	if alias := getServerAlias(); alias != "" {
+		return alias
+	}
 	hostname, _ := os.Hostname()
 	if hostname == "" {
 		return "Desktop"

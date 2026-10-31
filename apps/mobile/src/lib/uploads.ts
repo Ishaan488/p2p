@@ -3,14 +3,18 @@ import { SpeedTracker, calculateEta } from './telemetry';
 import { playTransferSuccessChime } from './audio';
 import { startTransferForeground, stopTransferForeground, updateTransferForeground } from './foregroundService';
 import { computeFileHash } from './crypto';
+import { removePendingUpload } from './storage';
 
-export const CHUNK_SIZE = 1024 * 1024;
-const PARALLEL_CHUNKS = 4;
+export const CHUNK_SIZE = 1024 * 1024; // 1 MiB baseline
+const MIN_CHUNK_SIZE = 256 * 1024;     // 256 KiB
+const MAX_CHUNK_SIZE = 4 * 1024 * 1024; // 4 MiB
 
 export type UploadStatus = 'queued' | 'uploading' | 'paused' | 'done' | 'error' | 'canceled';
+export type UploadPriority = 'high' | 'normal' | 'low';
 
 export interface UploadProgress {
   status: UploadStatus;
+  priority: UploadPriority;
   sentBytes: number;
   totalBytes: number;
   speed: number; // bytes per second, 0 when not uploading
@@ -20,7 +24,113 @@ export interface UploadProgress {
 
 interface UploadStatusResponse {
   totalChunks: number;
+  chunkSize?: number;
   received: [number, number][];
+}
+
+// ============================================================================
+// Adaptive Network Telemetry, Chunk Sizing (NFR 6) & Bandwidth Limiter (FR 54)
+// ============================================================================
+
+let avgChunkRttMs = 120;
+let recentRetryCount = 0;
+let clientBandwidthLimitBps = 0; // 0 = unlimited
+let lastTokenTime = Date.now();
+let availableTokens = 0;
+
+export function setClientBandwidthLimitBps(bps: number) {
+  clientBandwidthLimitBps = Math.max(0, bps);
+  availableTokens = clientBandwidthLimitBps;
+  lastTokenTime = Date.now();
+  try {
+    localStorage.setItem('p2p_bandwidth_limit_bps', String(clientBandwidthLimitBps));
+  } catch {}
+}
+
+export function getClientBandwidthLimitBps(): number {
+  try {
+    const saved = localStorage.getItem('p2p_bandwidth_limit_bps');
+    if (saved !== null) {
+      const parsed = Number(saved);
+      if (!Number.isNaN(parsed) && parsed >= 0) {
+        clientBandwidthLimitBps = parsed;
+      }
+    }
+  } catch {}
+  return clientBandwidthLimitBps;
+}
+
+async function paceBandwidth(bytes: number, signal: AbortSignal): Promise<void> {
+  const limit = clientBandwidthLimitBps;
+  if (limit <= 0 || bytes <= 0) return;
+
+  const now = Date.now();
+  const elapsedSec = Math.max(0, (now - lastTokenTime) / 1000);
+  lastTokenTime = now;
+  availableTokens = Math.min(limit * 1.5, availableTokens + elapsedSec * limit);
+
+  if (availableTokens >= bytes) {
+    availableTokens -= bytes;
+    return;
+  }
+
+  const deficit = bytes - availableTokens;
+  availableTokens = 0;
+  const waitMs = Math.min(2500, Math.ceil((deficit / limit) * 1000));
+  if (waitMs > 10) {
+    await sleep(waitMs, signal);
+  }
+}
+
+/**
+ * Computes optimal chunk size based on file size and measured network conditions (NFR 6).
+ * Preserves previously negotiated chunk size for a transferId so resume across restarts stays aligned.
+ */
+export function computeAdaptiveChunkSize(transferId: string, fileSize: number): number {
+  const cacheKey = `p2p_chunk_${transferId}`;
+  try {
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) {
+      const n = Number(cached);
+      if (n >= 64 * 1024 && n <= 8 * 1024 * 1024) return n;
+    }
+  } catch {}
+
+  let chosen = CHUNK_SIZE; // 1 MiB default
+  if (fileSize <= 1024 * 1024 || avgChunkRttMs > 900 || recentRetryCount > 2) {
+    // Small files (<1 MB) or high-latency/lossy Wi-Fi: 256 KB chunks for fast feedback and cheap retries
+    chosen = MIN_CHUNK_SIZE;
+  } else if (fileSize >= 200 * 1024 * 1024 && avgChunkRttMs < 150 && recentRetryCount === 0) {
+    // Very large files (>200 MB) on low-latency LAN: 4 MB chunks for maximum throughput
+    chosen = MAX_CHUNK_SIZE;
+  } else if (fileSize >= 32 * 1024 * 1024 && avgChunkRttMs < 250 && recentRetryCount === 0) {
+    // Medium-large files (>32 MB) on good Wi-Fi: 2 MB chunks
+    chosen = 2 * 1024 * 1024;
+  }
+
+  try {
+    localStorage.setItem(cacheKey, String(chosen));
+  } catch {}
+  return chosen;
+}
+
+/**
+ * Computes adaptive parallel chunk workers per file based on hardware resources & network health (NFR 7).
+ */
+export function computeAdaptiveChunkWorkers(): number {
+  const cores = typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 4) : 4;
+  const memGb = typeof navigator !== 'undefined' ? ((navigator as any).deviceMemory || 4) : 4;
+
+  if (recentRetryCount >= 2 || avgChunkRttMs > 1000) {
+    return 2; // Step down on congested network
+  }
+  if (cores >= 8 && memGb >= 4 && avgChunkRttMs < 180) {
+    return 6;
+  }
+  if (cores >= 4 && memGb >= 2) {
+    return 4;
+  }
+  return 2;
 }
 
 function hashString(text: string): string {
@@ -48,9 +158,17 @@ const sleep = (ms: number, signal: AbortSignal) =>
     }, { once: true });
   });
 
+export function priorityWeight(p: UploadPriority): number {
+  if (p === 'high') return 2;
+  if (p === 'normal') return 1;
+  return 0;
+}
+
 export class Upload {
+  readonly chunkSize: number;
   readonly totalChunks: number;
   status: UploadStatus = 'queued';
+  priority: UploadPriority = 'normal';
   sentBytes = 0;
   speed = 0;
   eta = '';
@@ -62,20 +180,29 @@ export class Upload {
     private api: ServerApi,
     readonly file: File,
     readonly transferId: string,
-    private onProgress: (progress: UploadProgress) => void
+    private onProgress: (progress: UploadProgress) => void,
+    initialPriority: UploadPriority = 'normal'
   ) {
-    this.totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+    this.priority = initialPriority;
+    this.chunkSize = computeAdaptiveChunkSize(transferId, file.size);
+    this.totalChunks = file.size === 0 ? 0 : Math.ceil(file.size / this.chunkSize);
   }
 
   get progress(): UploadProgress {
     return {
       status: this.status,
+      priority: this.priority,
       sentBytes: this.sentBytes,
       totalBytes: this.file.size,
       speed: this.status === 'uploading' ? this.speed : 0,
       eta: this.status === 'uploading' ? this.eta : undefined,
       error: this.error
     };
+  }
+
+  setPriority(p: UploadPriority) {
+    this.priority = p;
+    this.onProgress(this.progress);
   }
 
   private setStatus(status: UploadStatus, error?: string) {
@@ -112,6 +239,7 @@ export class Upload {
           this.speed = 0;
           this.eta = 'Instant (Dedup)';
           this.setStatus('done');
+          await removePendingUpload(this.transferId);
           playTransferSuccessChime();
           return;
         }
@@ -135,6 +263,10 @@ export class Upload {
       }
       this.sentBytes = this.file.size;
       this.setStatus('done');
+      await removePendingUpload(this.transferId);
+      try {
+        localStorage.removeItem(`p2p_chunk_${this.transferId}`);
+      } catch {}
       playTransferSuccessChime();
     } catch (err) {
       if (!abort.signal.aborted) {
@@ -161,11 +293,15 @@ export class Upload {
     if (this.status === 'done' || this.status === 'canceled') return;
     this.abort?.abort();
     this.setStatus('canceled');
+    removePendingUpload(this.transferId).catch(() => {});
+    try {
+      localStorage.removeItem(`p2p_chunk_${this.transferId}`);
+    } catch {}
     this.api.call('/upload_cancel', { transferId: this.transferId }).catch(() => { });
   }
 
   private chunkLength(index: number): number {
-    return Math.min(CHUNK_SIZE, this.file.size - index * CHUNK_SIZE);
+    return Math.min(this.chunkSize, this.file.size - index * this.chunkSize);
   }
 
   private async init(signal: AbortSignal): Promise<number[]> {
@@ -173,7 +309,7 @@ export class Upload {
       transferId: this.transferId,
       filename: this.file.name,
       totalSize: this.file.size,
-      chunkSize: CHUNK_SIZE,
+      chunkSize: this.chunkSize,
       totalChunks: this.totalChunks
     }, signal);
 
@@ -193,12 +329,19 @@ export class Upload {
 
   private async sendChunks(missing: number[], signal: AbortSignal): Promise<void> {
     let next = 0;
+    const workerCount = Math.min(computeAdaptiveChunkWorkers(), missing.length);
 
     const worker = async () => {
       while (next < missing.length) {
         const index = missing[next++];
-        await this.sendChunk(index, signal);
         const length = this.chunkLength(index);
+        await paceBandwidth(length, signal);
+        const t0 = performance.now();
+        await this.sendChunk(index, signal);
+        const rtt = performance.now() - t0;
+        avgChunkRttMs = avgChunkRttMs * 0.8 + rtt * 0.2;
+        if (recentRetryCount > 0) recentRetryCount = Math.max(0, recentRetryCount - 0.25);
+
         this.sentBytes += length;
 
         // Exponential Moving Average (EMA) dynamic telemetry calculation
@@ -211,7 +354,7 @@ export class Upload {
       }
     };
 
-    const workers = Array.from({ length: Math.min(PARALLEL_CHUNKS, missing.length) }, worker);
+    const workers = Array.from({ length: workerCount }, worker);
     try {
       await Promise.all(workers);
     } catch (err) {
@@ -222,7 +365,7 @@ export class Upload {
   }
 
   private async sendChunk(index: number, signal: AbortSignal): Promise<void> {
-    const start = index * CHUNK_SIZE;
+    const start = index * this.chunkSize;
     const chunk = this.file.slice(start, start + this.chunkLength(index));
     for (let attempt = 1; ; attempt++) {
       try {
@@ -230,6 +373,7 @@ export class Upload {
         return;
       } catch (err) {
         signal.throwIfAborted();
+        recentRetryCount = Math.min(10, recentRetryCount + 1);
         const fatal = err instanceof HttpError && err.status >= 400 && err.status < 500 && err.status !== 408;
         if (fatal) throw err;
         // Resilient auto-retry for transient Wi-Fi drops (up to 8 attempts with backoff)
@@ -250,17 +394,74 @@ export interface BatchStats {
   eta: string;
 }
 
-// Queue supporting sequential and controlled concurrent batch uploads
+// Queue supporting prioritized, sequential, and adaptive concurrent batch uploads (FR 21, FR 54, NFR 7)
 export class UploadQueue {
   private pending: Upload[] = [];
   private active = new Set<Upload>();
-  // 2 concurrent file transfers gives optimal throughput without saturated connection
-  private concurrency = 2;
+  private concurrencyMode: 'auto' | number = 'auto';
   private batchListeners = new Set<(stats: BatchStats) => void>();
 
-  setConcurrency(limit: number) {
-    this.concurrency = Math.max(1, limit);
+  constructor() {
+    getClientBandwidthLimitBps();
+    try {
+      const savedConc = localStorage.getItem('p2p_concurrency_mode');
+      if (savedConc && savedConc !== 'auto') {
+        const n = Number(savedConc);
+        if (n >= 1 && n <= 8) this.concurrencyMode = n;
+      }
+    } catch {}
+  }
+
+  getConcurrencyMode(): 'auto' | number {
+    return this.concurrencyMode;
+  }
+
+  setConcurrency(mode: 'auto' | number) {
+    if (mode === 'auto' || mode <= 0) {
+      this.concurrencyMode = 'auto';
+    } else {
+      this.concurrencyMode = Math.max(1, Math.min(8, mode));
+    }
+    try {
+      localStorage.setItem('p2p_concurrency_mode', String(this.concurrencyMode));
+    } catch {}
     this.pump();
+  }
+
+  private getEffectiveConcurrency(): number {
+    if (typeof this.concurrencyMode === 'number') {
+      return this.concurrencyMode;
+    }
+    // Adaptive transfer concurrency based on system resources and live network health (NFR 7)
+    const cores = typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 4) : 4;
+    const memGb = typeof navigator !== 'undefined' ? ((navigator as any).deviceMemory || 4) : 4;
+    if (recentRetryCount >= 2 || avgChunkRttMs > 800) {
+      return 1;
+    }
+    if (cores >= 8 && memGb >= 4 && avgChunkRttMs < 160) {
+      return 4;
+    }
+    if (cores >= 4 && memGb >= 2 && avgChunkRttMs < 300) {
+      return 3;
+    }
+    return 2;
+  }
+
+  private sortPendingByPriority() {
+    this.pending.sort((a, b) => priorityWeight(b.priority) - priorityWeight(a.priority));
+  }
+
+  setUploadPriority(upload: Upload, priority: UploadPriority) {
+    upload.setPriority(priority);
+    this.sortPendingByPriority();
+    this.notifyBatch();
+    this.pump();
+  }
+
+  toggleUploadPriority(upload: Upload): UploadPriority {
+    const next: UploadPriority = upload.priority === 'high' ? 'normal' : 'high';
+    this.setUploadPriority(upload, next);
+    return next;
   }
 
   onBatchChange(callback: (stats: BatchStats) => void): () => void {
@@ -307,6 +508,7 @@ export class UploadQueue {
     if (this.active.has(upload) || this.pending.includes(upload)) return;
     upload.markQueued();
     this.pending.push(upload);
+    this.sortPendingByPriority();
     this.notifyBatch();
     this.pump();
   }
@@ -318,6 +520,7 @@ export class UploadQueue {
         this.pending.push(u);
       }
     }
+    this.sortPendingByPriority();
     this.notifyBatch();
     this.pump();
   }
@@ -364,14 +567,16 @@ export class UploadQueue {
 
   resumeInterrupted(allUploads: Iterable<Upload>) {
     for (const u of allUploads) {
-      if (u.status === 'error' || u.status === 'paused') {
+      if (u.status === 'error' || u.status === 'paused' || u.status === 'queued') {
         this.enqueue(u);
       }
     }
   }
 
   private pump() {
-    while (this.active.size < this.concurrency && this.pending.length > 0) {
+    const limit = this.getEffectiveConcurrency();
+    while (this.active.size < limit && this.pending.length > 0) {
+      this.sortPendingByPriority();
       const upload = this.pending.shift();
       if (!upload) break;
       this.active.add(upload);
