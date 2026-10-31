@@ -4,11 +4,12 @@ import { Message } from './lib/protocol';
 import { HttpError, Pairing, ServerApi, isNetworkError, pairWithApproval, pairWithQr } from './lib/api';
 import { randomHex } from './lib/crypto';
 import { downloadEncrypted, saveToDeviceDownloads, downloadWithSystemManager } from './lib/downloads';
-import { CHUNK_SIZE, Upload, UploadQueue, UploadStatus, transferIdFor, BatchStats } from './lib/uploads';
+import { CHUNK_SIZE, Upload, UploadQueue, transferIdFor, BatchStats } from './lib/uploads';
 import {
-  Send, Smartphone, Paperclip, QrCode, LogOut,
-  Trash2, Download, Pause, Play, X, UploadCloud, Lock, Wifi, ZoomIn, Clock,
-  Copy, ArrowDownLeft, ArrowUpRight, ShieldCheck, ShieldAlert, Unlink, MoreVertical
+  QrCode, LogOut,
+  Trash2, UploadCloud, Lock, Wifi,
+  ShieldCheck, ShieldAlert, Unlink, MoreVertical,
+  Sun, Moon, Monitor, ArrowDownUp, Laptop
 } from 'lucide-react';
 import { checkPendingShare, onSharedData } from './lib/shareTarget';
 import { Capacitor } from '@capacitor/core';
@@ -16,17 +17,17 @@ import { Html5Qrcode } from 'html5-qrcode';
 import { Clipboard } from '@capacitor/clipboard';
 import { backButtonManager } from './lib/backButton';
 import {
-  MediaKind, getMediaKind, formatBytes, formatSpeed, extractTextSnippet
+  getMediaKind, extractTextSnippet
 } from './lib/telemetry';
 import { saveBlobToCache, getBlobFromCache, generateThumbnailDataUrl } from './lib/storage';
 import { startAutoDiscovery, DiscoveredDevice } from './lib/discovery';
 import { ToastContainer, ToastMessage } from './components/Toast';
 import { Lightbox } from './components/Lightbox';
-import { AudioPlayer } from './components/AudioPlayer';
-import { VideoPlayer } from './components/VideoPlayer';
-import { PdfViewer } from './components/PdfViewer';
-import { CodeViewer } from './components/CodeViewer';
 import { BatchProgress } from './components/BatchProgress';
+import { TransferCard, TransferItem } from './components/TransferCard';
+import { TransferActionPanel } from './components/TransferActionPanel';
+import { SendTextModal } from './components/SendTextModal';
+import { ConfirmationDialog } from './components/ConfirmationDialog';
 
 function isImageFilename(name: string): boolean {
   return /\.(jpg|jpeg|png|gif|webp|svg|bmp)$/i.test(name);
@@ -43,6 +44,7 @@ const defaultAddress = () => {
   }
   return window.location.port ? window.location.host : `${window.location.hostname}:8080`;
 };
+
 const savedAddress = () => {
   const saved = localStorage.getItem('p2p_address');
   if (saved && saved !== 'localhost:8080' && saved !== 'localhost' && !saved.startsWith('127.0.0.1')) {
@@ -68,7 +70,7 @@ const guessDeviceName = () => {
   if (/Windows/.test(ua)) return 'Windows browser';
   if (/Mac OS X/.test(ua)) return 'Mac browser';
   if (/Linux/.test(ua)) return 'Linux browser';
-  return 'Browser';
+  return 'Android Device';
 };
 
 const loadPairing = (): Pairing | null => {
@@ -101,9 +103,8 @@ const parsePairingLink = (text: string): { host: string; code?: string; scheme?:
 const describeFailure = (err: unknown, host: string) => {
   if (!isNetworkError(err)) return err instanceof Error ? err.message : 'Connection failed';
   const timedOut = err instanceof DOMException && (err.name === 'TimeoutError' || err.name === 'AbortError');
-  return `${timedOut ? 'No answer from' : 'Could not reach'} the PC at ${host}. Check that the address is right, the PC app is running, ` +
-    'Windows Firewall allows it (run "Start P2P.bat" as administrator once), and your Wi-Fi does not isolate devices ' +
-    '(public or campus Wi-Fi often blocks phone-to-PC traffic; try a phone hotspot).';
+  return `${timedOut ? 'No answer from' : 'Could not reach'} the desktop at ${host}. Check that the address is correct, P2P Link is running on your PC, ` +
+    'and both devices are connected to the same Wi-Fi (campus/public Wi-Fi often isolates devices; use a mobile hotspot if needed).';
 };
 
 const DIRECT_DOWNLOAD_ABOVE = 100 * 1024 * 1024;
@@ -112,33 +113,16 @@ const usesDirectDownload = (file: { totalSize: number }) =>
 
 const ACTIVE_UPLOAD: string[] = ['queued', 'uploading', 'paused', 'error'];
 
-interface ChatMessage {
-  id: string;
-  text?: string;
-  file?: {
-    filename: string;
-    transferId: string;
-    totalSize: number;
-    totalChunks: number;
-    chunkSize: number;
-    isDownloading?: boolean;
-    progress?: number;
-    blobUrl?: string;
-    thumbnailUrl?: string;
-    status?: UploadStatus | 'interrupted';
-    speed?: number;
-    eta?: string;
-    error?: string;
-    mediaKind?: MediaKind;
-    snippet?: string;
-    fullContent?: string;
-    totalLines?: number;
-    isPendingApproval?: boolean;
-  };
-  sender: 'me' | 'other';
-  timestamp: number;
-  isClipboard?: boolean;
-  isPending?: boolean;
+function getDateGroup(timestamp: number): 'Today' | 'Yesterday' | 'Earlier this week' | 'Older' {
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfYesterday = startOfToday - 86400000;
+  const startOfWeek = startOfToday - 6 * 86400000;
+
+  if (timestamp >= startOfToday) return 'Today';
+  if (timestamp >= startOfYesterday) return 'Yesterday';
+  if (timestamp >= startOfWeek) return 'Earlier this week';
+  return 'Older';
 }
 
 export default function App() {
@@ -152,13 +136,40 @@ export default function App() {
   const [isScanning, setIsScanning] = useState(false);
   const [cameraError, setCameraError] = useState('');
   const [isPcTrusted, setIsPcTrusted] = useState<boolean>(() => localStorage.getItem('p2p_trust_pc') !== 'false');
-  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+
+  // Theme support: light | dark | system
+  const [theme, setTheme] = useState<'dark' | 'light' | 'system'>(() => {
+    return (localStorage.getItem('p2p_theme') as 'dark' | 'light' | 'system') || 'dark';
+  });
+
+  // Filter: all | received | sent
+  const [filter, setFilter] = useState<'all' | 'received' | 'sent'>('all');
+
+  // Modals & Dialogs
+  const [isSendTextOpen, setIsSendTextOpen] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    variant?: 'danger' | 'warning' | 'primary';
+    icon?: 'trash' | 'unlink' | 'warning';
+    onConfirm: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {}
+  });
+
+  const [messages, setMessages] = useState<TransferItem[]>(() => {
     const saved = localStorage.getItem('p2p_messages');
-    const restored: ChatMessage[] = saved ? JSON.parse(saved) : [];
+    const restored: TransferItem[] = saved ? JSON.parse(saved) : [];
     return restored.map(m => m.file?.status && ACTIVE_UPLOAD.includes(m.file.status) && !uploads.has(m.id)
-      ? { ...m, file: { ...m.file, status: 'interrupted' as const, speed: 0 } }
+      ? { ...m, file: { ...m.file, status: 'interrupted', speed: 0 } }
       : m);
   });
+
   const [pendingOutbox, setPendingOutbox] = useState<Message[]>(() => {
     try {
       return JSON.parse(localStorage.getItem('p2p_outbox') || '[]');
@@ -166,23 +177,15 @@ export default function App() {
       return [];
     }
   });
-  const [inputValue, setInputValue] = useState('');
+
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
   const [isDragging, setIsDragging] = useState(false);
   const [batchStats, setBatchStats] = useState<BatchStats>(() => uploadQueue.getStats());
   const [isBatchPaused, setIsBatchPaused] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const chatContainerRef = useRef<HTMLDivElement>(null);
-  const isNearBottomRef = useRef(true);
-  const prevMsgCountRef = useRef(0);
-
-  const handleContainerScroll = () => {
-    const el = chatContainerRef.current;
-    if (!el) return;
-    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    isNearBottomRef.current = distanceToBottom < 90;
-  };
+  const dragDepth = useRef(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [lightboxImage, setLightboxImage] = useState<{
     src: string;
@@ -191,23 +194,39 @@ export default function App() {
     onDownload?: () => void;
   } | null>(null);
 
-  const dragDepth = useRef(0);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Apply Theme
+  useEffect(() => {
+    localStorage.setItem('p2p_theme', theme);
+    const applyTheme = () => {
+      if (theme === 'system') {
+        const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+      } else {
+        document.documentElement.setAttribute('data-theme', theme);
+      }
+    };
+    applyTheme();
+
+    if (theme === 'system') {
+      const media = window.matchMedia('(prefers-color-scheme: dark)');
+      media.addEventListener('change', applyTheme);
+      return () => media.removeEventListener('change', applyTheme);
+    }
+  }, [theme]);
 
   const showToast = (text: string, type: 'info' | 'success' | 'warning' = 'info') => {
     const id = `toast-${Date.now()}-${Math.random()}`;
     setToasts(prev => [...prev, { id, text, type }]);
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
-    }, 2600);
+    }, 2800);
   };
 
   const dismissToast = (id: string) => {
     setToasts(prev => prev.filter(t => t.id !== id));
   };
 
-  // Multi-channel mDNS & LAN auto-discovery
+  // Auto-discovery
   useEffect(() => {
     if (status !== 'disconnected') return;
     const stop = startAutoDiscovery(
@@ -222,12 +241,12 @@ export default function App() {
     return stop;
   }, [status]);
 
-  // Initialize Capacitor Android back button listener & Esc key manager
+  // Back button init
   useEffect(() => {
     backButtonManager.init(showToast);
   }, []);
 
-  // Listen to batch transfer updates from UploadQueue
+  // Batch progress listener
   useEffect(() => {
     return uploadQueue.onBatchChange((stats) => {
       setBatchStats(stats);
@@ -237,7 +256,7 @@ export default function App() {
     });
   }, []);
 
-  // Persist messages in localStorage without dead blob URLs
+  // Persist messages in localStorage
   useEffect(() => {
     const toSave = messages.map(m => {
       if (!m.file) return m;
@@ -247,16 +266,16 @@ export default function App() {
     localStorage.setItem('p2p_messages', JSON.stringify(toSave));
   }, [messages]);
 
-  // Persist pending outbox in localStorage
+  // Persist pending outbox
   useEffect(() => {
     localStorage.setItem('p2p_outbox', JSON.stringify(pendingOutbox));
   }, [pendingOutbox]);
 
-  const updateFile = (id: string, patch: Partial<NonNullable<ChatMessage['file']>>) => {
+  const updateFile = (id: string, patch: Partial<NonNullable<TransferItem['file']>>) => {
     setMessages(prev => prev.map(m => m.id === id && m.file ? { ...m, file: { ...m.file, ...patch } } : m));
   };
 
-  // Restore cached blobs for images/media across app restarts from IndexedDB
+  // Restore cached media blobs from IndexedDB
   useEffect(() => {
     let active = true;
     const restoreBlobs = async () => {
@@ -279,7 +298,7 @@ export default function App() {
     return () => { active = false; };
   }, [messages.length]);
 
-  // Flush offline outbox whenever connection is restored and auto-resume stalled transfers
+  // Flush offline outbox when connection is restored
   useEffect(() => {
     if (status === 'connected' && transport.isConnected()) {
       uploadQueue.resumeInterrupted(uploads.values());
@@ -289,12 +308,12 @@ export default function App() {
           setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, isPending: false } : m));
         }
         setPendingOutbox([]);
-        showToast(`Delivered ${pendingOutbox.length} pending message(s)`, 'success');
+        showToast(`Delivered ${pendingOutbox.length} pending transfer(s)`, 'success');
       }
     }
   }, [status, pendingOutbox]);
 
-  // Network online listener: auto-reconnect and resume transfers when Wi-Fi recovers
+  // Auto-reconnect when Wi-Fi recovers
   useEffect(() => {
     const handleOnline = () => {
       showToast('Network restored — reconnecting...', 'info');
@@ -307,13 +326,12 @@ export default function App() {
     return () => window.removeEventListener('online', handleOnline);
   }, []);
 
-  // Android Share Target integration: receive shared text or files from other apps
+  // Android Share Target integration
   useEffect(() => {
     const handleShare = async (data: any) => {
       if (!data) return;
       if (data.text) {
-        setInputValue(data.text);
-        showToast('Shared text loaded into message', 'info');
+        handleSendText(data.text);
       }
       if (data.files && data.files.length > 0) {
         showToast(`Receiving ${data.files.length} shared file(s)`, 'info');
@@ -367,7 +385,7 @@ export default function App() {
         next.delete(id);
         return next;
       });
-    }, 300);
+    }, 250);
   };
 
   const savePairing = (next: Pairing | null) => {
@@ -391,7 +409,7 @@ export default function App() {
     } catch (err) {
       if (err instanceof HttpError && err.code === 'not_paired') {
         savePairing(null);
-        setConnectError('This device is no longer paired with the PC. Scan its QR code or enter a new pairing code.');
+        setConnectError('Device is no longer paired with this PC. Scan the desktop QR code to pair again.');
         setStatus('disconnected');
       } else {
         setStatus('error');
@@ -472,7 +490,7 @@ export default function App() {
             timestamp: msg.timestamp * 1000
           }]);
 
-          // Automatically download small images (< 25 MB) only if PC is trusted
+          // Automatically download small images (< 25 MB) if PC is trusted
           if (trust && kind === 'image' && msg.payload.totalSize < 25 * 1024 * 1024) {
             setTimeout(() => {
               handleDownload(msg.id, fileInfo, false);
@@ -523,7 +541,7 @@ export default function App() {
     return () => transport.disconnect();
   }, []);
 
-  // Android foreground resume auto-reconnect & clipboard sync
+  // Foreground resume auto-reconnect
   useEffect(() => {
     const handleVisibilityChange = async () => {
       if (document.visibilityState === 'visible') {
@@ -549,54 +567,85 @@ export default function App() {
               };
               transport.send(JSON.stringify(msg));
             }
-          } catch {
-            // Permission denied or clipboard empty
-          }
+          } catch {}
         }
       }
     };
+
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, []);
 
-  // Global paste handler: paste images/files from clipboard (Ctrl+V anywhere in app)
-  useEffect(() => {
-    const handleWindowPaste = (e: ClipboardEvent) => {
-      const files = Array.from(e.clipboardData?.files || []);
-      if (files.length > 0) {
-        e.preventDefault();
-        files.forEach(sendFile);
-        showToast(`Uploading ${files.length} pasted file${files.length > 1 ? 's' : ''}`, 'success');
-      }
-    };
-    window.addEventListener('paste', handleWindowPaste);
-    return () => window.removeEventListener('paste', handleWindowPaste);
-  }, []);
+  const handleDownload = async (id: string, file: NonNullable<TransferItem['file']>, saveToDisk = true) => {
+    updateFile(id, { isDownloading: true, progress: 0, error: undefined });
 
-  // QR Code Scanner setup and back button handler
+    if (saveToDisk && usesDirectDownload(file)) {
+      try {
+        const url = await api.directDownloadUrl(file.transferId);
+        const enqueued = await downloadWithSystemManager(url, file.filename);
+        if (enqueued) {
+          updateFile(id, { isDownloading: false, progress: 100 });
+          showToast(`Direct download queued in system manager: ${file.filename}`, 'success');
+          return;
+        }
+      } catch (err) {
+        console.warn('System download manager failed, falling back to encrypted chunk download', err);
+      }
+    }
+
+    try {
+      const blob = await downloadEncrypted(api, {
+        transferId: file.transferId,
+        totalChunks: file.totalChunks,
+        totalSize: file.totalSize
+      }, (received, speed, eta) => {
+        const pct = file.totalSize > 0 ? (received / file.totalSize) * 100 : 100;
+        updateFile(id, { progress: pct, speed, eta });
+      });
+
+      const url = URL.createObjectURL(blob);
+      const isImg = file.mediaKind === 'image' || isImageFilename(file.filename);
+      let thumb: string | undefined = undefined;
+
+      if (isImg) {
+        thumb = await generateThumbnailDataUrl(blob);
+      }
+      await saveBlobToCache(file.transferId, blob);
+      updateFile(id, { isDownloading: false, progress: 100, blobUrl: url, thumbnailUrl: thumb });
+
+      if (saveToDisk) {
+        await saveToDeviceDownloads(blob, file.filename);
+        showToast(`Saved ${file.filename} to Downloads`, 'success');
+      }
+    } catch (err) {
+      updateFile(id, {
+        isDownloading: false,
+        error: err instanceof Error ? err.message : 'Download failed'
+      });
+      showToast(`Failed to download ${file.filename}`, 'warning');
+    }
+  };
+
+  // QR scanner lifecycle
   useEffect(() => {
     if (!isScanning) return;
+    setCameraError('');
 
     const unregisterBack = backButtonManager.push(() => {
       setIsScanning(false);
       return true;
     });
 
-    setCameraError('');
     const html5QrCode = new Html5Qrcode('qr-reader');
     html5QrCode.start(
       { facingMode: 'environment' },
       { fps: 10, qrbox: { width: 250, height: 250 } },
       (decodedText) => {
-        html5QrCode.stop().then(() => setIsScanning(false)).catch(() => { });
+        html5QrCode.stop().catch(() => { });
+        setIsScanning(false);
         const link = parsePairingLink(decodedText);
-        setAddress(link.host);
         if (link.code) {
-          pairAndConnect(link.host, link.code, link.scheme || 'http', link.cert);
-        } else if (api.pairing) {
-          localStorage.setItem('p2p_address', link.host);
-          localStorage.setItem('p2p_auto_connect', 'true');
-          connectTo(link.host).catch(console.error);
+          pairAndConnect(link.host, link.code, link.scheme, link.cert);
         } else {
           pairAndConnect(link.host);
         }
@@ -616,28 +665,12 @@ export default function App() {
     };
   }, [isScanning]);
 
-  // Scroll to bottom smoothly only when a new message is added and user is near bottom
-  useEffect(() => {
-    if (status === 'connected') {
-      const isNew = messages.length > prevMsgCountRef.current;
-      prevMsgCountRef.current = messages.length;
-      if (isNew) {
-        const last = messages[messages.length - 1];
-        if (last?.sender === 'me' || isNearBottomRef.current) {
-          setTimeout(() => {
-            messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-          }, 35);
-        }
-      }
-    }
-  }, [messages.length, status]);
-
   const handleConnect = async (e: React.FormEvent) => {
     e.preventDefault();
     const raw = address.trim().replace(/^https?:\/\//, '').split('/')[0];
     if (!raw || raw === 'localhost:8080' || raw === 'localhost' || raw.startsWith('127.0.0.1')) {
       if (Capacitor.isNativePlatform()) {
-        setConnectError('Please enter your PC IP address (shown in PC terminal, e.g. 10.3.95.16:8080) or tap "Scan QR Code".');
+        setConnectError('Please enter your desktop LAN IP address (e.g. 192.168.1.15:8080) or tap "Scan QR Code".');
         return;
       }
     }
@@ -657,14 +690,10 @@ export default function App() {
     localStorage.setItem('p2p_auto_connect', 'false');
     transport.disconnect();
     setStatus('disconnected');
-    showToast('Disconnected from PC', 'info');
+    showToast('Disconnected from desktop', 'info');
   };
 
-  const handleSend = (e: React.FormEvent) => {
-    e.preventDefault();
-    const text = inputValue.trim();
-    if (!text) return;
-
+  const handleSendText = (text: string) => {
     const id = `msg-${Date.now()}`;
     const timestamp = Math.floor(Date.now() / 1000);
 
@@ -691,19 +720,9 @@ export default function App() {
       timestamp: Date.now(),
       isPending: !isConnected
     }]);
-
-    setInputValue('');
+    showToast('Sent to desktop', 'success');
   };
 
-  // Keyboard shortcut in message input: Enter to send, Shift+Enter for newline
-  const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend(e);
-    }
-  };
-
-  // Handle single or multi-file selection from file picker
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
@@ -776,7 +795,6 @@ export default function App() {
     let fullContent: string | undefined = undefined;
     let totalLines: number | undefined = undefined;
 
-    // Immediately create preview blob/snippet for sent files
     if (kind === 'image' && file.size < 50 * 1024 * 1024) {
       blobUrl = URL.createObjectURL(file);
       thumbnailUrl = await generateThumbnailDataUrl(file);
@@ -800,366 +818,283 @@ export default function App() {
         error: p.error,
         ...progress
       });
-      if (p.status === 'done' || p.status === 'canceled') uploads.delete(msgId);
+      if (p.status === 'done' || p.status === 'canceled' || p.status === 'error') {
+        uploads.delete(msgId);
+      }
     });
+
     uploads.set(msgId, upload);
 
-    const resumedFrom = messages.find(m => m.id === msgId)?.file;
-    setMessages(prev => [...prev.filter(m => m.id !== msgId), {
-      id: msgId,
-      file: {
-        filename: file.name,
-        transferId,
-        totalSize: file.size,
-        totalChunks: upload.totalChunks,
-        chunkSize: CHUNK_SIZE,
-        status: 'queued',
-        progress: resumedFrom?.status === 'interrupted' ? resumedFrom.progress : 0,
-        blobUrl,
-        thumbnailUrl,
-        mediaKind: kind,
-        snippet,
-        fullContent,
-        totalLines
-      },
-      sender: 'me',
-      timestamp: Date.now()
-    }]);
+    setMessages(prev => {
+      const existing = prev.findIndex(m => m.id === msgId);
+      const entry: TransferItem = {
+        id: msgId,
+        sender: 'me',
+        timestamp: Date.now(),
+        file: {
+          filename: file.name,
+          transferId,
+          totalSize: file.size,
+          totalChunks: upload.totalChunks,
+          chunkSize: CHUNK_SIZE,
+          status: upload.status,
+          blobUrl,
+          thumbnailUrl,
+          mediaKind: kind,
+          snippet,
+          fullContent,
+          totalLines
+        }
+      };
+      if (existing >= 0) {
+        const next = [...prev];
+        next[existing] = entry;
+        return next;
+      }
+      return [...prev, entry];
+    });
 
     uploadQueue.enqueue(upload);
   };
 
-  const uploadLabel = (file: NonNullable<ChatMessage['file']>) => {
-    const percent = `${Math.floor(file.progress || 0)}%`;
-    switch (file.status) {
-      case 'queued': return 'Queued in batch...';
-      case 'uploading':
-        return `Uploading ${percent}${file.speed ? ` • ${formatSpeed(file.speed)}` : ''}${file.eta ? ` • ${file.eta}` : ''}`;
-      case 'paused': return `Paused • ${percent}`;
-      case 'error': return `Stalled at ${percent} • ${file.error || 'connection lost'}`;
-      case 'interrupted': return `Interrupted at ${percent} • select again to resume`;
-      case 'canceled': return 'Cancelled';
-      default: return '';
-    }
-  };
-
-  const handleDownload = async (msgId: string, file: NonNullable<ChatMessage['file']>, save = false) => {
-    if (!file || file.isDownloading) return;
-    const isPreview = !save;
-    if (isPreview && file.blobUrl) return;
-
-    // If saving and already cached or loaded, save directly to Downloads!
-    if (!isPreview && file.blobUrl) {
-      try {
-        let blob = await getBlobFromCache(file.transferId);
-        if (!blob) {
-          const resp = await fetch(file.blobUrl);
-          blob = await resp.blob();
-        }
-        if (blob) {
-          await saveToDeviceDownloads(blob, file.filename);
-          showToast(`Saved ${file.filename} to Downloads`, 'success');
-          return;
-        }
-      } catch (err) {
-        console.warn('Direct save from cache failed, falling back:', err);
-      }
-    }
-
-    if (usesDirectDownload(file) && !isPreview) {
-      const directUrl = await api.directDownloadUrl(file.transferId);
-      await downloadWithSystemManager(directUrl, file.filename);
-      updateFile(msgId, { progress: 100 });
-      showToast(`Downloading ${file.filename} to Downloads...`, 'info');
-      return;
-    }
-
-    updateFile(msgId, { isDownloading: true, progress: 0, speed: 0, eta: undefined, error: undefined });
-    try {
-      const blob = await downloadEncrypted(api, file, (received, speed, eta) => {
-        updateFile(msgId, {
-          progress: file.totalSize ? (received / file.totalSize) * 100 : 100,
-          speed,
-          eta
-        });
-      });
-
-      const kind = file.mediaKind || getMediaKind(file.filename);
-      const blobUrl = URL.createObjectURL(blob);
-      let thumbnailUrl: string | undefined = undefined;
-
-      if (kind === 'image') {
-        thumbnailUrl = await generateThumbnailDataUrl(blob);
-      }
-      saveBlobToCache(file.transferId, blob);
-
-      let snippet: string | undefined;
-      let fullContent: string | undefined;
-      let totalLines: number | undefined;
-
-      if (kind === 'code') {
-        const extracted = await extractTextSnippet(blob);
-        snippet = extracted.snippet;
-        fullContent = extracted.fullContent;
-        totalLines = extracted.totalLines;
-      }
-
-      if (isPreview) {
-        updateFile(msgId, {
-          isDownloading: false,
-          progress: 100,
-          blobUrl,
-          thumbnailUrl: thumbnailUrl || file.thumbnailUrl,
-          snippet,
-          fullContent,
-          totalLines,
-          speed: 0,
-          eta: undefined
-        });
-      } else {
-        await saveToDeviceDownloads(blob, file.filename);
-        updateFile(msgId, {
-          isDownloading: false,
-          progress: 100,
-          blobUrl: file.blobUrl || blobUrl,
-          thumbnailUrl: thumbnailUrl || file.thumbnailUrl,
-          snippet,
-          fullContent,
-          totalLines,
-          speed: 0,
-          eta: undefined
-        });
-        showToast(`Saved ${file.filename} to Downloads`, 'success');
-      }
-    } catch (err) {
-      console.error('Download failed', err);
-      updateFile(msgId, {
-        isDownloading: false,
-        progress: 0,
-        speed: 0,
-        eta: undefined,
-        error: err instanceof Error ? err.message : 'Download failed'
-      });
-      showToast('Download failed', 'warning');
-    }
-  };
-
-  const formatTime = (ts: number) => {
-    return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  };
-
-  // Batch control handlers
   const handleBatchPauseAll = () => {
-    uploadQueue.pauseAll();
     setIsBatchPaused(true);
-    showToast('Paused all uploads', 'info');
+    uploadQueue.pauseAll();
+    showToast('Paused all transfers', 'info');
   };
 
   const handleBatchResumeAll = () => {
-    // Re-enqueue all paused uploads
-    for (const [msgId, upload] of Array.from(uploads.entries())) {
-      if (upload.status === 'paused' || upload.status === 'error') {
-        uploadQueue.enqueue(upload);
-        updateFile(msgId, { status: 'queued' });
-      }
-    }
     setIsBatchPaused(false);
-    showToast('Resuming uploads', 'info');
+    uploadQueue.resumeInterrupted(uploads.values());
+    showToast('Resumed transfers', 'info');
   };
 
   const handleBatchCancelAll = () => {
     uploadQueue.cancelAll();
     uploads.clear();
-    setIsBatchPaused(false);
-    showToast('Cancelled batch transfers', 'info');
+    setMessages(prev => prev.map(m => m.file?.status && ACTIVE_UPLOAD.includes(m.file.status)
+      ? { ...m, file: { ...m.file, status: 'canceled', speed: 0 } }
+      : m));
+    showToast('Canceled all active transfers', 'info');
   };
 
-  const getFileExt = (filename: string) => {
-    const idx = filename.lastIndexOf('.');
-    if (idx <= 0 || idx === filename.length - 1) return 'FILE';
-    return filename.slice(idx + 1).toUpperCase().slice(0, 4);
-  };
+  // Filter messages
+  const filteredMessages = messages.filter(m => {
+    if (filter === 'received') return m.sender === 'other';
+    if (filter === 'sent') return m.sender === 'me';
+    return true;
+  });
 
-  const getItemTypeLabel = (msg: ChatMessage) => {
-    if (msg.isClipboard) return 'Clipboard';
-    if (msg.file) {
-      const k = msg.file.mediaKind || getMediaKind(msg.file.filename);
-      if (k === 'image') return 'Image';
-      if (k === 'audio') return 'Audio';
-      if (k === 'video') return 'Video';
-      if (k === 'pdf') return 'PDF';
-      if (k === 'code') return 'Code';
-      return getFileExt(msg.file.filename);
-    }
-    return 'Text';
-  };
+  // Group filtered messages by date
+  const groupedMessages = filteredMessages.reduce<Record<string, TransferItem[]>>((acc, msg) => {
+    const group = getDateGroup(msg.timestamp);
+    if (!acc[group]) acc[group] = [];
+    acc[group].push(msg);
+    return acc;
+  }, {});
 
-  // Render Setup / Pairing Screen when disconnected
+  const dateGroupOrder: Array<'Today' | 'Yesterday' | 'Earlier this week' | 'Older'> = [
+    'Today',
+    'Yesterday',
+    'Earlier this week',
+    'Older'
+  ];
+
+  // ==========================================
+  // VIEW: Connection & Setup Screen
+  // ==========================================
   if (status !== 'connected') {
     return (
       <div className="app-container">
         <ToastContainer toasts={toasts} onDismiss={dismissToast} />
-        <header className="header">
-          <div className="header-left">
-            <div className="brand-badge">
-              <Wifi size={16} />
+
+        {/* Minimalist Compact Header */}
+        <header className="app-header">
+          <div className="header-brand">
+            <div className="brand-icon-box">
+              <ArrowDownUp size={16} />
             </div>
-            <div className="header-brand-stack">
-              <span className="header-title">P2P Link</span>
-              <span className="header-subtitle">Encrypted Local Transfer</span>
+            <div className="brand-text-box">
+              <span className="brand-name">P2P Link</span>
+              <span className="brand-caption">Local Transfer</span>
             </div>
           </div>
-          <div className="status-indicator">
-            <div className={`status-dot ${status}`}></div>
-            <span>{status === 'connecting' ? 'Connecting' : 'Standby'}</span>
+
+          <div className="header-status-pill">
+            <span className={`status-dot ${status}`} />
+            <span className="status-label">
+              {status === 'connecting' ? 'Connecting...' : status === 'error' ? 'Failed' : 'Standby'}
+            </span>
           </div>
         </header>
 
-        <main className="setup-screen">
-          <div className="card">
-            <div className="setup-hero-icon">
-              <Smartphone size={26} />
+        {/* Connection Setup Content */}
+        <main className="connection-screen">
+          <div className="connection-card">
+            <div className="connection-hero-icon">
+              <Laptop size={28} />
             </div>
 
             {isScanning ? (
-              <div>
-                <h2 style={{ marginBottom: '0.5rem', fontSize: '1.25rem' }}>Scan PC QR Code</h2>
-                <p style={{ fontSize: '0.84rem', color: 'var(--text-secondary)', marginBottom: '1.25rem' }}>
-                  Point your camera at the QR code shown in the desktop terminal
+              <div className="scanner-container">
+                <h2 className="scanner-title">Scan Desktop QR Code</h2>
+                <p className="scanner-subtitle">
+                  Point camera at the QR code displayed in your PC terminal
                 </p>
-                <div id="qr-reader" style={{ width: '100%', marginBottom: '1.25rem', borderRadius: '14px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)' }}></div>
+                <div id="qr-reader" className="qr-viewport" />
                 <button
+                  type="button"
                   onClick={() => setIsScanning(false)}
-                  className="secondary-btn"
-                  style={{ width: '100%' }}
+                  className="btn btn-secondary full-width"
                 >
                   Cancel Scanner
                 </button>
               </div>
             ) : (
               <>
-                <h2 className="setup-title">{pairing ? 'Connect to Desktop' : 'Link New Device'}</h2>
-                <div className="setup-description">
+                <h2 className="connection-title">Connect to Desktop</h2>
+                <p className="connection-subtitle">
                   {pairing ? (
                     <>
-                      Linked with <span className="setup-peer-highlight">{pairing.serverName || 'Desktop PC'}</span> as <span className="setup-peer-highlight">{pairing.deviceName}</span>
+                      Linked with <strong className="peer-highlight">{pairing.serverName || 'Desktop PC'}</strong> as <strong>{pairing.deviceName}</strong>
                     </>
                   ) : (
-                    'Scan the QR code in your desktop terminal or enter the local IP address below.'
+                    'Scan the QR code shown in your PC terminal to pair instantly over local Wi-Fi.'
                   )}
-                </div>
+                </p>
 
                 {cameraError && (
-                  <div className="setup-alert">
+                  <div className="connection-alert error">
                     {cameraError}
                   </div>
                 )}
 
                 {connectError && !cameraError && (
-                  <div className="setup-alert">
+                  <div className="connection-alert error">
                     {connectError}
                   </div>
                 )}
 
+                {/* Primary QR Action */}
                 <button
+                  type="button"
                   onClick={() => setIsScanning(true)}
-                  className="qr-scan-btn"
+                  className="btn btn-primary btn-large full-width"
                 >
                   <QrCode size={18} />
                   <span>{pairing ? 'Scan QR to Reconnect' : 'Scan QR Code'}</span>
                 </button>
 
+                {/* Discovered Devices on Wi-Fi */}
                 {discoveredDevices.length > 0 && (
-                  <div className="discovered-section">
-                    <div className="discovered-header">
-                      <Wifi size={14} color="#38bdf8" />
-                      <span>Discovered on Wi-Fi (No Typing Needed)</span>
+                  <div className="discovered-block">
+                    <div className="section-label">
+                      <Wifi size={13} />
+                      <span>DISCOVERED ON LOCAL NETWORK</span>
                     </div>
-                    {discoveredDevices.map(d => (
-                      <div key={`${d.host}:${d.port}`} className="discovered-item">
-                        <div className="discovered-details">
-                          <span className="discovered-name">{d.serverName || d.name}</span>
-                          <span className="discovered-sub">{d.host}:{d.port} {d.scheme === 'https' ? '• TLS' : ''}</span>
+                    <div className="discovered-list">
+                      {discoveredDevices.map(d => (
+                        <div key={`${d.host}:${d.port}`} className="discovered-card">
+                          <div className="discovered-meta">
+                            <span className="discovered-name">{d.serverName || d.name}</span>
+                            <span className="discovered-address">{d.host}:{d.port} {d.scheme === 'https' ? '• TLS' : ''}</span>
+                          </div>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-compact"
+                            onClick={() => {
+                              const targetHost = `${d.host}:${d.port}`;
+                              setAddress(targetHost);
+                              if (pairing) {
+                                localStorage.setItem('p2p_address', targetHost);
+                                localStorage.setItem('p2p_auto_connect', 'true');
+                                connectTo(targetHost).catch(console.error);
+                              } else {
+                                pairAndConnect(targetHost, undefined, d.scheme, d.cert);
+                              }
+                            }}
+                          >
+                            Connect
+                          </button>
                         </div>
-                        <button
-                          type="button"
-                          className="discovered-btn"
-                          onClick={() => {
-                            const targetHost = `${d.host}:${d.port}`;
-                            setAddress(targetHost);
-                            if (pairing) {
-                              localStorage.setItem('p2p_address', targetHost);
-                              localStorage.setItem('p2p_auto_connect', 'true');
-                              connectTo(targetHost).catch(console.error);
-                            } else {
-                              pairAndConnect(targetHost, undefined, d.scheme, d.cert);
-                            }
-                          }}
-                        >
-                          Connect
-                        </button>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
                 )}
 
                 {discoveryTip && discoveredDevices.length === 0 && (
-                  <div className="discovery-tip-card">
+                  <div className="discovery-tip-box">
                     <span>{discoveryTip}</span>
                   </div>
                 )}
 
-                <div className="setup-divider">
+                {/* Manual Address Section */}
+                <div className="section-divider">
                   <span>OR MANUAL ADDRESS</span>
                 </div>
 
-                <form onSubmit={handleConnect}>
-                  <div className="input-group">
-                    <label>Desktop IP & Port</label>
+                <form onSubmit={handleConnect} className="manual-form">
+                  <div className="form-field">
+                    <label className="form-label">Desktop IP & Port</label>
                     <input
                       type="text"
-                      className="text-input mono-input"
+                      className="form-input form-input-mono"
                       value={address}
                       onChange={e => setAddress(e.target.value)}
-                      placeholder="e.g. 10.3.95.16:8080"
+                      placeholder="e.g. 192.168.1.15:8080"
                     />
                   </div>
+
                   {!pairing && (
-                    <div className="input-group">
-                      <label>Device Name</label>
+                    <div className="form-field">
+                      <label className="form-label">Device Name</label>
                       <input
                         type="text"
-                        className="text-input"
+                        className="form-input"
                         value={deviceName}
                         onChange={e => setDeviceName(e.target.value)}
                         maxLength={40}
                       />
                     </div>
                   )}
+
                   <button
                     type="submit"
-                    className="primary-btn"
+                    className="btn btn-secondary full-width"
                     disabled={status === 'connecting'}
                   >
-                    {status === 'connecting' ? (pairing ? 'Connecting...' : 'Awaiting PC approval...') : !pairing ? 'Pair & Connect' : 'Connect via Wi-Fi'}
+                    {status === 'connecting'
+                      ? (pairing ? 'Connecting...' : 'Awaiting PC approval...')
+                      : !pairing
+                      ? 'Pair & Connect'
+                      : 'Connect via IP'}
                   </button>
 
                   {pairing && (
                     <button
                       type="button"
-                      onClick={async () => {
-                        if (window.confirm('Forget and unpair this PC? You will need to scan the QR code to pair again.')) {
-                          try {
-                            await api.unpair();
-                          } catch {}
-                          savePairing(null);
-                          showToast('Device forgotten and unpaired', 'info');
-                        }
+                      onClick={() => {
+                        setConfirmDialog({
+                          isOpen: true,
+                          title: 'Forget This Desktop PC?',
+                          message: 'This device will be unpaired and keys revoked. You will need to scan the desktop QR code to pair again.',
+                          confirmLabel: 'Forget & Unpair',
+                          variant: 'danger',
+                          icon: 'unlink',
+                          onConfirm: async () => {
+                            setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+                            try {
+                              await api.unpair();
+                            } catch {}
+                            savePairing(null);
+                            showToast('Device unpaired', 'info');
+                          }
+                        });
                       }}
-                      className="secondary-btn"
-                      style={{ marginTop: '0.75rem', width: '100%', color: '#ff453a', borderColor: 'rgba(255, 69, 58, 0.3)' }}
+                      className="forget-device-btn"
                     >
-                      Forget This PC
+                      <Unlink size={13} />
+                      <span>Forget This PC</span>
                     </button>
                   )}
                 </form>
@@ -1167,11 +1102,24 @@ export default function App() {
             )}
           </div>
         </main>
+
+        <ConfirmationDialog
+          isOpen={confirmDialog.isOpen}
+          title={confirmDialog.title}
+          message={confirmDialog.message}
+          confirmLabel={confirmDialog.confirmLabel}
+          variant={confirmDialog.variant}
+          icon={confirmDialog.icon}
+          onConfirm={confirmDialog.onConfirm}
+          onCancel={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
+        />
       </div>
     );
   }
 
-  // Connected Workspace & Transfer Interface
+  // ==========================================
+  // VIEW: Connected Transfer Activity Workspace
+  // ==========================================
   return (
     <div
       className="app-container"
@@ -1182,6 +1130,7 @@ export default function App() {
     >
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
+      {/* Lightbox Image Preview */}
       {lightboxImage && (
         <Lightbox
           src={lightboxImage.src}
@@ -1192,76 +1141,53 @@ export default function App() {
         />
       )}
 
+      {/* Full-Window Drag & Drop Overlay */}
       {isDragging && (
-        <div className="drop-overlay">
-          <UploadCloud size={44} color="var(--accent-color)" />
-          <span style={{ fontSize: '1.1rem' }}>Drop files to transfer instantly</span>
-          <span style={{ fontSize: '0.85rem', opacity: 0.8 }}>End-to-end encrypted direct stream</span>
+        <div className="drop-target-overlay">
+          <UploadCloud size={40} className="drop-icon" />
+          <span className="drop-primary-text">Drop files to transfer</span>
+          <span className="drop-sub-text">Direct end-to-end encrypted transfer</span>
         </div>
       )}
 
-      <header className="header">
-        <div className="header-left">
-          <div className="brand-badge connected">
-            <Wifi size={16} />
+      {/* 1. Polished Header */}
+      <header className="app-header">
+        <div className="header-brand">
+          <div className="brand-icon-box connected">
+            <ArrowDownUp size={16} />
           </div>
-          <div className="header-brand-stack">
-            <div className="header-title-row">
-              <span className="header-title">P2P Link</span>
-              <span className="e2e-badge" title="End-to-End Encrypted">
+          <div className="brand-text-box">
+            <div className="brand-title-row">
+              <span className="brand-name">P2P Link</span>
+              <span className="security-badge" title="End-to-End Encrypted">
                 <Lock size={10} />
                 <span>E2EE</span>
               </span>
             </div>
-            <div className="header-peer-row">
-              <span className="peer-dot" />
+            <div className="brand-peer-row">
+              <span className="peer-live-dot" />
               <span className="peer-name">{pairing?.serverName || 'Desktop PC'}</span>
             </div>
           </div>
         </div>
 
-        <div className="header-actions">
+        <div className="header-actions-box">
           <button
             type="button"
             onClick={() => setIsMenuOpen(o => !o)}
-            className="header-icon-btn"
-            title="Options & History"
+            className="header-action-btn"
+            title="Menu & Options"
+            aria-label="Menu"
           >
             <MoreVertical size={18} />
           </button>
 
           {isMenuOpen && (
             <>
-              <div className="menu-backdrop" onClick={() => setIsMenuOpen(false)} />
-              <div className="header-dropdown-menu">
-                <button
-                  type="button"
-                  className="menu-item"
-                  onClick={() => {
-                    const next = !isPcTrusted;
-                    setIsPcTrusted(next);
-                    localStorage.setItem('p2p_trust_pc', next ? 'true' : 'false');
-                    showToast(next ? 'PC marked as trusted (auto-accept)' : 'Transfers require approval', 'info');
-                    setIsMenuOpen(false);
-                  }}
-                >
-                  {isPcTrusted ? <ShieldCheck size={16} color="#32d74b" /> : <ShieldAlert size={16} color="#ffd60a" />}
-                  <span>{isPcTrusted ? 'Auto-Accept Transfers' : 'Require Approval'}</span>
-                </button>
-                <button
-                  type="button"
-                  className="menu-item"
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    if (window.confirm('Clear transfer history on this device?')) {
-                      setMessages(prev => prev.filter(m => uploads.has(m.id)));
-                      showToast('Transfer history cleared', 'info');
-                    }
-                  }}
-                >
-                  <Trash2 size={16} />
-                  <span>Clear History</span>
-                </button>
+              <div className="menu-scrim" onClick={() => setIsMenuOpen(false)} />
+              <div className="overflow-menu-dropdown">
+                {/* Connection Section */}
+                <div className="menu-group-header">CONNECTION</div>
                 <button
                   type="button"
                   className="menu-item"
@@ -1270,27 +1196,114 @@ export default function App() {
                     handleDisconnect();
                   }}
                 >
-                  <LogOut size={16} />
+                  <LogOut size={15} />
                   <span>Disconnect</span>
                 </button>
-                <div className="menu-divider" />
+
+                {/* Transfer Preferences */}
+                <div className="menu-group-header">PREFERENCES</div>
                 <button
                   type="button"
-                  className="menu-item danger"
-                  onClick={async () => {
+                  className="menu-item"
+                  onClick={() => {
+                    const next = !isPcTrusted;
+                    setIsPcTrusted(next);
+                    localStorage.setItem('p2p_trust_pc', next ? 'true' : 'false');
+                    showToast(next ? 'Auto-accept enabled' : 'Manual approval required', 'info');
                     setIsMenuOpen(false);
-                    if (window.confirm('Forget and unpair this PC? You will need to scan the QR code to pair again.')) {
-                      try {
-                        await api.unpair();
-                      } catch {}
-                      savePairing(null);
-                      transport.disconnect();
-                      setStatus('disconnected');
-                      showToast('Device unpaired and access revoked', 'info');
-                    }
                   }}
                 >
-                  <Unlink size={16} />
+                  {isPcTrusted ? <ShieldCheck size={15} color="var(--success)" /> : <ShieldAlert size={15} />}
+                  <span>{isPcTrusted ? 'Auto-Accept: Enabled' : 'Auto-Accept: Disabled'}</span>
+                </button>
+
+                {/* Appearance */}
+                <div className="menu-group-header">APPEARANCE</div>
+                <div className="theme-toggle-row">
+                  <button
+                    type="button"
+                    className={`theme-toggle-btn ${theme === 'light' ? 'active' : ''}`}
+                    onClick={() => setTheme('light')}
+                    title="Light Theme"
+                  >
+                    <Sun size={14} />
+                    <span>Light</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`theme-toggle-btn ${theme === 'dark' ? 'active' : ''}`}
+                    onClick={() => setTheme('dark')}
+                    title="Dark Theme"
+                  >
+                    <Moon size={14} />
+                    <span>Dark</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`theme-toggle-btn ${theme === 'system' ? 'active' : ''}`}
+                    onClick={() => setTheme('system')}
+                    title="Match System"
+                  >
+                    <Monitor size={14} />
+                    <span>System</span>
+                  </button>
+                </div>
+
+                {/* History Section */}
+                <div className="menu-group-header">HISTORY</div>
+                <button
+                  type="button"
+                  className="menu-item"
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    setConfirmDialog({
+                      isOpen: true,
+                      title: 'Clear Transfer History?',
+                      message: 'This removes transfer records on this device. Files saved in Downloads will not be deleted.',
+                      confirmLabel: 'Clear History',
+                      variant: 'danger',
+                      icon: 'trash',
+                      onConfirm: () => {
+                        setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+                        setMessages(prev => prev.filter(m => uploads.has(m.id)));
+                        showToast('Transfer history cleared', 'info');
+                      }
+                    });
+                  }}
+                >
+                  <Trash2 size={15} />
+                  <span>Clear History</span>
+                </button>
+
+                <div className="menu-separator" />
+
+                {/* Device Management */}
+                <button
+                  type="button"
+                  className="menu-item menu-item-danger"
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    setConfirmDialog({
+                      isOpen: true,
+                      title: 'Forget This Desktop PC?',
+                      message: 'This device will be unpaired and keys revoked. You will need to scan the desktop QR code to pair again.',
+                      confirmLabel: 'Forget & Unpair',
+                      variant: 'danger',
+                      icon: 'unlink',
+                      onConfirm: async () => {
+                        setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+                        try {
+                          await api.unpair();
+                        } catch {}
+                        savePairing(null);
+                        transport.disconnect();
+                        setStatus('disconnected');
+                        showToast('Device forgotten and unpaired', 'info');
+                      }
+                    });
+                  }}
+                >
+                  <Unlink size={15} />
                   <span>Forget This PC</span>
                 </button>
               </div>
@@ -1299,7 +1312,43 @@ export default function App() {
         </div>
       </header>
 
-      <main className="chat-container" ref={chatContainerRef} onScroll={handleContainerScroll}>
+      {/* 2. Sub-Header Toolbar: Transfer History Title & Filter Segment */}
+      <div className="workspace-sub-header">
+        <div className="sub-header-title-row">
+          <h1 className="screen-heading">Transfer history</h1>
+          <span className="transfer-count-badge">
+            {messages.length} {messages.length === 1 ? 'item' : 'items'}
+          </span>
+        </div>
+
+        {/* Segmented Filter Control */}
+        <div className="segmented-filter-bar">
+          <button
+            type="button"
+            className={`filter-segment-btn ${filter === 'all' ? 'active' : ''}`}
+            onClick={() => setFilter('all')}
+          >
+            All
+          </button>
+          <button
+            type="button"
+            className={`filter-segment-btn ${filter === 'received' ? 'active' : ''}`}
+            onClick={() => setFilter('received')}
+          >
+            Received
+          </button>
+          <button
+            type="button"
+            className={`filter-segment-btn ${filter === 'sent' ? 'active' : ''}`}
+            onClick={() => setFilter('sent')}
+          >
+            Sent
+          </button>
+        </div>
+      </div>
+
+      {/* 3. Main Transfer Activity List */}
+      <main className="activity-scroll-area">
         {batchStats.totalCount > 1 && (
           <BatchProgress
             activeCount={batchStats.activeCount + batchStats.pendingCount}
@@ -1315,326 +1364,128 @@ export default function App() {
           />
         )}
 
-        <div className="message-list">
-          <div style={{ flex: '1 1 auto', minHeight: '0.25rem' }} />
-          {messages.length === 0 && (
-            <div className="empty-state">
-              <div className="empty-radar-glow">
-                <div className="radar-ring radar-ring-1" />
-                <div className="radar-ring radar-ring-2" />
-                <div className="radar-center">
-                  <Wifi size={24} color="#38bdf8" />
-                </div>
-              </div>
-              <h3>Linked with {pairing?.serverName || 'Desktop'}</h3>
-              <p>Transfer files, photos, clipboard snippets, or text directly over local Wi-Fi.</p>
-              <div className="empty-quick-actions">
-                <button type="button" onClick={() => fileInputRef.current?.click()} className="quick-action-pill">
-                  <Paperclip size={14} /> Select Files to Send
-                </button>
-              </div>
+        {/* Empty State */}
+        {filteredMessages.length === 0 && (
+          <div className="empty-state-card">
+            <div className="empty-icon-circle">
+              <ArrowDownUp size={24} />
             </div>
-          )}
+            <h3 className="empty-title">
+              {messages.length === 0
+                ? 'No transfers yet'
+                : `No ${filter} transfers`}
+            </h3>
+            <p className="empty-description">
+              {messages.length === 0
+                ? `Files and text transferred between your phone and ${pairing?.serverName || 'Desktop'} will appear here.`
+                : `No transfers match the "${filter}" filter.`}
+            </p>
+            {messages.length === 0 && (
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="btn btn-secondary btn-compact"
+              >
+                Send Files
+              </button>
+            )}
+          </div>
+        )}
 
-          {messages.map(msg => {
-            const isSent = msg.sender === 'me';
-            const isImageFile = msg.file && (msg.file.mediaKind === 'image' || (!msg.file.mediaKind && /\.(jpg|jpeg|png|gif|webp|svg|bmp)$/i.test(msg.file.filename)));
+        {/* Date Grouped Activity Feed */}
+        {dateGroupOrder.map(group => {
+          const groupItems = groupedMessages[group];
+          if (!groupItems || groupItems.length === 0) return null;
 
-            return (
-              <div key={msg.id} className={`message-wrapper ${msg.sender} ${deletingIds.has(msg.id) ? 'deleting' : ''}`}>
-                <div className={`message ${msg.sender}`}>
-                  {/* Structured Transfer Card Header */}
-                  <div className="transfer-card-header">
-                    <div className="transfer-card-meta">
-                      <span className={`direction-badge ${isSent ? 'sent' : 'received'}`}>
-                        {isSent ? <ArrowUpRight size={12} /> : <ArrowDownLeft size={12} />}
-                        <span>{isSent ? 'Sent' : 'Received'}</span>
-                      </span>
-                      <span className="type-badge">{getItemTypeLabel(msg)}</span>
-                      <span className="timestamp-label">{formatTime(msg.timestamp)}</span>
-                      {msg.isPending && (
-                        <span className="pending-pill" title="Queued — will send when connected">
-                          <Clock size={10} />
-                          <span>Queued</span>
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="transfer-card-actions">
-                      {msg.text && (
-                        <button
-                          type="button"
-                          onClick={() => handleCopy(msg.text!)}
-                          className="card-action-pill"
-                          title="Copy text"
-                        >
-                          <Copy size={12} />
-                          <span>Copy</span>
-                        </button>
-                      )}
-                      {msg.file && (
-                        <button
-                          type="button"
-                          onClick={() => handleDownload(msg.id, msg.file!, true)}
-                          disabled={msg.file.isDownloading}
-                          className="card-action-pill accent"
-                          title="Save to Downloads"
-                        >
-                          <Download size={12} />
-                          <span>{msg.file.isDownloading ? `${Math.round(msg.file.progress || 0)}%` : 'Save'}</span>
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => handleDelete(msg.id)}
-                        className="msg-delete-btn"
-                        title="Remove item"
-                      >
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Text / Clipboard Payload */}
-                  {msg.text && (
-                    <div onClick={() => handleCopy(msg.text!)} className="transfer-text-block" title="Tap to copy">
-                      {msg.text}
-                    </div>
-                  )}
-
-                  {/* Per-Transfer Approval Box */}
-                  {msg.file && msg.file.isPendingApproval && (
-                    <div className="transfer-approval-box">
-                      <div className="transfer-approval-info">
-                        Incoming file from PC ({formatBytes(msg.file.totalSize)}). Accept transfer?
-                      </div>
-                      <div className="transfer-approval-btn-group">
-                        <button
-                          type="button"
-                          className="approval-btn danger"
-                          onClick={() => {
-                            handleDelete(msg.id);
-                            showToast('Transfer rejected', 'info');
-                          }}
-                        >
-                          Reject
-                        </button>
-                        <button
-                          type="button"
-                          className="approval-btn primary"
-                          onClick={() => {
-                            updateFile(msg.id, { isPendingApproval: false });
-                            handleDownload(msg.id, { ...msg.file!, isPendingApproval: false }, false);
-                          }}
-                        >
-                          Accept
-                        </button>
-                        <button
-                          type="button"
-                          className="approval-btn success"
-                          onClick={() => {
-                            setIsPcTrusted(true);
-                            localStorage.setItem('p2p_trust_pc', 'true');
-                            updateFile(msg.id, { isPendingApproval: false });
-                            showToast('PC marked as trusted device', 'success');
-                            handleDownload(msg.id, { ...msg.file!, isPendingApproval: false }, false);
-                          }}
-                        >
-                          Always Trust
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* File / Media Payload */}
-                  {msg.file && !msg.file.isPendingApproval && (
-                    <div className="transfer-file-container">
-                      {(msg.file.blobUrl || msg.file.thumbnailUrl) && isImageFile ? (
-                        <div
-                          className="image-preview-wrapper"
-                          onClick={() => {
-                            const src = msg.file!.blobUrl || msg.file!.thumbnailUrl!;
-                            setLightboxImage({
-                              src,
-                              filename: msg.file!.filename,
-                              fileSize: msg.file!.totalSize,
-                              onDownload: () => handleDownload(msg.id, msg.file!, true)
-                            });
-                          }}
-                        >
-                          <img
-                            src={msg.file.blobUrl || msg.file.thumbnailUrl}
-                            alt={msg.file.filename}
-                            loading="lazy"
-                            onError={() => {
-                              getBlobFromCache(msg.file!.transferId).then(blob => {
-                                if (blob) {
-                                  updateFile(msg.id, { blobUrl: URL.createObjectURL(blob) });
-                                }
-                              });
-                            }}
-                          />
-                          <div className="image-preview-caption">
-                            <span className="image-caption-name">{msg.file.filename}</span>
-                            <span className="image-caption-size">{formatBytes(msg.file.totalSize || 0)}</span>
-                          </div>
-                          <div className="image-preview-overlay">
-                            <ZoomIn size={16} />
-                            <span>Inspect</span>
-                          </div>
-                        </div>
-                      ) : msg.file.blobUrl && msg.file.mediaKind === 'audio' ? (
-                        <AudioPlayer
-                          src={msg.file.blobUrl}
-                          filename={msg.file.filename}
-                          fileSize={msg.file.totalSize}
-                          onDownload={() => handleDownload(msg.id, msg.file!, true)}
-                        />
-                      ) : msg.file.blobUrl && msg.file.mediaKind === 'video' ? (
-                        <VideoPlayer
-                          src={msg.file.blobUrl}
-                          filename={msg.file.filename}
-                          fileSize={msg.file.totalSize}
-                          onDownload={() => handleDownload(msg.id, msg.file!, true)}
-                        />
-                      ) : msg.file.blobUrl && msg.file.mediaKind === 'pdf' ? (
-                        <PdfViewer
-                          src={msg.file.blobUrl}
-                          filename={msg.file.filename}
-                          fileSize={msg.file.totalSize}
-                          onDownload={() => handleDownload(msg.id, msg.file!, true)}
-                        />
-                      ) : msg.file.snippet ? (
-                        <CodeViewer
-                          filename={msg.file.filename}
-                          snippet={msg.file.snippet}
-                          fullContent={msg.file.fullContent}
-                          totalLines={msg.file.totalLines}
-                          fileSize={msg.file.totalSize}
-                          onDownload={() => handleDownload(msg.id, msg.file!, true)}
-                          onCopyNotice={showToast}
-                        />
-                      ) : (
-                        /* Structured File Row */
-                        <div className="file-item-row">
-                          <div className="file-ext-badge">
-                            <span>{getFileExt(msg.file.filename)}</span>
-                          </div>
-                          <div className="file-item-details">
-                            <span className="file-item-name">{msg.file.filename}</span>
-                            <span className="file-item-size">{formatBytes(msg.file.totalSize || 0)}</span>
-                          </div>
-                          {(msg.file.mediaKind === 'image' || msg.file.mediaKind === 'audio' || msg.file.mediaKind === 'video' || msg.file.mediaKind === 'code' || msg.file.mediaKind === 'pdf') && !msg.file.blobUrl && (
-                            <button
-                              type="button"
-                              className="file-row-action-btn"
-                              onClick={() => handleDownload(msg.id, msg.file!, false)}
-                              disabled={msg.file.isDownloading}
-                            >
-                              Preview
-                            </button>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Sender upload progress */}
-                      {isSent && msg.file.status && msg.file.status !== 'done' && (
-                        <div>
-                          {msg.file.status !== 'canceled' && (
-                            <div className="shimmer-bar-container" style={{ marginTop: '0.35rem' }}>
-                              <div
-                                className="shimmer-bar-fill"
-                                style={{ width: `${msg.file.progress || 0}%` }}
-                              />
-                            </div>
-                          )}
-                          <div className="transfer-status">
-                            <span>{uploadLabel(msg.file)}</span>
-                            {msg.file.status !== 'canceled' && (
-                              <span className="transfer-actions">
-                                {(msg.file.status === 'uploading' || msg.file.status === 'queued') && (
-                                  <button onClick={() => uploadQueue.pause(uploads.get(msg.id)!)} className="icon-btn" title="Pause">
-                                    <Pause size={14} />
-                                  </button>
-                                )}
-                                {(msg.file.status === 'paused' || msg.file.status === 'error') && (
-                                  <button onClick={() => uploadQueue.enqueue(uploads.get(msg.id)!)} className="icon-btn" title="Resume">
-                                    <Play size={14} />
-                                  </button>
-                                )}
-                                <button onClick={() => cancelUpload(msg.id, msg.file!.transferId)} className="icon-btn" title="Cancel">
-                                  <X size={14} />
-                                </button>
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Receiver active download telemetry */}
-                      {!isSent && msg.file.isDownloading && (
-                        <div style={{ marginTop: '0.35rem' }}>
-                          <div className="shimmer-bar-container">
-                            <div
-                              className="shimmer-bar-fill"
-                              style={{ width: `${msg.file.progress || 0}%` }}
-                            />
-                          </div>
-                          <div className="transfer-status">
-                            <span>Receiving {Math.round(msg.file.progress || 0)}%{msg.file.speed ? ` • ${formatSpeed(msg.file.speed)}` : ''}</span>
-                            <span>{msg.file.eta || ''}</span>
-                          </div>
-                        </div>
-                      )}
-
-                      {msg.file.error && !msg.file.isDownloading && (
-                        <div className="transfer-note" style={{ color: 'var(--error-color)' }}>{msg.file.error}</div>
-                      )}
-                    </div>
-                  )}
-                </div>
+          return (
+            <section key={group} className="date-group-section">
+              <div className="date-section-header">
+                <span>{group}</span>
               </div>
-            );
-          })}
-          <div ref={messagesEndRef} />
-        </div>
+
+              <div className="date-group-cards">
+                {groupItems.map(item => (
+                  <TransferCard
+                    key={item.id}
+                    item={item}
+                    isDeleting={deletingIds.has(item.id)}
+                    onCopy={handleCopy}
+                    onDownload={handleDownload}
+                    onDelete={handleDelete}
+                    onOpenLightbox={(src, filename, size, downloadCb) => {
+                      setLightboxImage({
+                        src,
+                        filename,
+                        fileSize: size,
+                        onDownload: downloadCb
+                      });
+                    }}
+                    onAcceptApproval={(id, file) => {
+                      updateFile(id, { isPendingApproval: false });
+                      handleDownload(id, { ...file, isPendingApproval: false }, false);
+                    }}
+                    onAlwaysTrustApproval={(id, file) => {
+                      setIsPcTrusted(true);
+                      localStorage.setItem('p2p_trust_pc', 'true');
+                      updateFile(id, { isPendingApproval: false });
+                      showToast('PC marked as trusted device', 'success');
+                      handleDownload(id, { ...file, isPendingApproval: false }, false);
+                    }}
+                    onRejectApproval={(id) => {
+                      handleDelete(id);
+                      showToast('Transfer rejected', 'info');
+                    }}
+                    onPauseUpload={(id) => {
+                      const u = uploads.get(id);
+                      if (u) uploadQueue.pause(u);
+                    }}
+                    onResumeUpload={(id) => {
+                      const u = uploads.get(id);
+                      if (u) uploadQueue.enqueue(u);
+                    }}
+                    onCancelUpload={cancelUpload}
+                    onToast={showToast}
+                  />
+                ))}
+              </div>
+            </section>
+          );
+        })}
       </main>
 
-      <form className="input-area" onSubmit={handleSend}>
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          style={{ display: 'none' }}
-          onChange={handleFileUpload}
-        />
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          className="input-attach-btn"
-          title="Send Files or Photos"
-        >
-          <Paperclip size={18} />
-        </button>
+      {/* Hidden Native File Input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        style={{ display: 'none' }}
+        onChange={handleFileUpload}
+      />
 
-        <input
-          type="text"
-          className="text-input"
-          value={inputValue}
-          onChange={e => setInputValue(e.target.value)}
-          onKeyDown={handleInputKeyDown}
-          placeholder="Send text, link, or attach files..."
-        />
+      {/* 4. Purpose-Built Transfer Action Panel (Replacing Chat Composer) */}
+      <TransferActionPanel
+        onOpenFilePicker={() => fileInputRef.current?.click()}
+        onOpenSendText={() => setIsSendTextOpen(true)}
+      />
 
-        <button
-          type="submit"
-          className="send-btn"
-          disabled={!inputValue.trim()}
-          title="Transfer"
-        >
-          <Send size={16} />
-        </button>
-      </form>
+      {/* 5. Dedicated Text & Link Entry Modal */}
+      <SendTextModal
+        isOpen={isSendTextOpen}
+        onClose={() => setIsSendTextOpen(false)}
+        onSend={handleSendText}
+      />
+
+      {/* 6. Native Confirmation Dialog */}
+      <ConfirmationDialog
+        isOpen={confirmDialog.isOpen}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        confirmLabel={confirmDialog.confirmLabel}
+        variant={confirmDialog.variant}
+        icon={confirmDialog.icon}
+        onConfirm={confirmDialog.onConfirm}
+        onCancel={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
+      />
     </div>
   );
 }
