@@ -19,6 +19,7 @@ import {
   MediaKind, getMediaKind, formatBytes, formatSpeed, extractTextSnippet
 } from './lib/telemetry';
 import { saveBlobToCache, getBlobFromCache, generateThumbnailDataUrl } from './lib/storage';
+import { startAutoDiscovery, DiscoveredDevice } from './lib/discovery';
 import { ToastContainer, ToastMessage } from './components/Toast';
 import { Lightbox } from './components/Lightbox';
 import { AudioPlayer } from './components/AudioPlayer';
@@ -36,8 +37,19 @@ const api = new ServerApi();
 const uploadQueue = new UploadQueue();
 const uploads = new Map<string, Upload>(); // live uploads by message id
 
-const defaultAddress = () => window.location.port ? window.location.host : `${window.location.hostname}:8080`;
-const savedAddress = () => localStorage.getItem('p2p_address') || defaultAddress();
+const defaultAddress = () => {
+  if (Capacitor.isNativePlatform() || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    return '';
+  }
+  return window.location.port ? window.location.host : `${window.location.hostname}:8080`;
+};
+const savedAddress = () => {
+  const saved = localStorage.getItem('p2p_address');
+  if (saved && saved !== 'localhost:8080' && saved !== 'localhost' && !saved.startsWith('127.0.0.1')) {
+    return saved;
+  }
+  return defaultAddress();
+};
 
 const getDeviceId = () => {
   let id = localStorage.getItem('p2p_device_id');
@@ -135,6 +147,8 @@ export default function App() {
   const [pairing, setPairing] = useState<Pairing | null>(() => api.pairing);
   const [deviceName, setDeviceName] = useState(() => localStorage.getItem('p2p_device_name') || guessDeviceName());
   const [connectError, setConnectError] = useState('');
+  const [discoveredDevices, setDiscoveredDevices] = useState<DiscoveredDevice[]>([]);
+  const [discoveryTip, setDiscoveryTip] = useState<string>('');
   const [isScanning, setIsScanning] = useState(false);
   const [cameraError, setCameraError] = useState('');
   const [isPcTrusted, setIsPcTrusted] = useState<boolean>(() => localStorage.getItem('p2p_trust_pc') !== 'false');
@@ -192,6 +206,21 @@ export default function App() {
   const dismissToast = (id: string) => {
     setToasts(prev => prev.filter(t => t.id !== id));
   };
+
+  // Multi-channel mDNS & LAN auto-discovery
+  useEffect(() => {
+    if (status !== 'disconnected') return;
+    const stop = startAutoDiscovery(
+      device => {
+        setDiscoveredDevices(prev => {
+          if (prev.some(d => d.host === device.host && d.port === device.port)) return prev;
+          return [...prev, device];
+        });
+      },
+      tip => setDiscoveryTip(tip)
+    );
+    return stop;
+  }, [status]);
 
   // Initialize Capacitor Android back button listener & Esc key manager
   useEffect(() => {
@@ -605,7 +634,14 @@ export default function App() {
 
   const handleConnect = async (e: React.FormEvent) => {
     e.preventDefault();
-    const host = address.trim().replace(/^https?:\/\//, '').split('/')[0];
+    const raw = address.trim().replace(/^https?:\/\//, '').split('/')[0];
+    if (!raw || raw === 'localhost:8080' || raw === 'localhost' || raw.startsWith('127.0.0.1')) {
+      if (Capacitor.isNativePlatform()) {
+        setConnectError('Please enter your PC IP address (shown in PC terminal, e.g. 10.3.95.16:8080) or tap "Scan QR Code".');
+        return;
+      }
+    }
+    const host = raw;
     if (!host) return;
     if (!pairing) {
       await pairAndConnect(host);
@@ -1033,6 +1069,46 @@ export default function App() {
                   <span>{pairing ? 'Scan QR to Reconnect' : 'Scan QR Code'}</span>
                 </button>
 
+                {discoveredDevices.length > 0 && (
+                  <div className="discovered-section">
+                    <div className="discovered-header">
+                      <Wifi size={14} color="#38bdf8" />
+                      <span>Discovered on Wi-Fi (No Typing Needed)</span>
+                    </div>
+                    {discoveredDevices.map(d => (
+                      <div key={`${d.host}:${d.port}`} className="discovered-item">
+                        <div className="discovered-details">
+                          <span className="discovered-name">{d.serverName || d.name}</span>
+                          <span className="discovered-sub">{d.host}:{d.port} {d.scheme === 'https' ? '• TLS' : ''}</span>
+                        </div>
+                        <button
+                          type="button"
+                          className="discovered-btn"
+                          onClick={() => {
+                            const targetHost = `${d.host}:${d.port}`;
+                            setAddress(targetHost);
+                            if (pairing) {
+                              localStorage.setItem('p2p_address', targetHost);
+                              localStorage.setItem('p2p_auto_connect', 'true');
+                              connectTo(targetHost).catch(console.error);
+                            } else {
+                              pairAndConnect(targetHost, undefined, d.scheme, d.cert);
+                            }
+                          }}
+                        >
+                          Connect
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {discoveryTip && discoveredDevices.length === 0 && (
+                  <div className="discovery-tip-card">
+                    <span>{discoveryTip}</span>
+                  </div>
+                )}
+
                 <div className="setup-divider">
                   <span>OR MANUAL ADDRESS</span>
                 </div>
@@ -1045,7 +1121,7 @@ export default function App() {
                       className="text-input mono-input"
                       value={address}
                       onChange={e => setAddress(e.target.value)}
-                      placeholder="192.168.1.x:8080"
+                      placeholder="e.g. 10.3.95.16:8080"
                     />
                   </div>
                   {!pairing && (

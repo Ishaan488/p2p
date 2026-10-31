@@ -154,6 +154,9 @@ func watchClipboard() {
 			}
 			// Silently sync PC clipboard to connected devices without interrupting terminal input
 			broadcastOnlineOnly(msg)
+		} else {
+			// Check if an image is on the clipboard (screenshots, copied photos)
+			checkAndBroadcastClipboardImage()
 		}
 	}
 }
@@ -477,6 +480,8 @@ func main() {
 	http.HandleFunc("/pair", handlePair)
 	http.HandleFunc("/hello", handleHello)
 	http.HandleFunc("/unpair", authed(handleUnpair))
+	http.HandleFunc("/discover", handleDiscover)
+	http.HandleFunc("/api/probe", handleDiscover)
 	http.HandleFunc("/upload_init", authed(handleUploadInit))
 	http.HandleFunc("/upload", authed(handleUploadChunk))
 	http.HandleFunc("/upload_complete", authed(handleUploadComplete))
@@ -495,6 +500,15 @@ func main() {
 	go func() {
 		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server error: %v", err)
+		}
+	}()
+
+	// Start zero-config mDNS service announcement & UDP broadcast discovery
+	go func() {
+		_, _ = startMDNS(activePort, getServerName(), getServerID(), httpScheme(), tlsFingerprint)
+		stopUDP, err := startUDPDiscovery(activePort, getServerName(), getServerID(), httpScheme(), tlsFingerprint)
+		if err == nil && stopUDP != nil {
+			defer stopUDP()
 		}
 	}()
 
@@ -616,7 +630,7 @@ func isSendCommand(input string) bool {
 	// Also detect if user dragged & dropped or pasted a valid file path directly into the prompt
 	cleaned := strings.Trim(trimmed, "\"'")
 	if len(cleaned) >= 2 {
-		if info, err := os.Stat(cleaned); err == nil && !info.IsDir() {
+		if _, err := os.Stat(cleaned); err == nil {
 			return true
 		}
 	}

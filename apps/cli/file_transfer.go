@@ -47,6 +47,8 @@ type TransferState struct {
 	File        *os.File
 	FilePath    string
 	IsDownload  bool   // true if Windows is sending to phone
+	IsFolder    bool   // true if transfer is a streamed directory/folder
+	FolderName  string // uncompressed directory name
 	LastActive  int64  // Unix timestamp
 	Owner       string // id of the device uploading it
 
@@ -716,7 +718,7 @@ func startSendTransfer(filePath string) error {
 		return err
 	}
 	if stat.IsDir() {
-		return fmt.Errorf("%s is a directory", absPath)
+		return startSendFolderTransfer(absPath)
 	}
 
 	filename := filepath.Base(absPath)

@@ -80,6 +80,16 @@ func findDevice(id string) *Device {
 	return nil
 }
 
+func getServerID() string {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	if state.ServerID == "" {
+		state.ServerID = randomID()
+		saveStateLocked()
+	}
+	return state.ServerID
+}
+
 // findDeviceByQuery matches a device by exact name or by id prefix.
 func findDeviceByQuery(query string) *Device {
 	stateMu.Lock()

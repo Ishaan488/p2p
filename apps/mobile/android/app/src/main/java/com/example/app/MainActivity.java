@@ -18,6 +18,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(FileSaverPlugin.class);
         registerPlugin(ForegroundServicePlugin.class);
         registerPlugin(ShareTargetPlugin.class);
+        registerPlugin(DiscoveryPlugin.class);
         super.onCreate(savedInstanceState);
 
         ShareTargetPlugin.handleIncomingIntent(this, getIntent());

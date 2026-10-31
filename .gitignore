@@ -12,6 +12,7 @@ apps/cli/p2p.exe
 p2p.exe
 p2p.exe~
 *.exe~
+dist-bin/
 
 # OS
 .DS_Store
