@@ -1862,3 +1862,61 @@ body {
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
 }
+
+
+/* Per-Transfer Accept/Reject Approval Box */
+.transfer-approval-box {
+  margin-top: 0.65rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: 0.55rem;
+  background: rgba(255, 179, 0, 0.08);
+  border: 1px solid rgba(255, 179, 0, 0.28);
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.transfer-approval-info {
+  font-size: 0.8rem;
+  color: #ffd60a;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.transfer-approval-btn-group {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.approval-btn {
+  padding: 0.38rem 0.8rem;
+  border-radius: 0.45rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.1s ease;
+}
+
+.approval-btn:active {
+  transform: scale(0.96);
+}
+
+.approval-btn.primary {
+  background: #0a84ff;
+  color: #ffffff;
+}
+
+.approval-btn.success {
+  background: #32d74b;
+  color: #000000;
+}
+
+.approval-btn.danger {
+  background: rgba(255, 69, 58, 0.2);
+  color: #ff453a;
+  border: 1px solid rgba(255, 69, 58, 0.35);
+}

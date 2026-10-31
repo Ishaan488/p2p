@@ -2,6 +2,7 @@ package com.example.app;
 
 import android.app.DownloadManager;
 import android.content.Context;
+import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
@@ -9,12 +10,17 @@ import android.webkit.DownloadListener;
 import android.webkit.URLUtil;
 import android.widget.Toast;
 import com.getcapacitor.BridgeActivity;
+import com.getcapacitor.Plugin;
 
 public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(FileSaverPlugin.class);
+        registerPlugin(ForegroundServicePlugin.class);
+        registerPlugin(ShareTargetPlugin.class);
         super.onCreate(savedInstanceState);
+
+        ShareTargetPlugin.handleIncomingIntent(this, getIntent());
 
         try {
             if (getBridge() != null && getBridge().getWebView() != null) {
@@ -41,5 +47,21 @@ public class MainActivity extends BridgeActivity {
                 });
             }
         } catch (Exception ignored) {}
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        try {
+            if (getBridge() != null) {
+                com.getcapacitor.PluginHandle handle = getBridge().getPlugin("ShareTarget");
+                if (handle != null && handle.getInstance() instanceof ShareTargetPlugin) {
+                    ((ShareTargetPlugin) handle.getInstance()).onNewIntent(intent);
+                    return;
+                }
+            }
+        } catch (Exception ignored) {}
+        ShareTargetPlugin.handleIncomingIntent(this, intent);
     }
 }

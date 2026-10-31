@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"regexp"
@@ -125,28 +126,101 @@ type pairRequest struct {
 	Key      string `json:"key"` // manual pairing: a device key the PC owner must approve
 }
 
-// Manual pairing (typing the IP) is approved at the PC terminal.
+// Manual pairing and per-transfer approval at the PC terminal.
 const approvalTimeout = 60 * time.Second
 
+type ApprovalAnswer struct {
+	Allow  bool
+	Always bool
+}
+
 var (
-	approvalMu      sync.Mutex
-	pendingApproval chan bool // non-nil while a request waits for y/n at the terminal
+	approvalMu              sync.Mutex
+	pendingApproval         chan bool           // non-nil while a pairing request waits for y/n
+	pendingTransferApproval chan ApprovalAnswer // non-nil while a transfer waits for y/n/a
 )
 
-// answerApproval is called by the terminal when the user types y or n.
+// answerApproval is called by the terminal when the user types y, n, or always/a.
 // It reports whether there was a request waiting.
-func answerApproval(allow bool) bool {
+func answerApproval(input string) bool {
+	lower := strings.ToLower(strings.TrimSpace(input))
+
+	// Check transfer approval first
 	approvalMu.Lock()
-	ch := pendingApproval
+	tch := pendingTransferApproval
 	approvalMu.Unlock()
-	if ch == nil {
-		return false
+	if tch != nil {
+		switch lower {
+		case "y", "yes":
+			select {
+			case tch <- ApprovalAnswer{Allow: true, Always: false}:
+			default:
+			}
+			return true
+		case "n", "no":
+			select {
+			case tch <- ApprovalAnswer{Allow: false, Always: false}:
+			default:
+			}
+			return true
+		case "a", "always":
+			select {
+			case tch <- ApprovalAnswer{Allow: true, Always: true}:
+			default:
+			}
+			return true
+		}
 	}
+
+	// Check pairing approval
+	approvalMu.Lock()
+	pch := pendingApproval
+	approvalMu.Unlock()
+	if pch != nil {
+		switch lower {
+		case "y", "yes":
+			select {
+			case pch <- true:
+			default:
+			}
+			return true
+		case "n", "no":
+			select {
+			case pch <- false:
+			default:
+			}
+			return true
+		}
+	}
+
+	return false
+}
+
+func askTransferApproval(d *Device, filename string, size int64) (allow bool, always bool) {
+	approvalMu.Lock()
+	if pendingTransferApproval != nil {
+		approvalMu.Unlock()
+		return false, false
+	}
+	ch := make(chan ApprovalAnswer, 1)
+	pendingTransferApproval = ch
+	approvalMu.Unlock()
+	defer func() {
+		approvalMu.Lock()
+		pendingTransferApproval = nil
+		approvalMu.Unlock()
+	}()
+
+	fmt.Printf("\r\033[2K  %s%s%s  %s? Transfer%s   \"%s\" (%s) from %s. Accept? (y/n/a=always): \np2p> ",
+		Dim, nowStamp(), Reset, Yellow, Reset, filename, formatSize(size), d.Name)
+
 	select {
-	case ch <- allow:
-	default:
+	case ans := <-ch:
+		return ans.Allow, ans.Always
+	case <-time.After(approvalTimeout):
+		printAsync(Yellow, "○ Timeout", filename, "transfer request expired")
+		return false, false
 	}
-	return true
 }
 
 func askApproval(name, addr string) bool {
@@ -175,12 +249,91 @@ func askApproval(name, addr string) bool {
 	}
 }
 
+// Pairing rate limiting and lockout state
+type pairAttempt struct {
+	count       int
+	lockedUntil time.Time
+	lastTime    time.Time
+}
+
+var (
+	pairLimitsMu sync.Mutex
+	pairLimits   = make(map[string]*pairAttempt)
+)
+
+const (
+	maxPairAttempts = 5
+	pairLockoutTime = 5 * time.Minute
+)
+
+func clientIP(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return remoteAddr
+	}
+	return host
+}
+
+func checkPairRateLimit(ip string) (bool, time.Duration) {
+	pairLimitsMu.Lock()
+	defer pairLimitsMu.Unlock()
+	att, exists := pairLimits[ip]
+	if !exists {
+		return false, 0
+	}
+	now := time.Now()
+	if now.Before(att.lockedUntil) {
+		return true, att.lockedUntil.Sub(now)
+	}
+	if now.Sub(att.lastTime) > 10*time.Minute {
+		delete(pairLimits, ip)
+		return false, 0
+	}
+	return false, 0
+}
+
+func recordPairFailure(ip string) (bool, time.Duration) {
+	pairLimitsMu.Lock()
+	defer pairLimitsMu.Unlock()
+	now := time.Now()
+	att, exists := pairLimits[ip]
+	if !exists {
+		att = &pairAttempt{count: 0, lastTime: now}
+		pairLimits[ip] = att
+	}
+	att.count++
+	att.lastTime = now
+	if att.count >= maxPairAttempts {
+		att.lockedUntil = now.Add(pairLockoutTime)
+		return true, pairLockoutTime
+	}
+	return false, 0
+}
+
+func resetPairLimit(ip string) {
+	pairLimitsMu.Lock()
+	defer pairLimitsMu.Unlock()
+	delete(pairLimits, ip)
+}
+
 func handlePair(w http.ResponseWriter, r *http.Request) {
 	if enableCORS(w, r) {
 		return
 	}
+	ip := clientIP(r.RemoteAddr)
+	if locked, retryAfter := checkPairRateLimit(ip); locked {
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", int(retryAfter.Seconds())+1))
+		writeJSON(w, http.StatusTooManyRequests, map[string]interface{}{
+			"error":      "Too many failed pairing attempts. Temporarily locked out.",
+			"code":       "locked_out",
+			"retryAfter": int(retryAfter.Seconds()) + 1,
+		})
+		return
+	}
+
 	var req pairRequest
 	if err := readJSONBody(r, &req); err != nil || !deviceIDPattern.MatchString(req.DeviceID) {
+		recordPairFailure(ip)
 		httpError(w, http.StatusBadRequest, "Invalid request")
 		return
 	}
@@ -189,16 +342,19 @@ func handlePair(w http.ResponseWriter, r *http.Request) {
 	if req.Key != "" {
 		var err error
 		if key, err = hex.DecodeString(req.Key); err != nil || len(key) != 32 {
+			recordPairFailure(ip)
 			httpError(w, http.StatusBadRequest, "Invalid request")
 			return
 		}
 		if !askApproval(sanitizeDeviceName(req.Name), r.RemoteAddr) {
+			recordPairFailure(ip)
 			httpError(w, http.StatusForbidden, "The PC did not approve this device")
 			return
 		}
 	} else {
 		code, valid := currentPairCode()
 		if !valid {
+			recordPairFailure(ip)
 			httpError(w, http.StatusForbidden, "This QR code has expired. Type 'pair' on the PC for a new one.")
 			return
 		}
@@ -206,11 +362,14 @@ func handlePair(w http.ResponseWriter, r *http.Request) {
 		want := hmacSHA256(key, []byte("pair\n"+req.DeviceID+"\n"+req.Name))
 		got, _ := hex.DecodeString(req.MAC)
 		if !hmac.Equal(want, got) {
+			recordPairFailure(ip)
 			printAsync(Red, "! Rejected", sanitizeDeviceName(req.Name), "invalid QR code")
 			httpError(w, http.StatusForbidden, "Invalid QR code. Scan the one currently shown on the PC.")
 			return
 		}
 	}
+
+	resetPairLimit(ip)
 
 	device := registerDevice(req.DeviceID, sanitizeDeviceName(req.Name), key)
 	dropSessions(device.ID)
@@ -236,6 +395,31 @@ type Session struct {
 
 	aead      cipher.AEAD // encrypts everything the session carries
 	wsClaimed bool        // a session carries at most one WebSocket, so frame counters never repeat
+
+	noncesMu   sync.Mutex
+	seenNonces map[string]time.Time
+}
+
+func (s *Session) recordNonce(nonce string) bool {
+	if nonce == "" {
+		return true
+	}
+	s.noncesMu.Lock()
+	defer s.noncesMu.Unlock()
+	if s.seenNonces == nil {
+		s.seenNonces = make(map[string]time.Time)
+	}
+	now := time.Now()
+	for n, t := range s.seenNonces {
+		if now.Sub(t) > 15*time.Minute {
+			delete(s.seenNonces, n)
+		}
+	}
+	if _, seen := s.seenNonces[nonce]; seen {
+		return false
+	}
+	s.seenNonces[nonce] = now
+	return true
 }
 
 const sealOverhead = 12 + 16 // nonce + GCM tag
@@ -401,6 +585,13 @@ func authenticate(r *http.Request) *Session {
 	if !hmac.Equal(requestSignature(session.Key, r), got) {
 		return nil
 	}
+
+	nonce := r.URL.Query().Get("n")
+	if nonce != "" {
+		if !session.recordNonce(nonce) {
+			return nil // Anti-replay: duplicate nonce rejected
+		}
+	}
 	return session
 }
 
@@ -417,4 +608,38 @@ func authed(handler func(w http.ResponseWriter, r *http.Request, s *Session)) ht
 		}
 		handler(w, r, session)
 	}
+}
+
+// handleUnpair revokes a paired device from the mobile client side
+func handleUnpair(w http.ResponseWriter, r *http.Request, s *Session) {
+	deviceID := s.Device.ID
+	deviceName := s.Device.Name
+
+	removeDevice(deviceID)
+	dropSessions(deviceID)
+
+	transfersMu.Lock()
+	var abandoned []*TransferState
+	for id, state := range transfers {
+		if state.Owner == deviceID {
+			abandoned = append(abandoned, state)
+			delete(transfers, id)
+		}
+	}
+	transfersMu.Unlock()
+	for _, state := range abandoned {
+		state.discard()
+	}
+
+	clientsMu.Lock()
+	for client := range clients {
+		if client.device.ID == deviceID {
+			client.Close()
+			delete(clients, client)
+		}
+	}
+	clientsMu.Unlock()
+
+	printAsync(Yellow, "○ Revoked", deviceName, "unpaired by remote device")
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

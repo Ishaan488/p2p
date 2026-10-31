@@ -17,6 +17,7 @@ type Device struct {
 	Key      []byte `json:"key"` // long-term secret derived from the pairing code
 	PairedAt int64  `json:"pairedAt"`
 	LastSeen int64  `json:"lastSeen"`
+	Trusted  bool   `json:"trusted"` // if true, transfers are accepted automatically without prompting
 }
 
 type appState struct {
@@ -36,9 +37,15 @@ func statePath() string {
 func loadState() {
 	stateMu.Lock()
 	defer stateMu.Unlock()
-	if data, err := os.ReadFile(statePath()); err == nil {
+	p := statePath()
+	if data, err := os.ReadFile(p); err == nil {
 		if err := json.Unmarshal(data, &state); err != nil {
-			fmt.Printf("%sCould not read %s: %v%s\n", Red, statePath(), err, Reset)
+			// Corrupted state file recovery: back up corrupted file and start clean
+			backup := fmt.Sprintf("%s.corrupt.%d", p, time.Now().Unix())
+			_ = os.Rename(p, backup)
+			fmt.Printf("%s[State Recovery] Corrupted %s detected. Backed up to %s and initialized clean state.%s\n",
+				Yellow, filepath.Base(p), filepath.Base(backup), Reset)
+			state = appState{}
 		}
 	}
 	if state.ServerID == "" {
@@ -140,6 +147,19 @@ func touchDevice(d *Device) {
 	d.LastSeen = time.Now().Unix()
 	saveStateLocked()
 	stateMu.Unlock()
+}
+
+func setDeviceTrust(id string, trusted bool) bool {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	for _, d := range state.Devices {
+		if d.ID == id || strings.EqualFold(d.Name, id) {
+			d.Trusted = trusted
+			saveStateLocked()
+			return true
+		}
+	}
+	return false
 }
 
 func listDevices() []Device {

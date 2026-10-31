@@ -349,10 +349,33 @@ func handleUploadInit(w http.ResponseWriter, r *http.Request, s *Session) {
 		return
 	}
 	if !exists {
-		initDirs()
-		path := getTempPath(req.TransferID)
 		cleanName := filepath.Base(filepath.Clean(req.Filename))
 		cleanName = sanitizeFilename(cleanName)
+
+		if !s.Device.Trusted {
+			transfersMu.Unlock()
+			allow, always := askTransferApproval(s.Device, cleanName, req.TotalSize)
+			if !allow {
+				recordTransfer(TransferRecord{
+					ID:        req.TransferID,
+					Filename:  cleanName,
+					Size:      req.TotalSize,
+					Direction: "Received",
+					Device:    s.Device.Name,
+					Status:    "Rejected",
+				})
+				httpError(w, http.StatusForbidden, "Transfer rejected by user")
+				return
+			}
+			if always {
+				setDeviceTrust(s.Device.ID, true)
+				printAsync(Green, "● Trusted", s.Device.Name, "transfers auto-accepted")
+			}
+			transfersMu.Lock()
+		}
+
+		initDirs()
+		path := getTempPath(req.TransferID)
 		f, err := os.Create(path)
 		if err != nil {
 			transfersMu.Unlock()
@@ -420,7 +443,8 @@ func handleUploadChunk(w http.ResponseWriter, r *http.Request, s *Session) {
 	_, err = state.File.WriteAt(body, int64(chunkIndex)*state.ChunkSize)
 	state.fileMu.RUnlock()
 	if err != nil {
-		httpError(w, http.StatusInternalServerError, "Failed to write")
+		printAsync(Red, "! Disk Error", state.Filename, fmt.Sprintf("write failed: %v", err))
+		httpError(w, 507, "Disk write failed / Insufficient storage")
 		return
 	}
 
@@ -517,6 +541,14 @@ func handleUploadComplete(w http.ResponseWriter, r *http.Request, s *Session) {
 		return
 	}
 	printAsync(Green, "↓ File", state.Filename, fmt.Sprintf("%s · saved to received\\", formatSize(state.TotalSize)))
+	recordTransfer(TransferRecord{
+		ID:        state.ID,
+		Filename:  state.Filename,
+		Size:      state.TotalSize,
+		Direction: "Received",
+		Device:    s.Device.Name,
+		Status:    "Completed",
+	})
 	s.writeResponse(w, r, map[string]string{"filename": filepath.Base(finalPath)})
 }
 
@@ -534,6 +566,14 @@ func handleUploadCancel(w http.ResponseWriter, r *http.Request, s *Session) {
 		transfersMu.Unlock()
 		state.discard()
 		printAsync(Yellow, "○ Cancelled", state.Filename, "")
+		recordTransfer(TransferRecord{
+			ID:        state.ID,
+			Filename:  state.Filename,
+			Size:      state.TotalSize,
+			Direction: "Received",
+			Device:    s.Device.Name,
+			Status:    "Cancelled",
+		})
 	}
 	s.writeResponse(w, r, map[string]bool{"ok": true})
 }
@@ -725,5 +765,13 @@ func startSendTransfer(filePath string) error {
 	} else {
 		printSync(Yellow, "↑ File", filename, fmt.Sprintf("%s · queued — waiting for phone", formatSize(totalSize)))
 	}
+	recordTransfer(TransferRecord{
+		ID:        transferId,
+		Filename:  filename,
+		Size:      totalSize,
+		Direction: "Sent",
+		Device:    "Phone",
+		Status:    "Completed",
+	})
 	return nil
 }

@@ -2,6 +2,7 @@ import { registerPlugin, Capacitor } from '@capacitor/core';
 import { ServerApi } from './api';
 import { SpeedTracker, calculateEta } from './telemetry';
 import { playTransferSuccessChime } from './audio';
+import { startTransferForeground, stopTransferForeground, updateTransferForeground } from './foregroundService';
 
 const PARALLEL_CHUNKS = 4;
 
@@ -56,10 +57,22 @@ export async function downloadEncrypted(
   let next = 0;
   const tracker = new SpeedTracker();
 
+  await startTransferForeground('P2P Link Download', `Downloading file (${formatBytes(info.totalSize)})...`);
+
   const worker = async () => {
     while (next < info.totalChunks) {
       const index = next++;
-      const chunk = await api.downloadChunk(info.transferId, index, signal);
+      let chunk: Uint8Array | null = null;
+      for (let attempt = 1; ; attempt++) {
+        try {
+          chunk = await api.downloadChunk(info.transferId, index, signal);
+          break;
+        } catch (err) {
+          if (signal?.aborted || attempt >= 8) throw err;
+          await new Promise(r => setTimeout(r, Math.min(3000, 300 * (2 ** attempt))));
+        }
+      }
+      if (!chunk) throw new Error('Chunk download failed');
       parts[index] = new Blob([chunk as BlobPart]);
       received += chunk.length;
 
@@ -67,6 +80,8 @@ export async function downloadEncrypted(
       const remainingBytes = Math.max(0, info.totalSize - received);
       const eta = calculateEta(remainingBytes, speed);
 
+      const percent = Math.round((received / info.totalSize) * 100);
+      updateTransferForeground(`Downloading file (${percent}%)`, percent);
       onProgress(received, speed, eta);
     }
   };
@@ -78,11 +93,24 @@ export async function downloadEncrypted(
     next = info.totalChunks;
     await Promise.allSettled(workers);
     throw err;
+  } finally {
+    await stopTransferForeground();
   }
 
   if (received !== info.totalSize) throw new Error('Downloaded size does not match');
   playTransferSuccessChime();
   return new Blob(parts);
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let u = -1;
+  do {
+    bytes /= 1024;
+    u++;
+  } while (bytes >= 1024 && u < units.length - 1);
+  return `${bytes.toFixed(1)} ${units[u]}`;
 }
 
 // Hands a finished download to the browser's "save file" flow (HTML5 fallback).

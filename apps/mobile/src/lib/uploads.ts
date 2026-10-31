@@ -1,10 +1,10 @@
 import { HttpError, ServerApi } from './api';
 import { SpeedTracker, calculateEta } from './telemetry';
 import { playTransferSuccessChime } from './audio';
+import { startTransferForeground, stopTransferForeground, updateTransferForeground } from './foregroundService';
 
 export const CHUNK_SIZE = 1024 * 1024;
 const PARALLEL_CHUNKS = 4;
-const CHUNK_ATTEMPTS = 4;
 
 export type UploadStatus = 'queued' | 'uploading' | 'paused' | 'done' | 'error' | 'canceled';
 
@@ -97,6 +97,7 @@ export class Upload {
     this.tracker.reset();
 
     try {
+      await startTransferForeground('P2P Link Transfer', `Uploading ${this.file.name}...`);
       // A second pass covers the server having lost the transfer mid-way (e.g. it restarted).
       for (let pass = 0; ; pass++) {
         const missing = await this.init(abort.signal);
@@ -119,6 +120,7 @@ export class Upload {
     } finally {
       abort.abort();
       this.abort = null;
+      await stopTransferForeground();
     }
   }
 
@@ -181,6 +183,7 @@ export class Upload {
         const remainingBytes = Math.max(0, this.file.size - this.sentBytes);
         this.eta = calculateEta(remainingBytes, this.speed);
 
+        updateTransferForeground(`Uploading ${this.file.name} (${Math.round((this.sentBytes / this.file.size) * 100)}%)`, Math.round((this.sentBytes / this.file.size) * 100));
         this.onProgress(this.progress);
       }
     };
@@ -204,9 +207,11 @@ export class Upload {
         return;
       } catch (err) {
         signal.throwIfAborted();
-        const fatal = err instanceof HttpError && err.status >= 400 && err.status < 500;
-        if (fatal || attempt >= CHUNK_ATTEMPTS) throw err;
-        await sleep(400 * 2 ** attempt, signal);
+        const fatal = err instanceof HttpError && err.status >= 400 && err.status < 500 && err.status !== 408;
+        if (fatal) throw err;
+        // Resilient auto-retry for transient Wi-Fi drops (up to 8 attempts with backoff)
+        if (attempt >= 8) throw err;
+        await sleep(Math.min(3000, 300 * 2 ** attempt), signal);
       }
     }
   }
@@ -332,6 +337,14 @@ export class UploadQueue {
     }
     this.pending = [];
     this.notifyBatch();
+  }
+
+  resumeInterrupted(allUploads: Iterable<Upload>) {
+    for (const u of allUploads) {
+      if (u.status === 'error' || u.status === 'paused') {
+        this.enqueue(u);
+      }
+    }
   }
 
   private pump() {

@@ -8,8 +8,10 @@ import { CHUNK_SIZE, Upload, UploadQueue, UploadStatus, transferIdFor, BatchStat
 import {
   Send, Smartphone, Paperclip, QrCode, LogOut,
   Trash2, Download, Pause, Play, X, UploadCloud, Lock, Wifi, ZoomIn, Clock,
-  Copy, ArrowDownLeft, ArrowUpRight
+  Copy, ArrowDownLeft, ArrowUpRight, ShieldCheck, ShieldAlert
 } from 'lucide-react';
+import { checkPendingShare, onSharedData } from './lib/shareTarget';
+import { Capacitor } from '@capacitor/core';
 import { Html5Qrcode } from 'html5-qrcode';
 import { Clipboard } from '@capacitor/clipboard';
 import { backButtonManager } from './lib/backButton';
@@ -109,6 +111,7 @@ interface ChatMessage {
     snippet?: string;
     fullContent?: string;
     totalLines?: number;
+    isPendingApproval?: boolean;
   };
   sender: 'me' | 'other';
   timestamp: number;
@@ -124,6 +127,7 @@ export default function App() {
   const [connectError, setConnectError] = useState('');
   const [isScanning, setIsScanning] = useState(false);
   const [cameraError, setCameraError] = useState('');
+  const [isPcTrusted, setIsPcTrusted] = useState<boolean>(() => localStorage.getItem('p2p_trust_pc') !== 'false');
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     const saved = localStorage.getItem('p2p_messages');
     const restored: ChatMessage[] = saved ? JSON.parse(saved) : [];
@@ -214,17 +218,70 @@ export default function App() {
     return () => { active = false; };
   }, []);
 
-  // Flush offline outbox whenever connection is restored
+  // Flush offline outbox whenever connection is restored and auto-resume stalled transfers
   useEffect(() => {
-    if (status === 'connected' && transport.isConnected() && pendingOutbox.length > 0) {
-      for (const msg of pendingOutbox) {
-        transport.send(JSON.stringify(msg));
-        setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, isPending: false } : m));
+    if (status === 'connected' && transport.isConnected()) {
+      uploadQueue.resumeInterrupted(uploads.values());
+      if (pendingOutbox.length > 0) {
+        for (const msg of pendingOutbox) {
+          transport.send(JSON.stringify(msg));
+          setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, isPending: false } : m));
+        }
+        setPendingOutbox([]);
+        showToast(`Delivered ${pendingOutbox.length} pending message(s)`, 'success');
       }
-      setPendingOutbox([]);
-      showToast(`Delivered ${pendingOutbox.length} pending message(s)`, 'success');
     }
   }, [status, pendingOutbox]);
+
+  // Network online listener: auto-reconnect and resume transfers when Wi-Fi recovers
+  useEffect(() => {
+    const handleOnline = () => {
+      showToast('Network restored — reconnecting...', 'info');
+      if (!transport.isConnected() && api.pairing) {
+        connectTo(savedAddress()).catch(console.error);
+      }
+      uploadQueue.resumeInterrupted(uploads.values());
+    };
+    window.addEventListener('online', handleOnline);
+    return () => window.removeEventListener('online', handleOnline);
+  }, []);
+
+  // Android Share Target integration: receive shared text or files from other apps
+  useEffect(() => {
+    const handleShare = async (data: any) => {
+      if (!data) return;
+      if (data.text) {
+        setInputValue(data.text);
+        showToast('Shared text loaded into message', 'info');
+      }
+      if (data.files && data.files.length > 0) {
+        showToast(`Receiving ${data.files.length} shared file(s)`, 'info');
+        for (const f of data.files) {
+          try {
+            const fileUrl = Capacitor.convertFileSrc(f.path);
+            const resp = await fetch(fileUrl);
+            const blob = await resp.blob();
+            const file = new File([blob], f.name, { type: f.mimeType });
+            sendFile(file);
+          } catch (e) {
+            console.error('Failed to import shared file', e);
+          }
+        }
+      }
+    };
+
+    checkPendingShare().then(data => {
+      if (data) handleShare(data);
+    });
+
+    const cleanup = onSharedData(data => {
+      handleShare(data);
+    });
+
+    return () => {
+      cleanup.then(unsub => unsub());
+    };
+  }, []);
 
   const cancelUpload = (id: string, transferId: string) => {
     const upload = uploads.get(id);
@@ -332,6 +389,7 @@ export default function App() {
           }]);
         } else if (msg.type === 'file_start') {
           const kind = getMediaKind(msg.payload.filename);
+          const trust = localStorage.getItem('p2p_trust_pc') !== 'false';
           const fileInfo = {
             filename: msg.payload.filename,
             transferId: msg.payload.transferId,
@@ -340,7 +398,8 @@ export default function App() {
             chunkSize: msg.payload.chunkSize,
             isDownloading: false,
             progress: 0,
-            mediaKind: kind
+            mediaKind: kind,
+            isPendingApproval: !trust
           };
           setMessages(prev => [...prev, {
             id: msg.id,
@@ -349,8 +408,8 @@ export default function App() {
             timestamp: msg.timestamp * 1000
           }]);
 
-          // Automatically download small images (< 25 MB) so photos from PC appear as instant inline previews!
-          if (kind === 'image' && msg.payload.totalSize < 25 * 1024 * 1024) {
+          // Automatically download small images (< 25 MB) only if PC is trusted
+          if (trust && kind === 'image' && msg.payload.totalSize < 25 * 1024 * 1024) {
             setTimeout(() => {
               handleDownload(msg.id, fileInfo, false);
             }, 100);
@@ -1023,6 +1082,19 @@ export default function App() {
         <div className="header-actions">
           <button
             onClick={() => {
+              const next = !isPcTrusted;
+              setIsPcTrusted(next);
+              localStorage.setItem('p2p_trust_pc', next ? 'true' : 'false');
+              showToast(next ? 'PC is trusted (auto-accept)' : 'Transfers require approval', 'info');
+            }}
+            className="header-icon-btn"
+            title={isPcTrusted ? 'PC is trusted (click to require approval)' : 'Approval required (click to trust PC)'}
+          >
+            {isPcTrusted ? <ShieldCheck size={16} color="#32d74b" /> : <ShieldAlert size={16} color="#ffd60a" />}
+          </button>
+
+          <button
+            onClick={() => {
               if (window.confirm('Clear transfer history on this device?')) {
                 setMessages(prev => prev.filter(m => uploads.has(m.id)));
                 showToast('Transfer history cleared', 'info');
@@ -1147,8 +1219,52 @@ export default function App() {
                     </div>
                   )}
 
+                  {/* Per-Transfer Approval Box */}
+                  {msg.file && msg.file.isPendingApproval && (
+                    <div className="transfer-approval-box">
+                      <div className="transfer-approval-info">
+                        Incoming file from PC ({formatBytes(msg.file.totalSize)}). Accept transfer?
+                      </div>
+                      <div className="transfer-approval-btn-group">
+                        <button
+                          type="button"
+                          className="approval-btn danger"
+                          onClick={() => {
+                            handleDelete(msg.id);
+                            showToast('Transfer rejected', 'info');
+                          }}
+                        >
+                          Reject
+                        </button>
+                        <button
+                          type="button"
+                          className="approval-btn primary"
+                          onClick={() => {
+                            updateFile(msg.id, { isPendingApproval: false });
+                            handleDownload(msg.id, { ...msg.file!, isPendingApproval: false }, false);
+                          }}
+                        >
+                          Accept
+                        </button>
+                        <button
+                          type="button"
+                          className="approval-btn success"
+                          onClick={() => {
+                            setIsPcTrusted(true);
+                            localStorage.setItem('p2p_trust_pc', 'true');
+                            updateFile(msg.id, { isPendingApproval: false });
+                            showToast('PC marked as trusted device', 'success');
+                            handleDownload(msg.id, { ...msg.file!, isPendingApproval: false }, false);
+                          }}
+                        >
+                          Always Trust
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   {/* File / Media Payload */}
-                  {msg.file && (
+                  {msg.file && !msg.file.isPendingApproval && (
                     <div className="transfer-file-container">
                       {(msg.file.blobUrl || msg.file.thumbnailUrl) && isImageFile ? (
                         <div

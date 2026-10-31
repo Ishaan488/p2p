@@ -425,6 +425,7 @@ func main() {
 	}
 	initDirs()
 	loadState()
+	loadHistory()
 	cleanTempDir()
 	startTransferJanitor()
 
@@ -492,7 +493,7 @@ func main() {
 		}
 		text := strings.TrimSpace(scanner.Text())
 		if text != "" {
-			if lower := strings.ToLower(text); (lower == "y" || lower == "n") && answerApproval(lower == "y") {
+			if answerApproval(text) {
 				continue
 			}
 			if text == "help" {
@@ -500,7 +501,10 @@ func main() {
 				fmt.Println("  " + Yellow + "> <file>" + Reset + "        Send a file (or just paste/drop a file path directly)")
 				fmt.Println("  " + Yellow + "pair" + Reset + "            Show QR code to pair a phone")
 				fmt.Println("  " + Yellow + "devices" + Reset + "         List paired devices")
+				fmt.Println("  " + Yellow + "trust <name>" + Reset + "     Trust device (auto-accept transfers)")
+				fmt.Println("  " + Yellow + "untrust <name>" + Reset + "   Require approval for each transfer")
 				fmt.Println("  " + Yellow + "unpair <name>" + Reset + "   Remove a paired device")
+				fmt.Println("  " + Yellow + "history" + Reset + "         Show recent transfer history")
 				fmt.Println("  " + Yellow + "status" + Reset + "          Show server & network info")
 				fmt.Println("  " + Yellow + "open" + Reset + "            Open web interface in browser")
 				fmt.Println("  " + Yellow + "setdir <path>" + Reset + "   Change folder for received files")
@@ -524,6 +528,22 @@ func main() {
 				showPairing()
 			} else if text == "devices" {
 				printDevices()
+			} else if text == "history" || text == "log" {
+				printTransferHistory()
+			} else if strings.HasPrefix(strings.ToLower(text), "trust ") {
+				target := strings.TrimSpace(text[6:])
+				if setDeviceTrust(target, true) {
+					printSync(Green, "● Trusted", target, "transfers auto-accepted")
+				} else {
+					printSync(Red, "! Error", fmt.Sprintf("No paired device matches %q", target), "")
+				}
+			} else if strings.HasPrefix(strings.ToLower(text), "untrust ") {
+				target := strings.TrimSpace(text[8:])
+				if setDeviceTrust(target, false) {
+					printSync(Yellow, "○ Untrusted", target, "per-transfer approval required")
+				} else {
+					printSync(Red, "! Error", fmt.Sprintf("No paired device matches %q", target), "")
+				}
 			} else if strings.HasPrefix(strings.ToLower(text), "unpair ") {
 				unpairDevice(strings.TrimSpace(text[7:]))
 			} else if isSendCommand(text) {
@@ -632,7 +652,11 @@ func printDevices() {
 		if deviceOnline(d.ID) {
 			status = Green + "● online" + Reset
 		}
-		fmt.Printf("  %s%-22s%s %s%-10s%s %s\n", White, d.Name, Reset, Dim, d.ID[:8], Reset, status)
+		trust := Dim + "[approval req]" + Reset
+		if d.Trusted {
+			trust = Green + "[trusted]" + Reset
+		}
+		fmt.Printf("  %s%-20s%s %s%-10s%s %-16s %s\n", White, d.Name, Reset, Dim, d.ID[:8], Reset, trust, status)
 	}
 	fmt.Println()
 }
