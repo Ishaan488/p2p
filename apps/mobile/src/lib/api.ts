@@ -17,6 +17,8 @@ export interface Pairing {
   deviceId: string;
   deviceName: string;
   key: string; // hex device key
+  scheme?: 'http' | 'https';
+  certFingerprint?: string;
 }
 
 interface Session {
@@ -56,26 +58,31 @@ export const isNetworkError = (err: unknown) => !(err instanceof HttpError);
 
 // Pairs with the PC at `host` using the secret from its QR code. The secret
 // itself is never sent: both sides derive the device key from it.
-export async function pairWithQr(host: string, secret: string, deviceId: string, deviceName: string): Promise<Pairing> {
+export async function pairWithQr(host: string, secret: string, deviceId: string, deviceName: string, scheme = 'http', certFingerprint?: string): Promise<Pairing> {
   const key = deviceKeyFromCode(secret, deviceId);
-  const res = await postJSON(`http://${host}/pair`, {
+  const res = await postJSON(`${scheme}://${host}/pair`, {
     deviceId,
     name: deviceName,
     mac: hmacHex(key, `pair\n${deviceId}\n${deviceName}`)
   }, AbortSignal.timeout(REQUEST_TIMEOUT));
-  return finishPairing(res, key, deviceId);
+  const p = finishPairing(res, key, deviceId);
+  p.scheme = scheme as 'http' | 'https';
+  p.certFingerprint = certFingerprint;
+  return p;
 }
 
 // Pairs with the PC at `host` knowing only its address: this device picks its
 // own key, and the person at the PC approves the request in the terminal.
-export async function pairWithApproval(host: string, deviceId: string, deviceName: string): Promise<Pairing> {
+export async function pairWithApproval(host: string, deviceId: string, deviceName: string, scheme = 'http'): Promise<Pairing> {
   const key = randomBytes(32);
-  const res = await postJSON(`http://${host}/pair`, {
+  const res = await postJSON(`${scheme}://${host}/pair`, {
     deviceId,
     name: deviceName,
     key: bytesToHex(key)
   }, AbortSignal.timeout(APPROVAL_TIMEOUT));
-  return finishPairing(res, key, deviceId);
+  const p = finishPairing(res, key, deviceId);
+  p.scheme = scheme as 'http' | 'https';
+  return p;
 }
 
 function finishPairing(res: any, key: Uint8Array, deviceId: string): Pairing {
@@ -89,6 +96,7 @@ function finishPairing(res: any, key: Uint8Array, deviceId: string): Pairing {
 // tied to a session, signed with its key, and its content is encrypted.
 export class ServerApi {
   host = '';
+  scheme: 'http' | 'https' = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'https' : 'http';
   private currentPairing: Pairing | null = null;
   private session: Promise<Session> | null = null;
 
@@ -98,6 +106,19 @@ export class ServerApi {
 
   set pairing(pairing: Pairing | null) {
     this.currentPairing = pairing;
+    if (pairing?.scheme) {
+      this.scheme = pairing.scheme;
+    }
+    this.session = null;
+  }
+
+  async unpair(): Promise<void> {
+    try {
+      await this.call('/unpair', {});
+    } catch (err) {
+      console.debug('Server unpair notice:', err);
+    }
+    this.currentPairing = null;
     this.session = null;
   }
 
@@ -110,7 +131,7 @@ export class ServerApi {
     }
     const session = (async () => {
       const clientNonce = randomBytes(16);
-      const res = await postJSON(`http://${this.host}/hello`, {
+      const res = await postJSON(`${this.scheme}://${this.host}/hello`, {
         deviceId: pairing.deviceId,
         clientNonce: bytesToHex(clientNonce)
       }, AbortSignal.timeout(REQUEST_TIMEOUT));
@@ -129,12 +150,13 @@ export class ServerApi {
 
   // Every request carries a one-off nonce: it is covered by the signature and
   // ties the encrypted reply to this particular request.
-  private async sign(method: string, path: string, params: Record<string, string> = {}, scheme = 'http'): Promise<SignedRequest> {
+  private async sign(method: string, path: string, params: Record<string, string> = {}, scheme?: string): Promise<SignedRequest> {
     const session = await (this.session || this.openSession());
     const nonce = randomHex(8);
     const signed = { ...params, sid: session.id, n: nonce };
     const query = new URLSearchParams({ ...signed, mac: signRequest(session.key, method, path, signed) });
-    return { url: `${scheme}://${this.host}${path}?${query}`, nonce, session };
+    const effectiveScheme = scheme || this.scheme;
+    return { url: `${effectiveScheme}://${this.host}${path}?${query}`, nonce, session };
   }
 
   // Runs a request, transparently opening a new session once if the PC no
@@ -189,7 +211,8 @@ export class ServerApi {
   // front. The session is then dedicated to that socket.
   async openSocket(): Promise<{ url: string; cipher: Cipher }> {
     await this.openSession();
-    const { url, session } = await this.sign('GET', '/ws', {}, 'ws');
+    const wsScheme = this.scheme === 'https' ? 'wss' : 'ws';
+    const { url, session } = await this.sign('GET', '/ws', {}, wsScheme);
     return { url, cipher: session.cipher };
   }
 }

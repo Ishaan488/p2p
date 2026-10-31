@@ -8,7 +8,7 @@ import { CHUNK_SIZE, Upload, UploadQueue, UploadStatus, transferIdFor, BatchStat
 import {
   Send, Smartphone, Paperclip, QrCode, LogOut,
   Trash2, Download, Pause, Play, X, UploadCloud, Lock, Wifi, ZoomIn, Clock,
-  Copy, ArrowDownLeft, ArrowUpRight, ShieldCheck, ShieldAlert
+  Copy, ArrowDownLeft, ArrowUpRight, ShieldCheck, ShieldAlert, Unlink, MoreVertical
 } from 'lucide-react';
 import { checkPendingShare, onSharedData } from './lib/shareTarget';
 import { Capacitor } from '@capacitor/core';
@@ -26,6 +26,10 @@ import { VideoPlayer } from './components/VideoPlayer';
 import { PdfViewer } from './components/PdfViewer';
 import { CodeViewer } from './components/CodeViewer';
 import { BatchProgress } from './components/BatchProgress';
+
+function isImageFilename(name: string): boolean {
+  return /\.(jpg|jpeg|png|gif|webp|svg|bmp)$/i.test(name);
+}
 
 const transport = new WebSocketTransport();
 const api = new ServerApi();
@@ -64,11 +68,17 @@ const loadPairing = (): Pairing | null => {
 };
 api.pairing = loadPairing();
 
-const parsePairingLink = (text: string): { host: string; code?: string } => {
+const parsePairingLink = (text: string): { host: string; code?: string; scheme?: string; cert?: string } => {
   try {
     const url = new URL(text);
     if (url.protocol === 'http:' || url.protocol === 'https:') {
-      return { host: url.host, code: new URLSearchParams(url.hash.slice(1)).get('pair') || undefined };
+      const hashParams = new URLSearchParams(url.hash.slice(1));
+      return {
+        host: url.host,
+        scheme: url.protocol.replace(':', ''),
+        code: hashParams.get('pair') || undefined,
+        cert: hashParams.get('cert') || undefined
+      };
     }
   } catch {
     // not a URL
@@ -148,6 +158,18 @@ export default function App() {
   const [batchStats, setBatchStats] = useState<BatchStats>(() => uploadQueue.getStats());
   const [isBatchPaused, setIsBatchPaused] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const isNearBottomRef = useRef(true);
+  const prevMsgCountRef = useRef(0);
+
+  const handleContainerScroll = () => {
+    const el = chatContainerRef.current;
+    if (!el) return;
+    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    isNearBottomRef.current = distanceToBottom < 90;
+  };
+
   const [lightboxImage, setLightboxImage] = useState<{
     src: string;
     filename: string;
@@ -186,9 +208,14 @@ export default function App() {
     });
   }, []);
 
-  // Persist messages in localStorage
+  // Persist messages in localStorage without dead blob URLs
   useEffect(() => {
-    localStorage.setItem('p2p_messages', JSON.stringify(messages));
+    const toSave = messages.map(m => {
+      if (!m.file) return m;
+      const { blobUrl, ...restFile } = m.file;
+      return { ...m, file: restFile };
+    });
+    localStorage.setItem('p2p_messages', JSON.stringify(toSave));
   }, [messages]);
 
   // Persist pending outbox in localStorage
@@ -205,18 +232,23 @@ export default function App() {
     let active = true;
     const restoreBlobs = async () => {
       for (const m of messages) {
-        if (m.file && !m.file.blobUrl) {
+        if (m.file && m.file.transferId && !m.file.blobUrl) {
           const cached = await getBlobFromCache(m.file.transferId);
           if (cached && active) {
             const url = URL.createObjectURL(cached);
-            updateFile(m.id, { blobUrl: url });
+            let thumb = m.file.thumbnailUrl;
+            const isImg = m.file.mediaKind === 'image' || isImageFilename(m.file.filename);
+            if (!thumb && isImg) {
+              thumb = await generateThumbnailDataUrl(cached);
+            }
+            updateFile(m.id, { blobUrl: url, thumbnailUrl: thumb || m.file.thumbnailUrl });
           }
         }
       }
     };
     restoreBlobs();
     return () => { active = false; };
-  }, []);
+  }, [messages.length]);
 
   // Flush offline outbox whenever connection is restored and auto-resume stalled transfers
   useEffect(() => {
@@ -341,16 +373,17 @@ export default function App() {
     return transport.connect(socket.url, socket.cipher);
   };
 
-  const pairAndConnect = async (host: string, secret?: string) => {
+  const pairAndConnect = async (host: string, secret?: string, scheme = 'http', cert?: string) => {
     setConnectError('');
     setStatus('connecting');
     setAddress(host);
     try {
       const name = deviceName.trim() || guessDeviceName();
       localStorage.setItem('p2p_device_name', name);
+      api.scheme = (scheme === 'https' ? 'https' : 'http');
       savePairing(secret
-        ? await pairWithQr(host, secret, getDeviceId(), name)
-        : await pairWithApproval(host, getDeviceId(), name));
+        ? await pairWithQr(host, secret, getDeviceId(), name, scheme, cert)
+        : await pairWithApproval(host, getDeviceId(), name, scheme));
     } catch (err) {
       setStatus('disconnected');
       setConnectError(describeFailure(err, host));
@@ -381,6 +414,8 @@ export default function App() {
       try {
         const msg: Message = JSON.parse(data);
         if (msg.type === 'text') {
+          const text = (msg.payload?.text || '').trim();
+          if (!text) return;
           setMessages(prev => [...prev, {
             id: msg.id,
             text: msg.payload.text,
@@ -415,6 +450,8 @@ export default function App() {
             }, 100);
           }
         } else if (msg.type === 'clipboard') {
+          const text = (msg.payload?.text || '').trim();
+          if (!text) return;
           const fallback = () => {
             setMessages(prev => [...prev, {
               id: msg.id,
@@ -442,10 +479,12 @@ export default function App() {
       }
     });
 
-    const linkCode = new URLSearchParams(window.location.hash.slice(1)).get('pair');
+    const hashParams = new URLSearchParams(window.location.hash.slice(1));
+    const linkCode = hashParams.get('pair');
+    const linkCert = hashParams.get('cert') || undefined;
     if (linkCode) {
       history.replaceState(null, '', window.location.pathname);
-      pairAndConnect(window.location.host, linkCode);
+      pairAndConnect(window.location.host, linkCode, window.location.protocol.replace(':', ''), linkCert);
     } else if (api.pairing && localStorage.getItem('p2p_auto_connect') !== 'false') {
       connectTo(savedAddress()).catch(console.error);
     } else {
@@ -524,7 +563,7 @@ export default function App() {
         const link = parsePairingLink(decodedText);
         setAddress(link.host);
         if (link.code) {
-          pairAndConnect(link.host, link.code);
+          pairAndConnect(link.host, link.code, link.scheme || 'http', link.cert);
         } else if (api.pairing) {
           localStorage.setItem('p2p_address', link.host);
           localStorage.setItem('p2p_auto_connect', 'true');
@@ -548,14 +587,21 @@ export default function App() {
     };
   }, [isScanning]);
 
-  // Scroll to bottom smoothly on new message
+  // Scroll to bottom smoothly only when a new message is added and user is near bottom
   useEffect(() => {
     if (status === 'connected') {
-      setTimeout(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-      }, 50);
+      const isNew = messages.length > prevMsgCountRef.current;
+      prevMsgCountRef.current = messages.length;
+      if (isNew) {
+        const last = messages[messages.length - 1];
+        if (last?.sender === 'me' || isNearBottomRef.current) {
+          setTimeout(() => {
+            messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+          }, 35);
+        }
+      }
     }
-  }, [messages, status]);
+  }, [messages.length, status]);
 
   const handleConnect = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1021,6 +1067,25 @@ export default function App() {
                   >
                     {status === 'connecting' ? (pairing ? 'Connecting...' : 'Awaiting PC approval...') : !pairing ? 'Pair & Connect' : 'Connect via Wi-Fi'}
                   </button>
+
+                  {pairing && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (window.confirm('Forget and unpair this PC? You will need to scan the QR code to pair again.')) {
+                          try {
+                            await api.unpair();
+                          } catch {}
+                          savePairing(null);
+                          showToast('Device forgotten and unpaired', 'info');
+                        }
+                      }}
+                      className="secondary-btn"
+                      style={{ marginTop: '0.75rem', width: '100%', color: '#ff453a', borderColor: 'rgba(255, 69, 58, 0.3)' }}
+                    >
+                      Forget This PC
+                    </button>
+                  )}
                 </form>
               </>
             )}
@@ -1081,42 +1146,84 @@ export default function App() {
 
         <div className="header-actions">
           <button
-            onClick={() => {
-              const next = !isPcTrusted;
-              setIsPcTrusted(next);
-              localStorage.setItem('p2p_trust_pc', next ? 'true' : 'false');
-              showToast(next ? 'PC is trusted (auto-accept)' : 'Transfers require approval', 'info');
-            }}
+            type="button"
+            onClick={() => setIsMenuOpen(o => !o)}
             className="header-icon-btn"
-            title={isPcTrusted ? 'PC is trusted (click to require approval)' : 'Approval required (click to trust PC)'}
+            title="Options & History"
           >
-            {isPcTrusted ? <ShieldCheck size={16} color="#32d74b" /> : <ShieldAlert size={16} color="#ffd60a" />}
+            <MoreVertical size={18} />
           </button>
 
-          <button
-            onClick={() => {
-              if (window.confirm('Clear transfer history on this device?')) {
-                setMessages(prev => prev.filter(m => uploads.has(m.id)));
-                showToast('Transfer history cleared', 'info');
-              }
-            }}
-            className="header-icon-btn"
-            title="Clear History"
-          >
-            <Trash2 size={16} />
-          </button>
-
-          <button
-            onClick={handleDisconnect}
-            className="header-icon-btn"
-            title="Disconnect"
-          >
-            <LogOut size={16} />
-          </button>
+          {isMenuOpen && (
+            <>
+              <div className="menu-backdrop" onClick={() => setIsMenuOpen(false)} />
+              <div className="header-dropdown-menu">
+                <button
+                  type="button"
+                  className="menu-item"
+                  onClick={() => {
+                    const next = !isPcTrusted;
+                    setIsPcTrusted(next);
+                    localStorage.setItem('p2p_trust_pc', next ? 'true' : 'false');
+                    showToast(next ? 'PC marked as trusted (auto-accept)' : 'Transfers require approval', 'info');
+                    setIsMenuOpen(false);
+                  }}
+                >
+                  {isPcTrusted ? <ShieldCheck size={16} color="#32d74b" /> : <ShieldAlert size={16} color="#ffd60a" />}
+                  <span>{isPcTrusted ? 'Auto-Accept Transfers' : 'Require Approval'}</span>
+                </button>
+                <button
+                  type="button"
+                  className="menu-item"
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    if (window.confirm('Clear transfer history on this device?')) {
+                      setMessages(prev => prev.filter(m => uploads.has(m.id)));
+                      showToast('Transfer history cleared', 'info');
+                    }
+                  }}
+                >
+                  <Trash2 size={16} />
+                  <span>Clear History</span>
+                </button>
+                <button
+                  type="button"
+                  className="menu-item"
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    handleDisconnect();
+                  }}
+                >
+                  <LogOut size={16} />
+                  <span>Disconnect</span>
+                </button>
+                <div className="menu-divider" />
+                <button
+                  type="button"
+                  className="menu-item danger"
+                  onClick={async () => {
+                    setIsMenuOpen(false);
+                    if (window.confirm('Forget and unpair this PC? You will need to scan the QR code to pair again.')) {
+                      try {
+                        await api.unpair();
+                      } catch {}
+                      savePairing(null);
+                      transport.disconnect();
+                      setStatus('disconnected');
+                      showToast('Device unpaired and access revoked', 'info');
+                    }
+                  }}
+                >
+                  <Unlink size={16} />
+                  <span>Forget This PC</span>
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </header>
 
-      <main className="chat-container">
+      <main className="chat-container" ref={chatContainerRef} onScroll={handleContainerScroll}>
         {batchStats.totalCount > 1 && (
           <BatchProgress
             activeCount={batchStats.activeCount + batchStats.pendingCount}

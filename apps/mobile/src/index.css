@@ -437,8 +437,6 @@ body {
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
-  overscroll-behavior-y: contain;
-  touch-action: pan-y;
   padding: 0.75rem 0.85rem 1rem 0.85rem;
   display: flex;
   flex-direction: column;
@@ -481,16 +479,14 @@ body {
 
 /* Incoming items from PC */
 .message.other {
-  background: linear-gradient(180deg, #121622 0%, #0f121b 100%);
-  border: 1px solid rgba(56, 189, 248, 0.2);
-  border-left: 3px solid #38bdf8;
+  background: linear-gradient(180deg, #13151f 0%, #0f1118 100%);
+  border: 1px solid rgba(56, 189, 248, 0.16);
 }
 
 /* Outgoing items from Phone */
 .message.me {
-  background: linear-gradient(180deg, #141620 0%, #10121a 100%);
+  background: linear-gradient(180deg, #141724 0%, #10121a 100%);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-left: 3px solid #64748b;
 }
 
 .transfer-card-header {
@@ -1789,24 +1785,27 @@ body {
 .image-preview-wrapper {
   position: relative;
   width: 100%;
-  max-height: 260px;
-  border-radius: 0.65rem;
+  max-height: 320px;
+  border-radius: 12px;
   overflow: hidden;
-  background: #0a0b0e;
+  background: #08090d;
   border: 1px solid rgba(255, 255, 255, 0.08);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: transform 0.2s ease, border-color 0.2s ease;
+  margin: 0.2rem 0;
 }
 
 .image-preview-wrapper img {
-  width: 100%;
-  height: 260px;
-  max-height: 260px;
-  object-fit: cover;
+  max-width: 100%;
+  max-height: 320px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
   display: block;
+  border-radius: 11px;
 }
 
 .image-preview-wrapper:hover {
@@ -1919,4 +1918,69 @@ body {
   background: rgba(255, 69, 58, 0.2);
   color: #ff453a;
   border: 1px solid rgba(255, 69, 58, 0.35);
+}
+
+
+/* Header Dropdown Menu (Apple / Google Level Polish) */
+.header-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0.75rem;
+  min-width: 220px;
+  background: #151722;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.75);
+  padding: 0.4rem;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  animation: menuFadeIn 0.15s ease-out;
+}
+
+@keyframes menuFadeIn {
+  from { opacity: 0; transform: translateY(-6px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 8px;
+  background: transparent;
+  border: none;
+  color: #e2e8f0;
+  font-size: 0.84rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s ease, color 0.15s ease;
+  width: 100%;
+}
+
+.menu-item:hover, .menu-item:active {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.menu-item.danger {
+  color: #ff453a;
+}
+
+.menu-item.danger:hover, .menu-item.danger:active {
+  background: rgba(255, 69, 58, 0.12);
+}
+
+.menu-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.07);
+  margin: 0.25rem 0.35rem;
 }

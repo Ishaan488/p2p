@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"crypto/tls"
 	"embed"
 	"encoding/json"
 	"flag"
@@ -380,11 +381,11 @@ func printStatus() {
 	fmt.Println(Cyan + "\n--- Server Status ---" + Reset)
 	fmt.Printf("  Uptime:       %s%s%s\n", Green, uptime.String(), Reset)
 	fmt.Printf("  Active Port:  %s%d%s\n", Yellow, *port, Reset)
-	fmt.Printf("  Web UI:       %shttp://localhost:%d%s\n", Cyan, *port, Reset)
+	fmt.Printf("  Web UI:       %s%s://localhost:%d%s\n", Cyan, httpScheme(), *port, Reset)
 	if len(ips) > 0 {
-		fmt.Printf("  LAN URLs:     %shttp://%s:%d%s\n", White, ips[0], *port, Reset)
+		fmt.Printf("  LAN URLs:     %s%s://%s:%d%s\n", White, httpScheme(), ips[0], *port, Reset)
 		for _, ip := range ips[1:] {
-			fmt.Printf("                %shttp://%s:%d%s\n", White, ip, *port, Reset)
+			fmt.Printf("                %s%s://%s:%d%s\n", White, httpScheme(), ip, *port, Reset)
 		}
 	}
 	fmt.Printf("  Memory:       Alloc: %.2f MB | Sys: %.2f MB | Goroutines: %d | GC Cycles: %d\n",
@@ -414,7 +415,15 @@ var (
 	noClipboard     = flag.Bool("no-clipboard", false, "disable clipboard sync")
 	openBrowserFlag = flag.Bool("open", false, "open web UI in default browser on startup")
 	devModeFlag     = flag.Bool("dev", false, "serve web UI from disk (mobile/dist) instead of embedded")
+	tlsFlag         = flag.Bool("tls", false, "enable HTTPS/WSS with self-signed TLS and cert pinning")
 )
+
+func httpScheme() string {
+	if tlsEnabled {
+		return "https"
+	}
+	return "http"
+}
 
 func main() {
 	flag.Parse()
@@ -436,6 +445,16 @@ func main() {
 	}
 	*port = activePort
 
+	if *tlsFlag {
+		tlsConfig, fp, err := setupTLS(baseDir, localIPs())
+		if err != nil {
+			log.Fatalf("%sFailed to initialize TLS: %v%s\n", Red, err, Reset)
+		}
+		tlsEnabled = true
+		tlsFingerprint = fp
+		listener = tls.NewListener(listener, tlsConfig)
+	}
+
 	fmt.Print(Cyan + `
     ____ ___  ____     __    _       __  
    / __ \__ \/ __ \   / /   (_)___  / /__
@@ -447,12 +466,17 @@ func main() {
 	if activePort != initialPort {
 		fmt.Printf(Yellow+"  Port %d was busy. Switched to port %d\n"+Reset, initialPort, activePort)
 	}
-	fmt.Printf(Green+"  Server running on port %d"+Reset+" (http://localhost:%d)\n", activePort, activePort)
+	if tlsEnabled {
+		fmt.Printf(Green+"  Server running on port %d (HTTPS/TLS enabled)"+Reset+" (https://localhost:%d)\n", activePort, activePort)
+	} else {
+		fmt.Printf(Green+"  Server running on port %d"+Reset+" (http://localhost:%d)\n", activePort, activePort)
+	}
 	fmt.Println(White + "  Type '" + Yellow + "help" + White + "' for commands.\n" + Reset)
 
 	http.HandleFunc("/ws", handleWebSocket)
 	http.HandleFunc("/pair", handlePair)
 	http.HandleFunc("/hello", handleHello)
+	http.HandleFunc("/unpair", authed(handleUnpair))
 	http.HandleFunc("/upload_init", authed(handleUploadInit))
 	http.HandleFunc("/upload", authed(handleUploadChunk))
 	http.HandleFunc("/upload_complete", authed(handleUploadComplete))
@@ -480,7 +504,7 @@ func main() {
 	if *openBrowserFlag {
 		go func() {
 			time.Sleep(150 * time.Millisecond)
-			openBrowser(fmt.Sprintf("http://localhost:%d", *port))
+			openBrowser(fmt.Sprintf("%s://localhost:%d", httpScheme(), *port))
 		}()
 	}
 
@@ -517,7 +541,7 @@ func main() {
 			} else if text == "clear" || text == "cls" {
 				fmt.Print("\033[H\033[2J")
 			} else if text == "open" || text == "ui" {
-				url := fmt.Sprintf("http://localhost:%d", *port)
+				url := fmt.Sprintf("%s://localhost:%d", httpScheme(), *port)
 				printSync(Green, "● Browser", url, "opened")
 				if err := openBrowser(url); err != nil {
 					printSync(Red, "! Error", fmt.Sprintf("Failed to open browser: %v", err), "")
@@ -582,13 +606,16 @@ func main() {
 
 func isSendCommand(input string) bool {
 	trimmed := strings.TrimSpace(input)
+	for strings.HasPrefix(strings.ToLower(trimmed), "p2p>") {
+		trimmed = strings.TrimSpace(trimmed[4:])
+	}
 	lower := strings.ToLower(trimmed)
 	if strings.HasPrefix(lower, "send ") || strings.HasPrefix(trimmed, ">") {
 		return true
 	}
 	// Also detect if user dragged & dropped or pasted a valid file path directly into the prompt
 	cleaned := strings.Trim(trimmed, "\"'")
-	if len(cleaned) >= 3 && (strings.Contains(cleaned, "\\") || strings.Contains(cleaned, "/")) {
+	if len(cleaned) >= 2 {
 		if info, err := os.Stat(cleaned); err == nil && !info.IsDir() {
 			return true
 		}
@@ -598,6 +625,9 @@ func isSendCommand(input string) bool {
 
 func extractFilePath(input string) string {
 	s := strings.TrimSpace(input)
+	for strings.HasPrefix(strings.ToLower(s), "p2p>") {
+		s = strings.TrimSpace(s[4:])
+	}
 	for {
 		lower := strings.ToLower(s)
 		if strings.HasPrefix(lower, "send ") {
@@ -620,8 +650,12 @@ func showPairing() {
 		return
 	}
 	addr := fmt.Sprintf("%s:%d", ips[0], *port)
+	qrLink := fmt.Sprintf("%s://%s/#pair=%s", httpScheme(), addr, code)
+	if tlsEnabled && tlsFingerprint != "" {
+		qrLink = fmt.Sprintf("%s://%s/#pair=%s&cert=%s", httpScheme(), addr, code, tlsFingerprint)
+	}
 	fmt.Printf("\n  %sScan QR in P2P Link mobile app:%s\n\n", Cyan, Reset)
-	qrterminal.GenerateHalfBlock(fmt.Sprintf("http://%s/#pair=%s", addr, code), qrterminal.L, os.Stdout)
+	qrterminal.GenerateHalfBlock(qrLink, qrterminal.L, os.Stdout)
 	fmt.Printf("\n  Manual IP : %s%s%s\n", Yellow, addr, Reset)
 	for _, ip := range ips[1:] {
 		fmt.Printf("  Alt IP    : %s%s:%d%s\n", Dim, ip, *port, Reset)

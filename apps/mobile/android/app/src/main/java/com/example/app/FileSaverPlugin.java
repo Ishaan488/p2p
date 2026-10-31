@@ -56,8 +56,15 @@ public class FileSaverPlugin extends Plugin {
                 contentValues.put(MediaStore.MediaColumns.DISPLAY_NAME, filename);
                 contentValues.put(MediaStore.MediaColumns.MIME_TYPE, mimeType);
                 contentValues.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+                contentValues.put(MediaStore.MediaColumns.IS_PENDING, 1);
 
-                Uri uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues);
+                Uri uri = null;
+                try {
+                    uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues);
+                } catch (Exception ex) {
+                    // Fallback handled below
+                }
+
                 if (uri != null) {
                     try (OutputStream os = resolver.openOutputStream(uri)) {
                         if (os != null) {
@@ -67,20 +74,40 @@ public class FileSaverPlugin extends Plugin {
                             savedPath = Environment.DIRECTORY_DOWNLOADS + "/" + filename;
                         }
                     }
+                    contentValues.clear();
+                    contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0);
+                    resolver.update(uri, contentValues, null, null);
                 }
-            } else {
+            }
+
+            // Fallback for Android < Q or if MediaStore insert returned null
+            if (!saved) {
                 File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
                 if (!dir.exists()) {
                     dir.mkdirs();
                 }
                 File targetFile = new File(dir, filename);
+                if (targetFile.exists()) {
+                    String base = filename;
+                    String ext = "";
+                    int dot = filename.lastIndexOf('.');
+                    if (dot > 0) {
+                        base = filename.substring(0, dot);
+                        ext = filename.substring(dot);
+                    }
+                    int counter = 1;
+                    while (targetFile.exists() && counter < 1000) {
+                        targetFile = new File(dir, base + " (" + counter + ")" + ext);
+                        counter++;
+                    }
+                }
                 try (FileOutputStream fos = new FileOutputStream(targetFile)) {
                     fos.write(bytes);
                     fos.flush();
                     saved = true;
                     savedPath = targetFile.getAbsolutePath();
                 }
-                MediaScannerConnection.scanFile(getContext(), new String[]{targetFile.getAbsolutePath()}, null, null);
+                MediaScannerConnection.scanFile(getContext(), new String[]{targetFile.getAbsolutePath()}, new String[]{mimeType}, null);
             }
 
             if (saved) {
