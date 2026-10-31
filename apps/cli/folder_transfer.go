@@ -168,6 +168,10 @@ func extractZipSafely(zipReader *zip.Reader, destDir string) (extractedFiles int
 // startSendFolderTransfer packages a directory into a temporary zip package on the fly
 // and enqueues a folder transfer to connected devices.
 func startSendFolderTransfer(folderPath string) error {
+	return startSendFolderTransferTargeted(folderPath, nil)
+}
+
+func startSendFolderTransferTargeted(folderPath string, targetDevice *Device) error {
 	cleanPath := filepath.Clean(folderPath)
 	stat, err := os.Stat(cleanPath)
 	if err != nil {
@@ -206,6 +210,11 @@ func startSendFolderTransfer(folderPath string) error {
 		totalChunks = 0
 	}
 
+	ownerID := ""
+	if targetDevice != nil {
+		ownerID = targetDevice.ID
+	}
+
 	transfersMu.Lock()
 	transfers[transferID] = &TransferState{
 		ID:          transferID,
@@ -217,11 +226,17 @@ func startSendFolderTransfer(folderPath string) error {
 		IsDownload:  true,
 		IsFolder:    true,
 		FolderName:  folderName,
+		Owner:       ownerID,
 		LastActive:  time.Now().Unix(),
 	}
 	transfersMu.Unlock()
 
-	printSync(Cyan, "📁 Folder", fmt.Sprintf("%s (%d files, %d folders · %s)", folderName, files, dirs, formatSize(totalSize)), "packaging complete")
+	targetLabel := "all devices"
+	if targetDevice != nil {
+		targetLabel = targetDevice.Name
+	}
+
+	printSync(Cyan, "📁 Folder", fmt.Sprintf("%s (%d files, %d folders · %s → %s)", folderName, files, dirs, formatSize(totalSize), targetLabel), "packaging complete")
 
 	// Notify connected devices of incoming folder transfer
 	msg := Message{
@@ -243,9 +258,12 @@ func startSendFolderTransfer(folderPath string) error {
 			"totalChunks":  totalChunks,
 		},
 	}
+	if targetDevice != nil {
+		msg.TargetDeviceID = targetDevice.ID
+	}
 	delivered := broadcastMessage(msg)
 	if delivered == 0 {
-		printSync(Yellow, "📁 Folder", folderName, "queued — waiting for phone")
+		printSync(Yellow, "📁 Folder", folderName, fmt.Sprintf("queued for %s", targetLabel))
 	}
 	return nil
 }

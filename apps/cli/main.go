@@ -12,6 +12,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,6 +46,7 @@ var (
 
 	outboxMu          sync.Mutex
 	cliOutbox         []Message
+	deviceOutbox      = make(map[string][]Message) // key: device.ID or "" for broadcast
 	lastDisconnectMap = make(map[string]time.Time)
 	deviceOnlineState = make(map[string]bool)
 	lastDisconnectMu  sync.Mutex
@@ -419,6 +421,8 @@ var (
 	openBrowserFlag = flag.Bool("open", false, "open web UI in default browser on startup")
 	devModeFlag     = flag.Bool("dev", false, "serve web UI from disk (mobile/dist) instead of embedded")
 	tlsFlag         = flag.Bool("tls", false, "enable HTTPS/WSS with self-signed TLS and cert pinning")
+	pprofFlag       = flag.Bool("pprof", false, "enable pprof profiling endpoint on 127.0.0.1:6060")
+	debugFlag       = flag.Bool("debug", false, "enable verbose debug logging and profiling")
 )
 
 func httpScheme() string {
@@ -469,6 +473,14 @@ func main() {
 	if activePort != initialPort {
 		fmt.Printf(Yellow+"  Port %d was busy. Switched to port %d\n"+Reset, initialPort, activePort)
 	}
+	if *pprofFlag || *debugFlag {
+		go func() {
+			fmt.Printf("%s[Profiler]%s pprof listening on http://127.0.0.1:6060/debug/pprof/\n", Cyan, Reset)
+			if err := http.ListenAndServe("127.0.0.1:6060", nil); err != nil && err != http.ErrServerClosed {
+				log.Printf("pprof error: %v", err)
+			}
+		}()
+	}
 	if tlsEnabled {
 		fmt.Printf(Green+"  Server running on port %d (HTTPS/TLS enabled)"+Reset+" (https://localhost:%d)\n", activePort, activePort)
 	} else {
@@ -482,6 +494,7 @@ func main() {
 	http.HandleFunc("/unpair", authed(handleUnpair))
 	http.HandleFunc("/discover", handleDiscover)
 	http.HandleFunc("/api/probe", handleDiscover)
+	http.HandleFunc("/upload_check_hash", authed(handleUploadCheckHash))
 	http.HandleFunc("/upload_init", authed(handleUploadInit))
 	http.HandleFunc("/upload", authed(handleUploadChunk))
 	http.HandleFunc("/upload_complete", authed(handleUploadComplete))
@@ -536,18 +549,19 @@ func main() {
 			}
 			if text == "help" {
 				fmt.Println(Cyan + "\n  Commands" + Reset)
-				fmt.Println("  " + Yellow + "> <file>" + Reset + "        Send a file (or just paste/drop a file path directly)")
-				fmt.Println("  " + Yellow + "pair" + Reset + "            Show QR code to pair a phone")
-				fmt.Println("  " + Yellow + "devices" + Reset + "         List paired devices")
-				fmt.Println("  " + Yellow + "trust <name>" + Reset + "     Trust device (auto-accept transfers)")
-				fmt.Println("  " + Yellow + "untrust <name>" + Reset + "   Require approval for each transfer")
-				fmt.Println("  " + Yellow + "unpair <name>" + Reset + "   Remove a paired device")
-				fmt.Println("  " + Yellow + "history" + Reset + "         Show recent transfer history")
-				fmt.Println("  " + Yellow + "status" + Reset + "          Show server & network info")
-				fmt.Println("  " + Yellow + "open" + Reset + "            Open web interface in browser")
-				fmt.Println("  " + Yellow + "setdir <path>" + Reset + "   Change folder for received files")
-				fmt.Println("  " + Yellow + "clear" + Reset + "           Clear terminal screen")
-				fmt.Println("  " + Yellow + "exit" + Reset + "            Stop server")
+				fmt.Println("  " + Yellow + "send <path> [--to <device>]" + Reset + "  Send file or folder to all or specific device")
+				fmt.Println("  " + Yellow + "> <path> [--to <device>]" + Reset + "     Quick send file or folder")
+				fmt.Println("  " + Yellow + "msg <text> [--to <device>]" + Reset + "   Send text message to all or specific device")
+				fmt.Println("  " + Yellow + "devices" + Reset + "                  List paired & active devices")
+				fmt.Println("  " + Yellow + "trust <device>" + Reset + "          Trust device (auto-accept transfers)")
+				fmt.Println("  " + Yellow + "untrust <device>" + Reset + "        Require approval for each transfer")
+				fmt.Println("  " + Yellow + "unpair <device>" + Reset + "         Remove a paired device")
+				fmt.Println("  " + Yellow + "history" + Reset + "                  Show recent transfer history")
+				fmt.Println("  " + Yellow + "status" + Reset + "                   Show server & network info")
+				fmt.Println("  " + Yellow + "open" + Reset + "                     Open web interface in browser")
+				fmt.Println("  " + Yellow + "setdir <path>" + Reset + "            Change folder for received files")
+				fmt.Println("  " + Yellow + "clear" + Reset + "                    Clear terminal screen")
+				fmt.Println("  " + Yellow + "exit" + Reset + "                     Stop server")
 				fmt.Println()
 			} else if text == "exit" {
 				fmt.Println(Dim + "  Shutting down..." + Reset)
@@ -585,9 +599,17 @@ func main() {
 			} else if strings.HasPrefix(strings.ToLower(text), "unpair ") {
 				unpairDevice(strings.TrimSpace(text[7:]))
 			} else if isSendCommand(text) {
-				filePath := extractFilePath(text)
+				filePath, targetQuery := extractFilePathAndTarget(text)
 				fmt.Print("\033[1A\r\033[2K")
-				if err := startSendTransfer(filePath); err != nil {
+				var targetDevice *Device
+				if targetQuery != "" {
+					targetDevice = findDeviceByQuery(targetQuery)
+					if targetDevice == nil {
+						printSync(Red, "! Error", fmt.Sprintf("No paired device matches %q (type 'devices')", targetQuery), "")
+						continue
+					}
+				}
+				if err := startSendTransferTargeted(filePath, targetDevice); err != nil {
 					printSync(Red, "! Error", fmt.Sprintf("Could not send file: %v", err), "")
 				}
 			} else if strings.HasPrefix(strings.ToLower(text), "setdir ") {
@@ -600,26 +622,68 @@ func main() {
 				}
 			} else {
 				fmt.Print("\033[1A\r\033[2K")
+				cleanText, targetQuery := parseTargetFlag(text)
+				if strings.HasPrefix(strings.ToLower(cleanText), "msg ") {
+					cleanText = strings.TrimSpace(cleanText[4:])
+				}
+				var targetDevice *Device
+				if targetQuery != "" {
+					targetDevice = findDeviceByQuery(targetQuery)
+					if targetDevice == nil {
+						printSync(Red, "! Error", fmt.Sprintf("No paired device matches %q (type 'devices')", targetQuery), "")
+						continue
+					}
+				}
 				msg := Message{
 					Version:   1,
 					Type:      "text",
 					ID:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
 					Timestamp: time.Now().Unix(),
-					Payload:   TextPayload{Text: text},
+					Payload:   TextPayload{Text: cleanText},
+				}
+				if targetDevice != nil {
+					msg.TargetDeviceID = targetDevice.ID
 				}
 				delivered := broadcastMessage(msg)
+				targetLabel := ""
+				if targetDevice != nil {
+					targetLabel = fmt.Sprintf(" → %s", targetDevice.Name)
+				}
 				if delivered > 0 {
-					printSync(Cyan, "↑ Sent", text, "")
+					printSync(Cyan, "↑ Sent", cleanText+targetLabel, "")
 				} else {
-					printSync(Yellow, "↑ Sent", text, "queued — waiting for phone")
+					printSync(Yellow, "↑ Sent", cleanText+targetLabel, "queued")
 				}
 			}
 		}
 	}
 }
 
-func isSendCommand(input string) bool {
+func parseTargetFlag(input string) (string, string) {
 	trimmed := strings.TrimSpace(input)
+	for strings.HasPrefix(strings.ToLower(trimmed), "p2p>") {
+		trimmed = strings.TrimSpace(trimmed[4:])
+	}
+	lower := strings.ToLower(trimmed)
+	idx := strings.Index(lower, " --to ")
+	if idx != -1 {
+		mainPart := strings.TrimSpace(trimmed[:idx])
+		targetPart := strings.TrimSpace(trimmed[idx+6:])
+		targetPart = strings.Trim(targetPart, "\"'")
+		return mainPart, targetPart
+	}
+	return trimmed, ""
+}
+
+func extractFilePathAndTarget(input string) (string, string) {
+	mainPart, target := parseTargetFlag(input)
+	filePath := extractFilePath(mainPart)
+	return filePath, target
+}
+
+func isSendCommand(input string) bool {
+	mainPart, _ := parseTargetFlag(input)
+	trimmed := strings.TrimSpace(mainPart)
 	for strings.HasPrefix(strings.ToLower(trimmed), "p2p>") {
 		trimmed = strings.TrimSpace(trimmed[4:])
 	}
@@ -688,6 +752,17 @@ func deviceOnline(id string) bool {
 	return false
 }
 
+func getDeviceRemoteAddr(id string) string {
+	clientsMu.Lock()
+	defer clientsMu.Unlock()
+	for client := range clients {
+		if client.device != nil && client.device.ID == id && client.conn != nil {
+			return client.conn.RemoteAddr().String()
+		}
+	}
+	return ""
+}
+
 func printDevices() {
 	devices := listDevices()
 	if len(devices) == 0 {
@@ -697,16 +772,20 @@ func printDevices() {
 	fmt.Println(Cyan + "\n  Paired Devices" + Reset)
 	for _, d := range devices {
 		status := Dim + "last seen " + time.Unix(d.LastSeen, 0).Format("15:04") + Reset
+		addr := ""
 		if deviceOnline(d.ID) {
 			status = Green + "● online" + Reset
+			if rAddr := getDeviceRemoteAddr(d.ID); rAddr != "" {
+				addr = Dim + "(" + rAddr + ")" + Reset
+			}
 		}
 		trust := Dim + "[approval req]" + Reset
 		if d.Trusted {
 			trust = Green + "[trusted]" + Reset
 		}
-		fmt.Printf("  %s%-20s%s %s%-10s%s %-16s %s\n", White, d.Name, Reset, Dim, d.ID[:8], Reset, trust, status)
+		fmt.Printf("  %s%-18s%s %s%-10s%s %-16s %-14s %s\n", White, d.Name, Reset, Dim, d.ID[:8], Reset, trust, status, addr)
 	}
-	fmt.Println()
+	fmt.Printf("  %sTip: Send to specific device using 'send <path> --to <name>'%s\n\n", Dim, Reset)
 }
 
 func unpairDevice(query string) {
@@ -778,7 +857,15 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	// Flush any pending messages queued while phone was offline
 	outboxMu.Lock()
-	pending := cliOutbox
+	var pending []Message
+	if global, ok := deviceOutbox[""]; ok && len(global) > 0 {
+		pending = append(pending, global...)
+		deviceOutbox[""] = nil
+	}
+	if targeted, ok := deviceOutbox[session.Device.ID]; ok && len(targeted) > 0 {
+		pending = append(pending, targeted...)
+		delete(deviceOutbox, session.Device.ID)
+	}
 	cliOutbox = nil
 	outboxMu.Unlock()
 
@@ -911,6 +998,9 @@ func broadcastOnlineOnly(msg Message) int {
 	clientsMu.Lock()
 	delivered := 0
 	for client := range clients {
+		if msg.TargetDeviceID != "" && client.device != nil && client.device.ID != msg.TargetDeviceID {
+			continue
+		}
 		if client.Enqueue(msg) {
 			delivered++
 		} else {
@@ -925,6 +1015,8 @@ func broadcastMessage(msg Message) int {
 	delivered := broadcastOnlineOnly(msg)
 	if delivered == 0 {
 		outboxMu.Lock()
+		bucket := msg.TargetDeviceID
+		deviceOutbox[bucket] = append(deviceOutbox[bucket], msg)
 		cliOutbox = append(cliOutbox, msg)
 		outboxMu.Unlock()
 	}

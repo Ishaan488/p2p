@@ -2,6 +2,7 @@ import { HttpError, ServerApi } from './api';
 import { SpeedTracker, calculateEta } from './telemetry';
 import { playTransferSuccessChime } from './audio';
 import { startTransferForeground, stopTransferForeground, updateTransferForeground } from './foregroundService';
+import { computeFileHash } from './crypto';
 
 export const CHUNK_SIZE = 1024 * 1024;
 const PARALLEL_CHUNKS = 4;
@@ -97,6 +98,28 @@ export class Upload {
     this.tracker.reset();
 
     try {
+      // Pre-flight content deduplication check: skip upload if PC already has this exact file
+      try {
+        const hash = await computeFileHash(this.file, abort.signal);
+        const check = await this.api.call<{ exists: boolean; filename?: string }>('/upload_check_hash', {
+          hash,
+          filename: this.file.name,
+          totalSize: this.file.size
+        }, abort.signal);
+
+        if (check.exists) {
+          this.sentBytes = this.file.size;
+          this.speed = 0;
+          this.eta = 'Instant (Dedup)';
+          this.setStatus('done');
+          playTransferSuccessChime();
+          return;
+        }
+      } catch (e) {
+        // If dedup check fails (e.g. older server version or timeout), proceed with standard chunk upload
+        console.debug('Dedup check bypassed:', e);
+      }
+
       await startTransferForeground('P2P Link Transfer', `Uploading ${this.file.name}...`);
       // A second pass covers the server having lost the transfer mid-way (e.g. it restarted).
       for (let pass = 0; ; pass++) {

@@ -86,3 +86,19 @@ export class Cipher {
 }
 
 export const chunkContext = (transferId: string, chunkIndex: number) => `chunk\n${transferId}\n${chunkIndex}`;
+
+// Incrementally computes the SHA-256 hex digest of a File in bounded 2MB slices
+export async function computeFileHash(file: File, signal?: AbortSignal): Promise<string> {
+  const hasher = sha256.create();
+  const sliceSize = 2 * 1024 * 1024; // 2 MB slices keeps memory strictly O(1)
+  const totalSlices = Math.ceil(file.size / sliceSize);
+  for (let i = 0; i < totalSlices; i++) {
+    signal?.throwIfAborted();
+    const start = i * sliceSize;
+    const end = Math.min(start + sliceSize, file.size);
+    const slice = file.slice(start, end);
+    const buf = new Uint8Array(await slice.arrayBuffer());
+    hasher.update(buf);
+  }
+  return bytesToHex(hasher.digest());
+}

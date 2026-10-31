@@ -543,6 +543,11 @@ func handleUploadComplete(w http.ResponseWriter, r *http.Request, s *Session) {
 		return
 	}
 	printAsync(Green, "↓ File", state.Filename, fmt.Sprintf("%s · saved to received\\", formatSize(state.TotalSize)))
+	go func(p string, sz int64, nm string) {
+		if h, err := computeFileSHA256(p); err == nil {
+			recordFileHash(h, p, sz, nm)
+		}
+	}(finalPath, state.TotalSize, state.Filename)
 	recordTransfer(TransferRecord{
 		ID:        state.ID,
 		Filename:  state.Filename,
@@ -708,6 +713,10 @@ func handleDownloadFull(w http.ResponseWriter, r *http.Request, s *Session) {
 }
 
 func startSendTransfer(filePath string) error {
+	return startSendTransferTargeted(filePath, nil)
+}
+
+func startSendTransferTargeted(filePath string, targetDevice *Device) error {
 	cleanPath := filepath.Clean(filePath)
 	absPath, err := filepath.Abs(cleanPath)
 	if err != nil {
@@ -718,7 +727,7 @@ func startSendTransfer(filePath string) error {
 		return err
 	}
 	if stat.IsDir() {
-		return startSendFolderTransfer(absPath)
+		return startSendFolderTransferTargeted(absPath, targetDevice)
 	}
 
 	filename := filepath.Base(absPath)
@@ -733,6 +742,11 @@ func startSendTransfer(filePath string) error {
 		totalChunks = int((totalSize + chunkSize - 1) / chunkSize)
 	}
 
+	ownerID := ""
+	if targetDevice != nil {
+		ownerID = targetDevice.ID
+	}
+
 	transfersMu.Lock()
 	transfers[transferId] = &TransferState{
 		ID:          transferId,
@@ -742,6 +756,7 @@ func startSendTransfer(filePath string) error {
 		TotalSize:   totalSize,
 		FilePath:    absPath,
 		IsDownload:  true,
+		Owner:       ownerID,
 		LastActive:  time.Now().Unix(),
 	}
 	transfersMu.Unlock()
@@ -761,18 +776,25 @@ func startSendTransfer(filePath string) error {
 			"totalChunks": totalChunks,
 		},
 	}
+	if targetDevice != nil {
+		msg.TargetDeviceID = targetDevice.ID
+	}
 	delivered := broadcastMessage(msg)
+	targetLabel := "all devices"
+	if targetDevice != nil {
+		targetLabel = targetDevice.Name
+	}
 	if delivered > 0 {
-		printSync(Cyan, "↑ File", filename, formatSize(totalSize))
+		printSync(Cyan, "↑ File", filename, fmt.Sprintf("%s → %s", formatSize(totalSize), targetLabel))
 	} else {
-		printSync(Yellow, "↑ File", filename, fmt.Sprintf("%s · queued — waiting for phone", formatSize(totalSize)))
+		printSync(Yellow, "↑ File", filename, fmt.Sprintf("%s · queued for %s", formatSize(totalSize), targetLabel))
 	}
 	recordTransfer(TransferRecord{
 		ID:        transferId,
 		Filename:  filename,
 		Size:      totalSize,
 		Direction: "Sent",
-		Device:    "Phone",
+		Device:    targetLabel,
 		Status:    "Completed",
 	})
 	return nil
