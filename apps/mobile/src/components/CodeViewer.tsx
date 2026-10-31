@@ -11,7 +11,7 @@ interface CodeViewerProps {
   totalLines?: number;
   fileSize?: number;
   onDownload?: () => void;
-  onCopyNotice?: (msg: string) => void;
+  onCopyNotice?: (msg: string, type?: 'info' | 'success' | 'warning') => void;
 }
 
 export const CodeViewer: React.FC<CodeViewerProps> = ({
@@ -47,22 +47,23 @@ export const CodeViewer: React.FC<CodeViewerProps> = ({
     }
     setCopied(true);
     if (onCopyNotice) {
-      onCopyNotice(`Copied ${filename} to clipboard`);
+      onCopyNotice(`Copied ${filename}`, 'success');
     }
     setTimeout(() => setCopied(false), 2000);
   };
 
   const lines = snippet.split('\n');
   const langLabel = getLanguageLabel(filename);
+  const fullLines = (fullContent || snippet).split('\n');
 
   return (
     <>
       <div className="code-viewer-card">
         <div className="code-viewer-header">
           <div className="code-viewer-left">
-            <Code2 size={16} className="code-icon" />
+            <Code2 size={15} className="code-icon" />
             <span className="code-filename" title={filename}>{filename}</span>
-            <span className="code-lang-pill">{langLabel}</span>
+            <span className="file-ext-pill">{langLabel}</span>
             {fileSize !== undefined && (
               <span className="code-size-pill">{formatBytes(fileSize)}</span>
             )}
@@ -70,28 +71,24 @@ export const CodeViewer: React.FC<CodeViewerProps> = ({
 
           <div className="code-viewer-actions">
             <button
+              type="button"
               className="code-action-btn"
               onClick={handleCopy}
-              title="Copy all code to clipboard"
+              title="Copy code"
             >
-              {copied ? <Check size={14} color="var(--success-color)" /> : <Copy size={14} />}
+              {copied ? <Check size={13} color="var(--success)" /> : <Copy size={13} />}
               <span>{copied ? 'Copied' : 'Copy'}</span>
             </button>
 
-            {fullContent && totalLines && totalLines > lines.length && (
+            {((fullContent && totalLines && totalLines > lines.length) || lines.length > 6) && (
               <button
+                type="button"
                 className="code-action-btn"
                 onClick={() => setIsModalOpen(true)}
-                title="Expand full file"
+                title="View full source"
               >
-                <Maximize2 size={13} />
-                <span>Full</span>
-              </button>
-            )}
-
-            {onDownload && (
-              <button className="icon-btn" onClick={onDownload} title="Download Source File">
-                <Download size={15} />
+                <Maximize2 size={12} />
+                <span>Expand</span>
               </button>
             )}
           </div>
@@ -100,7 +97,7 @@ export const CodeViewer: React.FC<CodeViewerProps> = ({
         <div className="code-snippet-box">
           <table className="code-table">
             <tbody>
-              {lines.map((line, idx) => (
+              {lines.slice(0, 12).map((line, idx) => (
                 <tr key={idx}>
                   <td className="code-line-num">{idx + 1}</td>
                   <td className="code-line-text">{line || ' '}</td>
@@ -108,45 +105,58 @@ export const CodeViewer: React.FC<CodeViewerProps> = ({
               ))}
             </tbody>
           </table>
-          {totalLines && totalLines > lines.length && (
-            <div className="code-more-indicator" onClick={() => setIsModalOpen(true)}>
-              <span>+ {totalLines - lines.length} more lines • Click to view all</span>
-            </div>
+          {((totalLines && totalLines > 12) || lines.length > 12) && (
+            <button
+              type="button"
+              className="code-more-indicator"
+              onClick={() => setIsModalOpen(true)}
+            >
+              <span>
+                View all {totalLines || lines.length} lines
+              </span>
+            </button>
           )}
         </div>
       </div>
 
       {isModalOpen && (
-        <div className="code-modal-overlay" onClick={() => setIsModalOpen(false)}>
+        <div className="code-modal-overlay" onClick={() => setIsModalOpen(false)} role="dialog" aria-modal="true">
           <div className="code-modal-content" onClick={e => e.stopPropagation()}>
             <div className="code-modal-header">
               <div className="code-modal-title">
-                <Code2 size={18} />
-                <span>{filename}</span>
-                <span className="code-lang-pill">{langLabel}</span>
+                <Code2 size={16} />
+                <span className="code-modal-filename">{filename}</span>
+                <span className="file-ext-pill">{langLabel}</span>
                 {totalLines && <span className="code-size-pill">{totalLines} lines</span>}
               </div>
 
-              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                <button className="code-action-btn" onClick={handleCopy}>
-                  {copied ? <Check size={14} color="var(--success-color)" /> : <Copy size={14} />}
+              <div className="code-modal-actions">
+                <button type="button" className="code-action-btn" onClick={handleCopy}>
+                  {copied ? <Check size={13} color="var(--success)" /> : <Copy size={13} />}
                   <span>{copied ? 'Copied' : 'Copy All'}</span>
                 </button>
                 {onDownload && (
-                  <button className="icon-btn" onClick={onDownload} title="Download">
-                    <Download size={18} />
+                  <button type="button" className="icon-btn" onClick={onDownload} title="Save File">
+                    <Download size={16} />
                   </button>
                 )}
-                <button className="icon-btn" onClick={() => setIsModalOpen(false)} title="Close (Esc)">
-                  <X size={20} />
+                <button type="button" className="icon-btn" onClick={() => setIsModalOpen(false)} title="Close">
+                  <X size={18} />
                 </button>
               </div>
             </div>
 
             <div className="code-modal-body">
-              <pre className="code-modal-pre">
-                <code>{fullContent || snippet}</code>
-              </pre>
+              <table className="code-table code-table-full">
+                <tbody>
+                  {fullLines.map((line, idx) => (
+                    <tr key={idx}>
+                      <td className="code-line-num">{idx + 1}</td>
+                      <td className="code-line-text">{line || ' '}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>

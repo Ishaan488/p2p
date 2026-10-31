@@ -40,24 +40,24 @@ export const BatchProgress: React.FC<BatchProgressProps> = ({
             <span>Batch Transfer</span>
           </div>
           <span className="batch-counter">
-            {activeCount > 0 ? `${activeCount} in queue / ${totalCount} total` : `${totalCount} files`}
+            {activeCount > 0 ? `${activeCount} active of ${totalCount}` : `${totalCount} files`}
           </span>
         </div>
 
         <div className="batch-hud-controls">
           {isPaused ? (
-            <button className="batch-btn" onClick={onResumeAll} title="Resume All">
-              <Play size={14} />
+            <button type="button" className="batch-btn" onClick={onResumeAll} title="Resume All">
+              <Play size={13} />
               <span>Resume</span>
             </button>
           ) : (
-            <button className="batch-btn" onClick={onPauseAll} title="Pause All">
-              <Pause size={14} />
+            <button type="button" className="batch-btn" onClick={onPauseAll} title="Pause All">
+              <Pause size={13} />
               <span>Pause</span>
             </button>
           )}
-          <button className="batch-btn batch-btn-cancel" onClick={onCancelAll} title="Cancel All">
-            <X size={14} />
+          <button type="button" className="batch-btn batch-btn-cancel" onClick={onCancelAll} title="Cancel All">
+            <X size={13} />
             <span>Cancel</span>
           </button>
         </div>
@@ -77,11 +77,11 @@ export const BatchProgress: React.FC<BatchProgressProps> = ({
         <div className="batch-telemetry">
           {speed > 0 && (
             <span className="batch-speed">
-              <Zap size={12} color="var(--accent-color)" />
+              <Zap size={12} color="var(--accent)" />
               {formatSpeed(speed)}
             </span>
           )}
-          <span className="batch-eta">{eta}</span>
+          {eta && <span className="batch-eta">{eta}</span>}
         </div>
       </div>
     </div>

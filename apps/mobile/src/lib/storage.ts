@@ -144,3 +144,98 @@ export async function generateThumbnailDataUrl(blob: Blob, maxDim = 320): Promis
   });
 }
 
+/**
+ * Extracts a representative frame from a video Blob/File and generates a compact data URL.
+ * Enables instant video thumbnail rendering in the transfer history without loading the full video.
+ */
+export async function generateVideoThumbnailDataUrl(blob: Blob, maxDim = 320): Promise<string> {
+  return new Promise((resolve) => {
+    if (!blob.type.startsWith('video/') && !blob.type.includes('octet-stream')) {
+      resolve('');
+      return;
+    }
+
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.muted = true;
+    video.playsInline = true;
+
+    let url = '';
+    try {
+      url = URL.createObjectURL(blob);
+    } catch {
+      resolve('');
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      cleanup();
+      resolve('');
+    }, 3500);
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      video.removeAttribute('src');
+      video.load();
+      if (url) URL.revokeObjectURL(url);
+    };
+
+    video.onloadedmetadata = () => {
+      const seekTarget = video.duration && video.duration > 0
+        ? Math.min(1.0, video.duration * 0.2)
+        : 0;
+      video.currentTime = seekTarget;
+    };
+
+    video.onseeked = () => {
+      try {
+        let width = video.videoWidth;
+        let height = video.videoHeight;
+
+        if (width <= 0 || height <= 0) {
+          cleanup();
+          resolve('');
+          return;
+        }
+
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          cleanup();
+          resolve('');
+          return;
+        }
+
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'medium';
+        ctx.drawImage(video, 0, 0, width, height);
+
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.75);
+        cleanup();
+        resolve(dataUrl);
+      } catch {
+        cleanup();
+        resolve('');
+      }
+    };
+
+    video.onerror = () => {
+      cleanup();
+      resolve('');
+    };
+
+    video.src = url;
+  });
+}

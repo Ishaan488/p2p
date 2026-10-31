@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { FileText, ExternalLink, Download, X } from 'lucide-react';
+import { FileText, ExternalLink, Download, X, Eye } from 'lucide-react';
 import { formatBytes } from '../lib/telemetry';
 import { backButtonManager } from '../lib/backButton';
+import { Capacitor } from '@capacitor/core';
 
 interface PdfViewerProps {
   src: string;
@@ -17,6 +18,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   onDownload
 }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const isNative = Capacitor.isNativePlatform();
 
   useEffect(() => {
     if (!isOpen) return;
@@ -27,59 +29,74 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     return unregister;
   }, [isOpen]);
 
-  const handleOpen = () => {
-    // If running on desktop, window.open or modal iframe works great
-    setIsOpen(true);
-  };
-
   return (
     <>
       <div className="pdf-card">
         <div className="pdf-badge-icon">
-          <FileText size={22} color="#ff3b30" />
-          <span className="pdf-ext-tag">PDF</span>
+          <FileText size={20} />
         </div>
 
         <div className="pdf-info">
           <div className="pdf-title" title={filename}>{filename}</div>
-          <div className="pdf-size">{fileSize !== undefined ? formatBytes(fileSize) : 'PDF Document'}</div>
+          <div className="pdf-meta-row">
+            <span className="file-ext-pill pdf-pill">PDF</span>
+            <span className="pdf-size">
+              {fileSize !== undefined ? formatBytes(fileSize) : 'Document'}
+            </span>
+          </div>
         </div>
 
         <div className="pdf-actions">
-          <button className="pdf-open-btn" onClick={handleOpen} title="Open PDF">
-            <ExternalLink size={15} />
-            <span>View</span>
-          </button>
+          {!isNative && (
+            <button
+              type="button"
+              className="pdf-open-btn"
+              onClick={() => setIsOpen(true)}
+              title="Preview PDF"
+            >
+              <Eye size={14} />
+              <span>Preview</span>
+            </button>
+          )}
           {onDownload && (
-            <button className="icon-btn" onClick={onDownload} title="Download PDF">
-              <Download size={16} />
+            <button
+              type="button"
+              className="pdf-open-btn"
+              onClick={onDownload}
+              title="Save PDF to Downloads"
+            >
+              <Download size={14} />
+              <span>Save PDF</span>
             </button>
           )}
         </div>
       </div>
 
       {isOpen && (
-        <div className="pdf-modal-overlay" onClick={() => setIsOpen(false)}>
+        <div className="pdf-modal-overlay" onClick={() => setIsOpen(false)} role="dialog" aria-modal="true">
           <div className="pdf-modal-content" onClick={e => e.stopPropagation()}>
             <div className="pdf-modal-header">
-              <div className="pdf-modal-title">{filename}</div>
-              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <div className="pdf-modal-title-group">
+                <FileText size={16} />
+                <span className="pdf-modal-title">{filename}</span>
+              </div>
+              <div className="pdf-modal-actions">
                 <a
                   href={src}
                   target="_blank"
                   rel="noreferrer"
                   className="icon-btn"
-                  title="Open in new window"
+                  title="Open in new tab"
                 >
-                  <ExternalLink size={18} />
+                  <ExternalLink size={16} />
                 </a>
                 {onDownload && (
-                  <button className="icon-btn" onClick={onDownload} title="Download">
-                    <Download size={18} />
+                  <button type="button" className="icon-btn" onClick={onDownload} title="Save PDF">
+                    <Download size={16} />
                   </button>
                 )}
-                <button className="icon-btn" onClick={() => setIsOpen(false)} title="Close">
-                  <X size={20} />
+                <button type="button" className="icon-btn" onClick={() => setIsOpen(false)} title="Close">
+                  <X size={18} />
                 </button>
               </div>
             </div>

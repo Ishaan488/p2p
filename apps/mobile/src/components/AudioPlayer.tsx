@@ -32,7 +32,11 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
       setCurrentTime(0);
     };
     const onTimeUpdate = () => setCurrentTime(audio.currentTime);
-    const onLoadedMetadata = () => setDuration(audio.duration || 0);
+    const onLoadedMetadata = () => {
+      if (audio.duration && isFinite(audio.duration)) {
+        setDuration(audio.duration);
+      }
+    };
 
     audio.addEventListener('play', onPlay);
     audio.addEventListener('pause', onPause);
@@ -41,13 +45,14 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     audio.addEventListener('loadedmetadata', onLoadedMetadata);
 
     return () => {
+      audio.pause();
       audio.removeEventListener('play', onPlay);
       audio.removeEventListener('pause', onPause);
       audio.removeEventListener('ended', onEnded);
       audio.removeEventListener('timeupdate', onTimeUpdate);
       audio.removeEventListener('loadedmetadata', onLoadedMetadata);
     };
-  }, []);
+  }, [src]);
 
   const togglePlay = () => {
     if (!audioRef.current) return;
@@ -73,43 +78,64 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   };
 
   const formatSeconds = (sec: number) => {
-    if (!sec || isNaN(sec)) return '0:00';
+    if (!sec || isNaN(sec) || !isFinite(sec)) return '0:00';
     const m = Math.floor(sec / 60);
     const s = Math.floor(sec % 60);
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
-  const percent = duration > 0 ? (currentTime / duration) * 100 : 0;
+  const percent = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
+  const ext = filename.split('.').pop()?.toUpperCase() || 'AUDIO';
 
   return (
     <div className="audio-player-card">
       <audio ref={audioRef} src={src} preload="metadata" />
 
       <div className="audio-player-top">
-        <div className="audio-player-icon">
-          <Music size={18} />
+        <div className={`audio-player-icon ${isPlaying ? 'playing' : ''}`}>
+          {isPlaying ? (
+            <div className="audio-waveform-bars" aria-hidden="true">
+              <span style={{ animationDelay: '0.05s' }} />
+              <span style={{ animationDelay: '0.25s' }} />
+              <span style={{ animationDelay: '0.15s' }} />
+              <span style={{ animationDelay: '0.35s' }} />
+            </div>
+          ) : (
+            <Music size={18} />
+          )}
         </div>
+
         <div className="audio-player-meta">
           <div className="audio-player-name" title={filename}>{filename}</div>
           <div className="audio-player-details">
+            <span className="file-ext-pill">{ext}</span>
             {fileSize !== undefined && <span>{formatBytes(fileSize)}</span>}
             {duration > 0 && <span>• {formatSeconds(duration)}</span>}
           </div>
         </div>
+
         {onDownload && (
-          <button className="icon-btn" onClick={onDownload} title="Download Audio">
-            <Download size={16} />
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={onDownload}
+            title="Save Audio"
+            aria-label="Save Audio"
+          >
+            <Download size={15} />
           </button>
         )}
       </div>
 
       <div className="audio-player-controls">
         <button
+          type="button"
           className="audio-play-btn"
           onClick={togglePlay}
           title={isPlaying ? 'Pause' : 'Play'}
+          aria-label={isPlaying ? 'Pause' : 'Play'}
         >
-          {isPlaying ? <Pause size={18} /> : <Play size={18} style={{ marginLeft: '2px' }} />}
+          {isPlaying ? <Pause size={16} /> : <Play size={16} style={{ marginLeft: '2px' }} />}
         </button>
 
         <div className="audio-scrubber-container">
@@ -122,7 +148,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
             onChange={handleSeek}
             className="audio-scrubber"
             style={{
-              background: `linear-gradient(to right, var(--accent-color) ${percent}%, rgba(255,255,255,0.15) ${percent}%)`
+              background: `linear-gradient(to right, var(--accent) ${percent}%, var(--border-strong) ${percent}%)`
             }}
           />
           <div className="audio-time-row">
@@ -131,20 +157,16 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           </div>
         </div>
 
-        <button className="icon-btn" onClick={toggleMute} title={isMuted ? 'Unmute' : 'Mute'}>
+        <button
+          type="button"
+          className="icon-btn"
+          onClick={toggleMute}
+          title={isMuted ? 'Unmute' : 'Mute'}
+          aria-label={isMuted ? 'Unmute' : 'Mute'}
+        >
           {isMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
         </button>
       </div>
-
-      {isPlaying && (
-        <div className="audio-waveform-bars" aria-hidden="true">
-          <span style={{ animationDelay: '0.1s' }} />
-          <span style={{ animationDelay: '0.3s' }} />
-          <span style={{ animationDelay: '0.2s' }} />
-          <span style={{ animationDelay: '0.4s' }} />
-          <span style={{ animationDelay: '0.15s' }} />
-        </div>
-      )}
     </div>
   );
 };

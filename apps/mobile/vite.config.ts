@@ -12,8 +12,8 @@ export default defineConfig({
         name: 'P2P Link',
         short_name: 'P2P Link',
         description: 'Blazing fast local file transfer',
-        theme_color: '#0f172a',
-        background_color: '#0f172a',
+        theme_color: '#0A0A0C',
+        background_color: '#0A0A0C',
         display: 'standalone',
         orientation: 'portrait',
         icons: [

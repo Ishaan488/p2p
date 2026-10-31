@@ -9,8 +9,9 @@ import {
   QrCode, LogOut,
   Trash2, UploadCloud, Lock, Wifi,
   ShieldCheck, ShieldAlert, Unlink, MoreVertical,
-  Sun, Moon, Monitor, ArrowDownUp, Laptop
+  Sun, Moon, Monitor, Laptop, Edit3
 } from 'lucide-react';
+import { BrandLogo } from './components/BrandLogo';
 import { checkPendingShare, onSharedData } from './lib/shareTarget';
 import { Capacitor } from '@capacitor/core';
 import { Html5Qrcode } from 'html5-qrcode';
@@ -19,10 +20,10 @@ import { backButtonManager } from './lib/backButton';
 import {
   getMediaKind, extractTextSnippet
 } from './lib/telemetry';
-import { saveBlobToCache, getBlobFromCache, generateThumbnailDataUrl } from './lib/storage';
+import { saveBlobToCache, getBlobFromCache, generateThumbnailDataUrl, generateVideoThumbnailDataUrl } from './lib/storage';
 import { startAutoDiscovery, DiscoveredDevice } from './lib/discovery';
 import { ToastContainer, ToastMessage } from './components/Toast';
-import { Lightbox } from './components/Lightbox';
+import { MediaViewer, MediaViewerProps } from './components/MediaViewer';
 import { BatchProgress } from './components/BatchProgress';
 import { TransferCard, TransferItem } from './components/TransferCard';
 import { TransferActionPanel } from './components/TransferActionPanel';
@@ -136,6 +137,7 @@ export default function App() {
   const [isScanning, setIsScanning] = useState(false);
   const [cameraError, setCameraError] = useState('');
   const [isPcTrusted, setIsPcTrusted] = useState<boolean>(() => localStorage.getItem('p2p_trust_pc') !== 'false');
+  const [isEditingIp, setIsEditingIp] = useState(false);
 
   // Theme support: light | dark | system
   const [theme, setTheme] = useState<'dark' | 'light' | 'system'>(() => {
@@ -187,22 +189,22 @@ export default function App() {
   const dragDepth = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [lightboxImage, setLightboxImage] = useState<{
-    src: string;
-    filename: string;
-    fileSize?: number;
-    onDownload?: () => void;
-  } | null>(null);
+  const [activeMedia, setActiveMedia] = useState<Omit<MediaViewerProps, 'onClose'> | null>(null);
 
   // Apply Theme
   useEffect(() => {
     localStorage.setItem('p2p_theme', theme);
     const applyTheme = () => {
-      if (theme === 'system') {
-        const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
-      } else {
-        document.documentElement.setAttribute('data-theme', theme);
+      const resolved =
+        theme === 'system'
+          ? window.matchMedia('(prefers-color-scheme: dark)').matches
+            ? 'dark'
+            : 'light'
+          : theme;
+      document.documentElement.setAttribute('data-theme', resolved);
+      const metaTheme = document.querySelector('meta[name="theme-color"]');
+      if (metaTheme) {
+        metaTheme.setAttribute('content', resolved === 'dark' ? '#0A0A0C' : '#F6F6F4');
       }
     };
     applyTheme();
@@ -609,6 +611,8 @@ export default function App() {
 
       if (isImg) {
         thumb = await generateThumbnailDataUrl(blob);
+      } else if (file.mediaKind === 'video') {
+        thumb = await generateVideoThumbnailDataUrl(blob);
       }
       await saveBlobToCache(file.transferId, blob);
       updateFile(id, { isDownloading: false, progress: 100, blobUrl: url, thumbnailUrl: thumb });
@@ -664,6 +668,16 @@ export default function App() {
       }
     };
   }, [isScanning]);
+
+  const handleQuickConnect = () => {
+    const target = address.trim() || savedAddress();
+    if (!target) {
+      setIsEditingIp(true);
+      return;
+    }
+    setConnectError('');
+    connectTo(target).catch(console.error);
+  };
 
   const handleConnect = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -801,6 +815,9 @@ export default function App() {
       saveBlobToCache(transferId, file);
     } else if ((kind === 'audio' || kind === 'video' || kind === 'pdf') && file.size < 120 * 1024 * 1024) {
       blobUrl = URL.createObjectURL(file);
+      if (kind === 'video') {
+        thumbnailUrl = await generateVideoThumbnailDataUrl(file);
+      }
       saveBlobToCache(transferId, file);
     } else if (kind === 'code') {
       const extracted = await extractTextSnippet(file);
@@ -912,195 +929,274 @@ export default function App() {
         <header className="app-header">
           <div className="header-brand">
             <div className="brand-icon-box">
-              <ArrowDownUp size={16} />
+              <BrandLogo size={18} connected={false} />
             </div>
-            <div className="brand-text-box">
-              <span className="brand-name">P2P Link</span>
-              <span className="brand-caption">Local Transfer</span>
-            </div>
+            <span className="brand-name">P2P Link</span>
           </div>
 
-          <div className="header-status-pill">
-            <span className={`status-dot ${status}`} />
-            <span className="status-label">
-              {status === 'connecting' ? 'Connecting...' : status === 'error' ? 'Failed' : 'Standby'}
-            </span>
+          <div className="header-right-cluster">
+            <div className="header-status-pill">
+              <span className={`status-dot ${status}`} />
+              <span className="status-label">
+                {status === 'connecting' ? 'Connecting' : status === 'error' ? 'Offline' : 'Standby'}
+              </span>
+            </div>
+
+            <button
+              type="button"
+              className="header-action-btn"
+              onClick={() => {
+                const next = theme === 'dark' ? 'light' : theme === 'light' ? 'system' : 'dark';
+                setTheme(next);
+                showToast(`Theme: ${next.charAt(0).toUpperCase() + next.slice(1)}`, 'info');
+              }}
+              title={`Theme: ${theme}`}
+              aria-label="Toggle theme"
+            >
+              {theme === 'light' ? <Sun size={17} /> : theme === 'dark' ? <Moon size={17} /> : <Monitor size={17} />}
+            </button>
           </div>
         </header>
 
         {/* Connection Setup Content */}
-        <main className="connection-screen">
-          <div className="connection-card">
-            <div className="connection-hero-icon">
-              <Laptop size={28} />
-            </div>
-
+        <main className="connection-page">
+          <div className="connection-stage">
             {isScanning ? (
-              <div className="scanner-container">
-                <h2 className="scanner-title">Scan Desktop QR Code</h2>
-                <p className="scanner-subtitle">
-                  Point camera at the QR code displayed in your PC terminal
-                </p>
+              <div className="scanner-card">
+                <div className="scanner-header">
+                  <h2 className="scanner-title">Scan QR Code</h2>
+                  <p className="scanner-subtitle">
+                    Point your camera at the QR code on your computer
+                  </p>
+                </div>
                 <div id="qr-reader" className="qr-viewport" />
                 <button
                   type="button"
                   onClick={() => setIsScanning(false)}
                   className="btn btn-secondary full-width"
                 >
-                  Cancel Scanner
+                  Cancel
                 </button>
               </div>
             ) : (
               <>
-                <h2 className="connection-title">Connect to Desktop</h2>
-                <p className="connection-subtitle">
-                  {pairing ? (
-                    <>
-                      Linked with <strong className="peer-highlight">{pairing.serverName || 'Desktop PC'}</strong> as <strong>{pairing.deviceName}</strong>
-                    </>
-                  ) : (
-                    'Scan the QR code shown in your PC terminal to pair instantly over local Wi-Fi.'
-                  )}
-                </p>
-
-                {cameraError && (
-                  <div className="connection-alert error">
-                    {cameraError}
-                  </div>
-                )}
-
-                {connectError && !cameraError && (
-                  <div className="connection-alert error">
-                    {connectError}
-                  </div>
-                )}
-
-                {/* Primary QR Action */}
-                <button
-                  type="button"
-                  onClick={() => setIsScanning(true)}
-                  className="btn btn-primary btn-large full-width"
-                >
-                  <QrCode size={18} />
-                  <span>{pairing ? 'Scan QR to Reconnect' : 'Scan QR Code'}</span>
-                </button>
-
-                {/* Discovered Devices on Wi-Fi */}
-                {discoveredDevices.length > 0 && (
-                  <div className="discovered-block">
-                    <div className="section-label">
-                      <Wifi size={13} />
-                      <span>DISCOVERED ON LOCAL NETWORK</span>
+                {pairing ? (
+                  <div className="continuity-card">
+                    <div className="continuity-ring-wrap">
+                      <div className={`continuity-icon-circle ${status === 'connecting' ? 'pulsing' : ''}`}>
+                        <Laptop size={26} strokeWidth={1.8} />
+                      </div>
+                      <span className={`continuity-status-badge ${status}`} />
                     </div>
-                    <div className="discovered-list">
-                      {discoveredDevices.map(d => (
-                        <div key={`${d.host}:${d.port}`} className="discovered-card">
-                          <div className="discovered-meta">
-                            <span className="discovered-name">{d.serverName || d.name}</span>
-                            <span className="discovered-address">{d.host}:{d.port} {d.scheme === 'https' ? '• TLS' : ''}</span>
-                          </div>
-                          <button
-                            type="button"
-                            className="btn btn-secondary btn-compact"
-                            onClick={() => {
-                              const targetHost = `${d.host}:${d.port}`;
-                              setAddress(targetHost);
-                              if (pairing) {
-                                localStorage.setItem('p2p_address', targetHost);
-                                localStorage.setItem('p2p_auto_connect', 'true');
-                                connectTo(targetHost).catch(console.error);
-                              } else {
-                                pairAndConnect(targetHost, undefined, d.scheme, d.cert);
-                              }
-                            }}
-                          >
-                            Connect
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
 
-                {discoveryTip && discoveredDevices.length === 0 && (
-                  <div className="discovery-tip-box">
-                    <span>{discoveryTip}</span>
-                  </div>
-                )}
+                    <h2 className="continuity-title">{pairing.serverName || 'Desktop PC'}</h2>
+                    <p className="continuity-meta">
+                      <span className="mono-text">{address || 'Local Wi-Fi'}</span>
+                      <span className="meta-dot">·</span>
+                      <span>{pairing.deviceName}</span>
+                    </p>
 
-                {/* Manual Address Section */}
-                <div className="section-divider">
-                  <span>OR MANUAL ADDRESS</span>
-                </div>
+                    {(cameraError || connectError) && (
+                      <div className="connection-alert error">
+                        {cameraError || connectError}
+                      </div>
+                    )}
 
-                <form onSubmit={handleConnect} className="manual-form">
-                  <div className="form-field">
-                    <label className="form-label">Desktop IP & Port</label>
-                    <input
-                      type="text"
-                      className="form-input form-input-mono"
-                      value={address}
-                      onChange={e => setAddress(e.target.value)}
-                      placeholder="e.g. 192.168.1.15:8080"
-                    />
-                  </div>
-
-                  {!pairing && (
-                    <div className="form-field">
-                      <label className="form-label">Device Name</label>
-                      <input
-                        type="text"
-                        className="form-input"
-                        value={deviceName}
-                        onChange={e => setDeviceName(e.target.value)}
-                        maxLength={40}
-                      />
-                    </div>
-                  )}
-
-                  <button
-                    type="submit"
-                    className="btn btn-secondary full-width"
-                    disabled={status === 'connecting'}
-                  >
-                    {status === 'connecting'
-                      ? (pairing ? 'Connecting...' : 'Awaiting PC approval...')
-                      : !pairing
-                      ? 'Pair & Connect'
-                      : 'Connect via IP'}
-                  </button>
-
-                  {pairing && (
                     <button
                       type="button"
-                      onClick={() => {
-                        setConfirmDialog({
-                          isOpen: true,
-                          title: 'Forget This Desktop PC?',
-                          message: 'This device will be unpaired and keys revoked. You will need to scan the desktop QR code to pair again.',
-                          confirmLabel: 'Forget & Unpair',
-                          variant: 'danger',
-                          icon: 'unlink',
-                          onConfirm: async () => {
-                            setConfirmDialog(prev => ({ ...prev, isOpen: false }));
-                            try {
-                              await api.unpair();
-                            } catch {}
-                            savePairing(null);
-                            showToast('Device unpaired', 'info');
-                          }
-                        });
-                      }}
-                      className="forget-device-btn"
+                      onClick={handleQuickConnect}
+                      disabled={status === 'connecting'}
+                      className="btn btn-primary btn-large full-width continuity-primary-btn"
                     >
-                      <Unlink size={13} />
-                      <span>Forget This PC</span>
+                      <span>
+                        {status === 'connecting' ? 'Connecting...' : 'Connect'}
+                      </span>
                     </button>
-                  )}
-                </form>
+
+                    <div className="continuity-quick-actions">
+                      <button
+                        type="button"
+                        onClick={() => setIsScanning(true)}
+                        className="ghost-pill-btn"
+                      >
+                        <QrCode size={14} />
+                        <span>Scan QR</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingIp(v => !v)}
+                        className={`ghost-pill-btn ${isEditingIp ? 'active' : ''}`}
+                      >
+                        <Edit3 size={14} />
+                        <span>Change IP</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setConfirmDialog({
+                            isOpen: true,
+                            title: 'Unpair Desktop?',
+                            message: 'You will need to scan the QR code on your computer to pair again.',
+                            confirmLabel: 'Unpair',
+                            variant: 'danger',
+                            icon: 'unlink',
+                            onConfirm: async () => {
+                              setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+                              try {
+                                await api.unpair();
+                              } catch {}
+                              savePairing(null);
+                              showToast('Unpaired from desktop', 'info');
+                            }
+                          });
+                        }}
+                        className="ghost-pill-btn danger"
+                      >
+                        <Unlink size={14} />
+                        <span>Unpair</span>
+                      </button>
+                    </div>
+
+                    {isEditingIp && (
+                      <form onSubmit={handleConnect} className="inline-ip-editor">
+                        <input
+                          type="text"
+                          className="form-input form-input-mono"
+                          value={address}
+                          onChange={e => setAddress(e.target.value)}
+                          placeholder="192.168.1.15:8080"
+                          autoFocus
+                        />
+                        <button
+                          type="submit"
+                          className="btn btn-primary"
+                          disabled={status === 'connecting'}
+                        >
+                          Save
+                        </button>
+                      </form>
+                    )}
+                  </div>
+                ) : (
+                  <div className="continuity-card">
+                    <div className="continuity-ring-wrap">
+                      <div className="continuity-icon-circle">
+                        <BrandLogo size={28} connected={true} />
+                      </div>
+                    </div>
+
+                    <h2 className="continuity-title">Connect to Desktop</h2>
+                    <p className="continuity-subtitle">
+                      Scan the QR code displayed on your computer to pair over local Wi-Fi.
+                    </p>
+
+                    {(cameraError || connectError) && (
+                      <div className="connection-alert error">
+                        {cameraError || connectError}
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => setIsScanning(true)}
+                      className="btn btn-primary btn-large full-width continuity-primary-btn"
+                    >
+                      <QrCode size={17} />
+                      <span>Scan QR Code</span>
+                    </button>
+
+                    <div className="continuity-quick-actions">
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingIp(v => !v)}
+                        className={`ghost-pill-btn ${isEditingIp ? 'active' : ''}`}
+                      >
+                        <Edit3 size={14} />
+                        <span>{isEditingIp ? 'Hide manual setup' : 'Connect via IP address'}</span>
+                      </button>
+                    </div>
+
+                    {isEditingIp && (
+                      <form onSubmit={handleConnect} className="manual-drawer-form">
+                        <div className="form-field">
+                          <label className="form-label">Desktop IP & Port</label>
+                          <input
+                            type="text"
+                            className="form-input form-input-mono"
+                            value={address}
+                            onChange={e => setAddress(e.target.value)}
+                            placeholder="192.168.1.15:8080"
+                          />
+                        </div>
+                        <div className="form-field">
+                          <label className="form-label">Device Name</label>
+                          <input
+                            type="text"
+                            className="form-input"
+                            value={deviceName}
+                            onChange={e => setDeviceName(e.target.value)}
+                            maxLength={40}
+                          />
+                        </div>
+                        <button
+                          type="submit"
+                          className="btn btn-primary full-width"
+                          disabled={status === 'connecting'}
+                        >
+                          {status === 'connecting' ? 'Waiting for PC...' : 'Pair & Connect'}
+                        </button>
+                      </form>
+                    )}
+                  </div>
+                )}
+
+                {/* Discovered LAN Devices */}
+                {discoveredDevices.filter(d => !pairing || `${d.host}:${d.port}` !== address).length > 0 && (
+                  <div className="discovered-section">
+                    <div className="section-label">
+                      <Wifi size={12} />
+                      <span>AVAILABLE ON WI-FI</span>
+                    </div>
+                    <div className="discovered-list">
+                      {discoveredDevices
+                        .filter(d => !pairing || `${d.host}:${d.port}` !== address)
+                        .map(d => (
+                          <div key={`${d.host}:${d.port}`} className="discovered-card">
+                            <div className="discovered-meta">
+                              <span className="discovered-name">{d.serverName || d.name}</span>
+                              <span className="discovered-address">{d.host}:{d.port}</span>
+                            </div>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-compact"
+                              onClick={() => {
+                                const targetHost = `${d.host}:${d.port}`;
+                                setAddress(targetHost);
+                                localStorage.setItem('p2p_address', targetHost);
+                                pairAndConnect(targetHost, undefined, d.scheme, d.cert);
+                              }}
+                            >
+                              Connect
+                            </button>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
+
+                {!pairing && discoveryTip && discoveredDevices.length === 0 && isEditingIp && (
+                  <p className="discovery-caption">{discoveryTip}</p>
+                )}
               </>
             )}
           </div>
+
+          <footer className="connection-minimal-footer">
+            <Lock size={11} />
+            <span>End-to-end AES-256 encrypted · Local Wi-Fi only</span>
+          </footer>
         </main>
 
         <ConfirmationDialog
@@ -1130,14 +1226,15 @@ export default function App() {
     >
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
-      {/* Lightbox Image Preview */}
-      {lightboxImage && (
-        <Lightbox
-          src={lightboxImage.src}
-          filename={lightboxImage.filename}
-          fileSize={lightboxImage.fileSize}
-          onClose={() => setLightboxImage(null)}
-          onDownload={lightboxImage.onDownload}
+      {/* Dedicated Full-Screen Immersive Media Viewer */}
+      {activeMedia && (
+        <MediaViewer
+          type={activeMedia.type}
+          src={activeMedia.src}
+          filename={activeMedia.filename}
+          fileSize={activeMedia.fileSize}
+          onClose={() => setActiveMedia(null)}
+          onDownload={activeMedia.onDownload}
         />
       )}
 
@@ -1150,205 +1247,217 @@ export default function App() {
         </div>
       )}
 
-      {/* 1. Polished Header */}
+      {/* 1. Unified Minimalist Header */}
       <header className="app-header">
         <div className="header-brand">
           <div className="brand-icon-box connected">
-            <ArrowDownUp size={16} />
+            <BrandLogo size={18} connected={true} />
           </div>
           <div className="brand-text-box">
             <div className="brand-title-row">
-              <span className="brand-name">P2P Link</span>
+              <span className="brand-name">{pairing?.serverName || 'Desktop PC'}</span>
               <span className="security-badge" title="End-to-End Encrypted">
-                <Lock size={10} />
+                <Lock size={9} />
                 <span>E2EE</span>
               </span>
             </div>
             <div className="brand-peer-row">
               <span className="peer-live-dot" />
-              <span className="peer-name">{pairing?.serverName || 'Desktop PC'}</span>
+              <span className="peer-name">Connected · Local Wi-Fi</span>
             </div>
           </div>
         </div>
 
-        <div className="header-actions-box">
+        <div className="header-right-cluster">
           <button
             type="button"
-            onClick={() => setIsMenuOpen(o => !o)}
             className="header-action-btn"
-            title="Menu & Options"
-            aria-label="Menu"
+            onClick={() => {
+              const next = theme === 'dark' ? 'light' : theme === 'light' ? 'system' : 'dark';
+              setTheme(next);
+              showToast(`Theme: ${next.charAt(0).toUpperCase() + next.slice(1)}`, 'info');
+            }}
+            title={`Theme: ${theme}`}
+            aria-label="Toggle theme"
           >
-            <MoreVertical size={18} />
+            {theme === 'light' ? <Sun size={17} /> : theme === 'dark' ? <Moon size={17} /> : <Monitor size={17} />}
           </button>
 
-          {isMenuOpen && (
-            <>
-              <div className="menu-scrim" onClick={() => setIsMenuOpen(false)} />
-              <div className="overflow-menu-dropdown">
-                {/* Connection Section */}
-                <div className="menu-group-header">CONNECTION</div>
-                <button
-                  type="button"
-                  className="menu-item"
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    handleDisconnect();
-                  }}
-                >
-                  <LogOut size={15} />
-                  <span>Disconnect</span>
-                </button>
+          <div className="header-actions-box">
+            <button
+              type="button"
+              onClick={() => setIsMenuOpen(o => !o)}
+              className="header-action-btn"
+              title="Options"
+              aria-label="Menu"
+            >
+              <MoreVertical size={18} />
+            </button>
 
-                {/* Transfer Preferences */}
-                <div className="menu-group-header">PREFERENCES</div>
-                <button
-                  type="button"
-                  className="menu-item"
-                  onClick={() => {
-                    const next = !isPcTrusted;
-                    setIsPcTrusted(next);
-                    localStorage.setItem('p2p_trust_pc', next ? 'true' : 'false');
-                    showToast(next ? 'Auto-accept enabled' : 'Manual approval required', 'info');
-                    setIsMenuOpen(false);
-                  }}
-                >
-                  {isPcTrusted ? <ShieldCheck size={15} color="var(--success)" /> : <ShieldAlert size={15} />}
-                  <span>{isPcTrusted ? 'Auto-Accept: Enabled' : 'Auto-Accept: Disabled'}</span>
-                </button>
+            {isMenuOpen && (
+              <>
+                <div className="menu-scrim" onClick={() => setIsMenuOpen(false)} />
+                <div className="overflow-menu-dropdown">
+                  <div className="menu-group-header">SESSION</div>
+                  <button
+                    type="button"
+                    className="menu-item"
+                    onClick={() => {
+                      setIsMenuOpen(false);
+                      handleDisconnect();
+                    }}
+                  >
+                    <LogOut size={15} />
+                    <span>Disconnect</span>
+                  </button>
 
-                {/* Appearance */}
-                <div className="menu-group-header">APPEARANCE</div>
-                <div className="theme-toggle-row">
                   <button
                     type="button"
-                    className={`theme-toggle-btn ${theme === 'light' ? 'active' : ''}`}
-                    onClick={() => setTheme('light')}
-                    title="Light Theme"
+                    className="menu-item"
+                    onClick={() => {
+                      const next = !isPcTrusted;
+                      setIsPcTrusted(next);
+                      localStorage.setItem('p2p_trust_pc', next ? 'true' : 'false');
+                      showToast(next ? 'Auto-accept enabled' : 'Manual approval enabled', 'info');
+                      setIsMenuOpen(false);
+                    }}
                   >
-                    <Sun size={14} />
-                    <span>Light</span>
+                    {isPcTrusted ? <ShieldCheck size={15} color="var(--accent)" /> : <ShieldAlert size={15} />}
+                    <span>{isPcTrusted ? 'Auto-Accept Files: On' : 'Auto-Accept Files: Off'}</span>
                   </button>
+
+                  <div className="menu-group-header">APPEARANCE</div>
+                  <div className="theme-toggle-row">
+                    <button
+                      type="button"
+                      className={`theme-toggle-btn ${theme === 'light' ? 'active' : ''}`}
+                      onClick={() => setTheme('light')}
+                    >
+                      <Sun size={13} />
+                      <span>Light</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`theme-toggle-btn ${theme === 'dark' ? 'active' : ''}`}
+                      onClick={() => setTheme('dark')}
+                    >
+                      <Moon size={13} />
+                      <span>Dark</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`theme-toggle-btn ${theme === 'system' ? 'active' : ''}`}
+                      onClick={() => setTheme('system')}
+                    >
+                      <Monitor size={13} />
+                      <span>Auto</span>
+                    </button>
+                  </div>
+
+                  {messages.length > 0 && (
+                    <>
+                      <div className="menu-separator" />
+                      <button
+                        type="button"
+                        className="menu-item"
+                        onClick={() => {
+                          setIsMenuOpen(false);
+                          setConfirmDialog({
+                            isOpen: true,
+                            title: 'Clear Transfer List?',
+                            message: 'Saved files in your Downloads folder will remain untouched.',
+                            confirmLabel: 'Clear List',
+                            variant: 'danger',
+                            icon: 'trash',
+                            onConfirm: () => {
+                              setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+                              setMessages(prev => prev.filter(m => uploads.has(m.id)));
+                              showToast('Transfers cleared', 'info');
+                            }
+                          });
+                        }}
+                      >
+                        <Trash2 size={15} />
+                        <span>Clear History</span>
+                      </button>
+                    </>
+                  )}
+
+                  <div className="menu-separator" />
+
                   <button
                     type="button"
-                    className={`theme-toggle-btn ${theme === 'dark' ? 'active' : ''}`}
-                    onClick={() => setTheme('dark')}
-                    title="Dark Theme"
+                    className="menu-item menu-item-danger"
+                    onClick={() => {
+                      setIsMenuOpen(false);
+                      setConfirmDialog({
+                        isOpen: true,
+                        title: 'Unpair Desktop?',
+                        message: 'You will need to scan the desktop QR code to pair again.',
+                        confirmLabel: 'Unpair',
+                        variant: 'danger',
+                        icon: 'unlink',
+                        onConfirm: async () => {
+                          setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+                          try {
+                            await api.unpair();
+                          } catch {}
+                          savePairing(null);
+                          transport.disconnect();
+                          setStatus('disconnected');
+                          showToast('Unpaired from desktop', 'info');
+                        }
+                      });
+                    }}
                   >
-                    <Moon size={14} />
-                    <span>Dark</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`theme-toggle-btn ${theme === 'system' ? 'active' : ''}`}
-                    onClick={() => setTheme('system')}
-                    title="Match System"
-                  >
-                    <Monitor size={14} />
-                    <span>System</span>
+                    <Unlink size={15} />
+                    <span>Unpair Desktop</span>
                   </button>
                 </div>
-
-                {/* History Section */}
-                <div className="menu-group-header">HISTORY</div>
-                <button
-                  type="button"
-                  className="menu-item"
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    setConfirmDialog({
-                      isOpen: true,
-                      title: 'Clear Transfer History?',
-                      message: 'This removes transfer records on this device. Files saved in Downloads will not be deleted.',
-                      confirmLabel: 'Clear History',
-                      variant: 'danger',
-                      icon: 'trash',
-                      onConfirm: () => {
-                        setConfirmDialog(prev => ({ ...prev, isOpen: false }));
-                        setMessages(prev => prev.filter(m => uploads.has(m.id)));
-                        showToast('Transfer history cleared', 'info');
-                      }
-                    });
-                  }}
-                >
-                  <Trash2 size={15} />
-                  <span>Clear History</span>
-                </button>
-
-                <div className="menu-separator" />
-
-                {/* Device Management */}
-                <button
-                  type="button"
-                  className="menu-item menu-item-danger"
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    setConfirmDialog({
-                      isOpen: true,
-                      title: 'Forget This Desktop PC?',
-                      message: 'This device will be unpaired and keys revoked. You will need to scan the desktop QR code to pair again.',
-                      confirmLabel: 'Forget & Unpair',
-                      variant: 'danger',
-                      icon: 'unlink',
-                      onConfirm: async () => {
-                        setConfirmDialog(prev => ({ ...prev, isOpen: false }));
-                        try {
-                          await api.unpair();
-                        } catch {}
-                        savePairing(null);
-                        transport.disconnect();
-                        setStatus('disconnected');
-                        showToast('Device forgotten and unpaired', 'info');
-                      }
-                    });
-                  }}
-                >
-                  <Unlink size={15} />
-                  <span>Forget This PC</span>
-                </button>
-              </div>
-            </>
-          )}
+              </>
+            )}
+          </div>
         </div>
       </header>
 
-      {/* 2. Sub-Header Toolbar: Transfer History Title & Filter Segment */}
-      <div className="workspace-sub-header">
-        <div className="sub-header-title-row">
-          <h1 className="screen-heading">Transfer history</h1>
-          <span className="transfer-count-badge">
-            {messages.length} {messages.length === 1 ? 'item' : 'items'}
-          </span>
+      {/* 2. Compact Filter Bar (Only visible when transfers exist) */}
+      {messages.length > 0 && (
+        <div className="workspace-filter-strip">
+          <div className="pill-tabs-group">
+            <button
+              type="button"
+              className={`pill-tab ${filter === 'all' ? 'active' : ''}`}
+              onClick={() => setFilter('all')}
+            >
+              <span>All</span>
+              <span className="pill-tab-count">{messages.length}</span>
+            </button>
+            <button
+              type="button"
+              className={`pill-tab ${filter === 'received' ? 'active' : ''}`}
+              onClick={() => setFilter('received')}
+            >
+              <span>Received</span>
+              {messages.some(m => m.sender === 'other') && (
+                <span className="pill-tab-count">{messages.filter(m => m.sender === 'other').length}</span>
+              )}
+            </button>
+            <button
+              type="button"
+              className={`pill-tab ${filter === 'sent' ? 'active' : ''}`}
+              onClick={() => setFilter('sent')}
+            >
+              <span>Sent</span>
+              {messages.some(m => m.sender === 'me') && (
+                <span className="pill-tab-count">{messages.filter(m => m.sender === 'me').length}</span>
+              )}
+            </button>
+          </div>
         </div>
+      )}
 
-        {/* Segmented Filter Control */}
-        <div className="segmented-filter-bar">
-          <button
-            type="button"
-            className={`filter-segment-btn ${filter === 'all' ? 'active' : ''}`}
-            onClick={() => setFilter('all')}
-          >
-            All
-          </button>
-          <button
-            type="button"
-            className={`filter-segment-btn ${filter === 'received' ? 'active' : ''}`}
-            onClick={() => setFilter('received')}
-          >
-            Received
-          </button>
-          <button
-            type="button"
-            className={`filter-segment-btn ${filter === 'sent' ? 'active' : ''}`}
-            onClick={() => setFilter('sent')}
-          >
-            Sent
-          </button>
-        </div>
-      </div>
-
-      {/* 3. Main Transfer Activity List */}
-      <main className="activity-scroll-area">
+      {/* 3. Main Transfer Activity Stream */}
+      <main className={`activity-scroll-area ${filteredMessages.length === 0 ? 'is-empty' : ''}`}>
         {batchStats.totalCount > 1 && (
           <BatchProgress
             activeCount={batchStats.activeCount + batchStats.pendingCount}
@@ -1364,31 +1473,22 @@ export default function App() {
           />
         )}
 
-        {/* Empty State */}
+        {/* Minimal Centered Empty State */}
         {filteredMessages.length === 0 && (
-          <div className="empty-state-card">
-            <div className="empty-icon-circle">
-              <ArrowDownUp size={24} />
+          <div className="minimal-empty-stage">
+            <div className="empty-orbit-ring">
+              <div className="empty-core-icon">
+                <BrandLogo size={28} connected={true} />
+              </div>
             </div>
             <h3 className="empty-title">
-              {messages.length === 0
-                ? 'No transfers yet'
-                : `No ${filter} transfers`}
+              {messages.length === 0 ? 'Ready to Transfer' : `No ${filter} items`}
             </h3>
             <p className="empty-description">
               {messages.length === 0
-                ? `Files and text transferred between your phone and ${pairing?.serverName || 'Desktop'} will appear here.`
-                : `No transfers match the "${filter}" filter.`}
+                ? 'Send files, photos, videos, or text directly over local Wi-Fi.'
+                : `No transfers in "${filter}" yet.`}
             </p>
-            {messages.length === 0 && (
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="btn btn-secondary btn-compact"
-              >
-                Send Files
-              </button>
-            )}
           </div>
         )}
 
@@ -1412,14 +1512,7 @@ export default function App() {
                     onCopy={handleCopy}
                     onDownload={handleDownload}
                     onDelete={handleDelete}
-                    onOpenLightbox={(src, filename, size, downloadCb) => {
-                      setLightboxImage({
-                        src,
-                        filename,
-                        fileSize: size,
-                        onDownload: downloadCb
-                      });
-                    }}
+                    onOpenMedia={(media) => setActiveMedia(media)}
                     onAcceptApproval={(id, file) => {
                       updateFile(id, { isPendingApproval: false });
                       handleDownload(id, { ...file, isPendingApproval: false }, false);

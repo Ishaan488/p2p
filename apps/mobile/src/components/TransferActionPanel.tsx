@@ -1,5 +1,5 @@
 import React from 'react';
-import { Paperclip, FileText } from 'lucide-react';
+import { Plus, FileText } from 'lucide-react';
 
 interface TransferActionPanelProps {
   onOpenFilePicker: () => void;
@@ -17,9 +17,9 @@ export const TransferActionPanel: React.FC<TransferActionPanelProps> = ({
           type="button"
           className="action-btn action-btn-primary"
           onClick={onOpenFilePicker}
-          title="Choose files, photos, or documents to send"
+          title="Select files, photos, or videos to send"
         >
-          <Paperclip size={18} />
+          <Plus size={18} strokeWidth={2.4} />
           <span>Send Files</span>
         </button>
 
@@ -27,13 +27,12 @@ export const TransferActionPanel: React.FC<TransferActionPanelProps> = ({
           type="button"
           className="action-btn action-btn-secondary"
           onClick={onOpenSendText}
-          title="Send a text note, link, or clipboard snippet"
+          title="Send text, URL, or clipboard snippet"
         >
-          <FileText size={18} />
+          <FileText size={17} />
           <span>Send Text</span>
         </button>
       </div>
     </footer>
   );
 };
-
