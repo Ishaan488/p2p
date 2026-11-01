@@ -35,8 +35,8 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Docs
-docs/roadmap.md
+# Benchmark telemetry raw dumps (generated locally by bench.exe)
+benchmark_results/raw/
 
 # Android / Capacitor
 *.apk
