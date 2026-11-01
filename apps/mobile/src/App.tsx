@@ -242,7 +242,7 @@ export default function App() {
       document.documentElement.setAttribute('data-theme', resolved);
       const metaTheme = document.querySelector('meta[name="theme-color"]');
       if (metaTheme) {
-        metaTheme.setAttribute('content', resolved === 'dark' ? '#0A0A0C' : '#F6F6F4');
+        metaTheme.setAttribute('content', resolved === 'dark' ? '#17161D' : '#F6F4F8');
       }
     };
     applyTheme();
