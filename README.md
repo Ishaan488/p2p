@@ -1,228 +1,221 @@
 # P2P Link
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Go Version](https://img.shields.io/badge/Go-1.21%2B-00ADD8?logo=go)](https://go.dev/)
-[![React](https://img.shields.io/badge/React-18-61DAFB?logo=react)](https://react.dev/)
-[![Capacitor](https://img.shields.io/badge/Capacitor-Android%208.5-119EFF?logo=capacitor)](https://capacitorjs.com/)
-[![Platforms](https://img.shields.io/badge/Platforms-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-green)](#cross-platform-support)
-[![Zero Dependencies](https://img.shields.io/badge/Android%20Studio-Not%20Required-success)](#android-build--installation-no-android-studio-needed)
+<p align="center">
+  <img src="apps/mobile/public/icon.svg" width="96" height="96" alt="P2P Link Logo" />
+</p>
 
-**P2P Link** is an ultra-fast, encrypted, local peer-to-peer file transfer, real-time messaging, and clipboard synchronization platform designed as an enterprise-grade alternative to Apple AirDrop, Snapdrop, and Quick Share for PC-to-Mobile communication.
+<p align="center">
+  <strong>Ultra-fast, encrypted peer-to-peer file transfer, real-time messaging, and clipboard synchronization across Desktop and Mobile on local Wi-Fi.</strong>
+</p>
 
-It couples a high-throughput **Go host engine** on desktop with embedded frontend web assets and an **OLED dark-mode React client** that functions both as an installable Progressive Web App (PWA) and as a native Android app (compiled via Capacitor and Gradle CLI without Android Studio).
-
----
-
-## 🚀 Key Feature Matrix
-
-| Phase | Milestone | Capabilities Delivered |
-| :--- | :--- | :--- |
-| **Phase 1** | **Core Reliability** | Auto-resume on Wi-Fi drop/reconnect • Android Foreground Service (transfers continue screen-off) • Android Share Target ("Share → P2P Link") • Transfer approval/rejection • Device trust whitelist • Persistent transfer history |
-| **Phase 2** | **Security Hardening** | Ephemeral pairing codes with rate-limiting & lockout • Anti-replay nonces & sequence counter validation • Pinned TLS (HTTPS/WSS) • Two-way remote unpair (`/unpair`) • Continuous Go fuzz testing on protocol parsers |
-| **Phase 3** | **Usability & Frictionless UX** | mDNS ZeroConf auto-discovery (`_p2plink._tcp`) • UDP LAN broadcast fallback (`:8089`) • Safe ZIP folder streaming with Zip Slip protection • Cross-platform clipboard sync (Windows/macOS/Linux) • Full `Makefile` and POSIX shell tooling |
-| **Phase 4** | **Scale & Performance** | Multi-device concurrent routing (`--to <device>`) • Per-device isolated outboxes • Pre-flight SHA-256 deduplication (0 bytes sent for duplicates) • Parallel worker chunk streaming • Flat $\mathcal{O}(1)$ memory footprint for 60GB+ files • Built-in `pprof` profiling diagnostics |
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT" /></a>
+  <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.21%2B-00ADD8?style=flat-square&logo=go" alt="Go 1.21+" /></a>
+  <a href="https://react.dev/"><img src="https://img.shields.io/badge/React-18.2-61DAFB?style=flat-square&logo=react" alt="React 18" /></a>
+  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.2-3178C6?style=flat-square&logo=typescript" alt="TypeScript" /></a>
+  <a href="https://vitejs.dev/"><img src="https://img.shields.io/badge/Vite-5.0-646CFF?style=flat-square&logo=vite" alt="Vite" /></a>
+  <a href="https://capacitorjs.com/"><img src="https://img.shields.io/badge/Capacitor-Android%208.5-119EFF?style=flat-square&logo=capacitor" alt="Capacitor 8" /></a>
+  <img src="https://img.shields.io/badge/Encryption-AES--256--GCM-success?style=flat-square" alt="AES-256-GCM" />
+  <img src="https://img.shields.io/badge/Design-Obsidian%20%2B%20Soft%20Lavender-purple?style=flat-square" alt="Obsidian + Soft Lavender" />
+  <img src="https://img.shields.io/badge/Accessibility-WCAG%20AA%20Compliant-brightgreen?style=flat-square" alt="WCAG AA" />
+</p>
 
 ---
 
-## ⚡ Architecture & Highlights
+## 📖 Overview
 
-### 1. Instant Desktop Launch (< 10ms) & Cross-Platform Engine
-* **Single Standalone Executable**: Compiled with Go's `//go:embed all:dist` and stripped debug symbols (`-ldflags="-s -w"`), packaging the entire server and UI into a single self-contained ~15 MB executable (`p2p.exe` on Windows or `p2p` on macOS/Linux).
-* **Cross-Platform Toolchain**: Fully buildable on Windows, Linux, and macOS via `Makefile` or shell scripts without depending on Windows `.bat` files.
-* **Dynamic Port Allocation**: Defaults to `8080` and automatically claims adjacent ports (`8081`–`8090`) if busy.
-* **Non-Blocking Network Initialization**: Rapid 200ms interface inspection eliminates WAN DNS delays when offline or running on phone hotspots.
+**P2P Link** is a lightweight, high-performance, and privacy-respecting local file transfer platform designed as an open-source, cross-platform alternative to Apple AirDrop, Google Quick Share, and Snapdrop. 
 
-### 2. Multi-Device Targeting & Isolated Outboxes
-* **Concurrent Multi-Peer Support**: One PC can connect to multiple phones and tablets concurrently.
-* **Per-Device Routing**: Target transfers directly to specific devices with `--to <name|id>` (e.g. `send movie.mp4 --to Pixel`).
-* **Device-Isolated Outboxes**: An offline phone never stalls or delays transfers intended for other devices; targeted messages remain queued in the offline peer's bucket and flush automatically upon reconnection.
-
-### 3. Pre-Flight Content Deduplication (0-Byte Transmit)
-* Before streaming chunk payloads, the client computes an incremental SHA-256 hash using `@noble/hashes` without loading the full file into memory.
-* The desktop checks the local hash index (`/upload_check_hash`). If the file already exists on the destination, chunk transmission is bypassed entirely, completing instantly (100%) and recording in transfer history as `Deduplicated (Skipped)`.
-
-### 4. Line-Rate Parallel Streams with Flat $\mathcal{O}(1)$ Memory
-* Uploads and downloads stream across parallel workers (4–8 concurrent chunks).
-* Direct random-access disk writes (`os.File.WriteAt`) with read-write mutexes ensure that out-of-order chunks assemble seamlessly.
-* Server and client memory overhead remains strictly flat ($< 15\text{ MB}$) regardless of whether the file is 5 MB or 60 GB+.
-
-### 5. Zero-Configuration Auto-Discovery
-* **Dual-Channel Discovery**: Uses standard mDNS (`_p2plink._tcp.local`) for instant local peer discovery, backed by a UDP broadcast probe (`:8089`) for networks where multicast is restricted.
-* **Intelligent Network Fallback**: Clearly identifies campus / enterprise Wi-Fi AP Client Isolation and guides users to 1-tap QR pairing or manual IP entry.
-
-### 6. Android Build Without Android Studio
-* **100% CLI Toolchain**: Compiles and packages production Android APKs via standard Node.js and Gradle wrapper commands (`gradlew assembleDebug`).
-* **One-Command Build & Install**: Run `scripts\build-apk.bat` (or `make apk`) followed by `scripts\install-phone.bat` (or `make install`) to compile and push directly to connected phones via ADB.
-
-### 7. Industry-Grade Security
-* **AES-256-GCM Encryption**: Every chunk, JSON payload, and WebSocket frame is sealed with authenticated encryption derived via HKDF-SHA256.
-* **Anti-Replay Nonce Tracking**: One-off cryptographic nonces and frame sequence counters prevent reordering, replay attacks, and man-in-the-middle tampering.
-* **Brute-Force Lockout**: Pairing endpoints strictly enforce rate limits and lockout policies after 5 failed attempts.
-* **Filesystem Defenses**: Sanitization strips directory traversal sequences (`../../`), defangs Windows reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`), and enforces path containment.
+It pairs a high-throughput **Go host engine** on desktop with a polished **Obsidian + Soft Lavender** mobile client running on React 18, TypeScript, and Capacitor for Android. All data moves strictly over your local Wi-Fi network with end-to-end authenticated encryption (AES-256-GCM) — no external servers, cloud storage, accounts, or internet connectivity required.
 
 ---
 
-## 🖥️ Desktop CLI User Guide
+## ✨ Highlights & Architecture
 
-### Starting the Server
+### 🎨 Obsidian + Soft Lavender Design Language
+- **Calm, Premium Aesthetic:** Purpose-built palette centered on Obsidian (`#17161D`), deep elevated surfaces (`#201E27`), and Soft Lavender (`#A995D5` / `#7E66AC`) interactive accents.
+- **Dual-Theme Support:** Automatic and manual switching between Dark and Light modes (`#F6F4F8`) with verified **WCAG AA contrast compliance** (4.83:1 on light-theme CTAs, 6.77:1 on dark-theme CTAs).
+- **Dynamic Android Status Bar:** Synchronizes `<meta name="theme-color">` dynamically to match the active theme, integrating seamlessly with Android system bars.
+- **Tactile Touch Targets:** All interactive controls (buttons, pills, icons) enforce a minimum **44×44px hit-area** via centered pseudo-element expanders.
+- **Scroll Clearance:** Trailing `.activity-scroll-spacer` guarantees that the final items in the transfer stream scroll completely clear of the floating bottom toolbar with comfortable breathing room.
 
+### ⚡ Line-Rate Transfer Engine
+- **Flat $\mathcal{O}(1)$ Memory Scaling:** Streams multi-gigabyte files (tested up to 60GB+) using adaptive chunking (256 KB to 4 MB) with random-access `WriteAt` I/O. Memory usage remains flat ($< 15\text{ MB}$) regardless of file size.
+- **Pre-Flight SHA-256 Deduplication:** Incremental hash verification checks if a file already exists on the destination before streaming payload bytes. Duplicates transfer in 0 milliseconds and consume 0 bytes of network bandwidth.
+- **Parallel Worker Streams:** Concurrent chunk streaming saturates local Wi-Fi bandwidth, delivering speeds of 80–120+ MB/s on modern 5 GHz / Wi-Fi 6 connections.
+
+### 🛡️ Crash-Consistent Chunk Recovery & Security
+- **Resilient Transfer Resumption:** Interrupted transfers resume deterministically from the exact last verified chunk via manifest tracking and per-chunk digest validation.
+- **Atomic Finalization:** Completed files are verified, recorded in the transfer history, and atomically moved into destination directories with collision-free naming, preventing partial-write corruption.
+- **End-to-End Cryptography:** Authenticated AES-256-GCM encryption with HKDF-SHA256 key derivation. Unauthenticated HTTP connections on local Wi-Fi are automatically protected via a pure-JS noble-ciphers fallback.
+- **Path Traversal Protection:** Defends against directory escapes (`../../`), Zip Slip exploits in folder transfers, and defangs Windows reserved device names (`CON`, `PRN`, `AUX`, `NUL`, etc.).
+
+### 📱 Android Integration
+- **Zero Android Studio Requirement:** The entire Android APK is compiled and packaged via standard CLI commands using Gradle Wrapper (`gradlew assembleDebug`).
+- **Android Share Target:** Send photos, videos, documents, or text directly from any Android app using the native "Share → P2P Link" intent.
+- **Background Transfers:** Transfers continue uninterrupted even when the screen is turned off or the app is minimized via the native Android Foreground Service.
+- **Hardware Back Button:** Fully integrated hardware back-button stack across all 7 modals, sheets, and image lightboxes.
+- **USB Live-Reload Workflow:** Direct ADB port forwarding (`localhost:5173`) enables instant on-device hot-reloading during development without reinstalling APKs.
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+- **Desktop:** [Go 1.21+](https://go.dev/dl/) installed.
+- **Mobile Build (Optional):** [Node.js 18+](https://nodejs.org/) & Java JDK 17+ (for compiling the Android APK).
+
+---
+
+### Desktop (Go Host Engine)
+
+#### 1. Launch the Server
 ```bash
 # Windows (One-Click)
 Start P2P.bat
 
-# Windows / Linux / macOS (Executable)
-./p2p.exe        # Windows
-./p2p            # Linux / macOS
-
-# With optional pprof profiler enabled (127.0.0.1:6060)
-./p2p.exe -pprof
+# Or compile and run directly:
+cd apps/cli
+go run .
 ```
 
-### CLI Commands Reference
+The desktop host starts immediately (< 10ms) and presents an interactive prompt along with a pairing QR code:
 
-Type commands directly into the interactive `p2p>` prompt:
+```
+===================================================
+  P2P Link — Host Engine (Port 8080)
+===================================================
+  Wi-Fi IP : 192.168.1.15:8080
+  Status   : Ready for connections
+===================================================
+
+p2p> 
+```
+
+#### 2. Desktop CLI Commands
 
 | Command | Action | Example |
 | :--- | :--- | :--- |
-| `send <path>` | Send file or directory to all connected devices | `send "C:\Movies\clip.mp4"` |
-| `send <path> --to <peer>` | Send file or directory to a specific device | `send "report.pdf" --to Pixel` |
-| `> <path> [--to <peer>]` | Shorthand for fast file sending | `> "photo.jpg" --to "iPhone 15"` |
-| `msg <text> [--to <peer>]` | Send text message to all or specific device | `msg "Meeting Link" --to Pixel` |
-| `<drag-and-drop path>` | Paste or drop any file path into terminal | `"D:\Backups\archive.zip"` |
-| `devices` | List paired devices, online state, and IP | `devices` |
-| `trust <device>` | Auto-accept file transfers without terminal prompt | `trust "Pixel 7"` |
-| `untrust <device>` | Require interactive terminal approval per transfer | `untrust "Pixel 7"` |
-| `unpair <device>` | Revoke and unpair a device | `unpair "Pixel 7"` |
-| `history` | Display recent transfer history | `history` |
-| `status` or `info` | Display uptime, RAM usage, goroutines, active transfers | `status` |
-| `setdir <path>` | Change folder where received files are saved | `setdir "D:\Downloads"` |
-| `pair` | Display QR code and manual IP for mobile pairing | `pair` |
-| `open` or `ui` | Open the desktop web workspace in default browser | `open` |
-| `clear` or `cls` | Clear terminal screen | `clear` |
-| `exit` | Gracefully shut down the server | `exit` |
+| `send <path>` | Send file or folder to all connected devices | `send "C:\Photos\vacation.jpg"` |
+| `send <path> --to <peer>` | Target a specific device | `send "report.pdf" --to "Pixel 8"` |
+| `> <path> [--to <peer>]` | Fast shorthand for sending | `> "clip.mp4" --to Laptop` |
+| `msg <text> [--to <peer>]` | Send text message or URL | `msg "https://github.com" --to Pixel` |
+| `devices` | List paired devices and online status | `devices` |
+| `trust <device>` | Auto-accept transfers from device | `trust "Pixel 8"` |
+| `unpair <device>` | Revoke pairing and disconnect peer | `unpair "Pixel 8"` |
+| `history` | View recent transfer history | `history` |
+| `status` | Show system uptime, RAM, active transfers | `status` |
+| `pair` | Show QR code and pairing token | `pair` |
+| `open` | Open desktop web UI in default browser | `open` |
 
 ---
 
-## 📱 Mobile App Guide (Android & PWA)
+### Mobile (Android App & PWA)
 
-### Option 1: Native Android App (Recommended)
-1. Build the APK without Android Studio:
-   ```cmd
+#### Option 1: Native Android App (Recommended)
+1. **Compile the APK (No Android Studio required):**
+   ```bash
+   # Windows
    scripts\build-apk.bat
+
+   # Linux / macOS
+   ./scripts/build-apk.sh
+   # or: make apk
    ```
-   *(Or on Linux/macOS: `./scripts/build-apk.sh` or `make apk`)*
-2. Install to connected phone via ADB:
-   ```cmd
+2. **Install to Connected Phone via ADB:**
+   ```bash
+   # Windows
    scripts\install-phone.bat
+
+   # Linux / macOS
+   ./scripts/install-phone.sh
+   # or: make install
    ```
-   *(Or on Linux/macOS: `./scripts/install-phone.sh` or `make install`)*
-3. Open **P2P Link** on your phone, tap **"Scan QR Code"**, and point the camera at your desktop terminal.
-4. **Android Share Target**: Select photos, documents, or text in any Android app, tap **Share**, and choose **P2P Link** to transmit directly to your PC.
-5. **Background Transfers**: Transfers continue seamlessly with the screen off via the Android Foreground Service.
+3. Open **P2P Link** on your phone, tap **Scan QR Code**, and point your camera at the desktop terminal.
 
-### Option 2: Browser Progressive Web App (PWA)
-1. Open Chrome, Safari, or Firefox on your phone and navigate to the PC IP shown in the terminal (e.g. `http://192.168.1.15:8080`).
+#### Option 2: Progressive Web App (PWA)
+1. Open your mobile browser (Chrome, Safari, Firefox) and navigate to the IP shown in your desktop terminal (e.g., `http://192.168.1.15:8080`).
 2. Scan the terminal pairing QR code or enter the pairing code.
-3. Tap **"Add to Home Screen"** to install as a standalone OLED web app.
+3. Tap **Add to Home Screen** to install as a standalone OLED web app.
 
 ---
 
-## 🌐 Network Topology & Troubleshooting
+## 🧩 Component Architecture
 
-### Campus, College & Enterprise Wi-Fi (AP Client Isolation)
-Most university and public Wi-Fi networks enable **AP (Client) Isolation**, which intentionally drops broadcast/multicast packets (blocking mDNS and auto-discovery) and prevents devices on the same Wi-Fi from communicating directly.
-
-* **Fix 1 (Direct Pairing)**: Tap **"Scan QR Code"** in the mobile app to connect via the exact IP and token, bypassing discovery.
-* **Fix 2 (Manual IP)**: Enter the PC LAN IP displayed in the terminal (e.g. `10.x.x.x:8080`) instead of `localhost:8080`.
-* **Fix 3 (Phone Hotspot)**: Turn on your phone's Wi-Fi hotspot and connect your PC to it. Mobile hotspots do not enforce AP isolation, enabling full wire-speed transfers (up to 80–120 MB/s).
-
-### Firewall Configuration (Windows)
-If Windows Firewall blocks inbound local traffic:
-* Run `Start P2P.bat` as Administrator once, or execute:
-  ```powershell
-  New-NetFirewallRule -DisplayName "P2P Link" -Direction Inbound -LocalPort 8080-8090 -Protocol TCP -Action Allow
-  ```
-
----
-
-## 🛠️ Developer & Build Toolchain
-
-### Cross-Platform Make Targets
-```bash
-make desktop       # Builds standalone desktop binary (p2p)
-make apk           # Builds production Android APK (dist-apk/p2p-debug.apk)
-make install       # Installs APK to connected Android phone via ADB
-make test          # Runs complete automated unit, scale, and security test suite
-make clean         # Cleans build artifacts and temp files
+```
+apps/mobile/src/
+├── App.tsx                     # Main application shell & WebSocket transport orchestrator
+├── index.css                   # Obsidian + Soft Lavender tokens, responsive layout, 44px hit-expanders
+├── components/
+│   ├── ConnectionScreen.tsx    # Standby screen, Wi-Fi LAN discovery, inline IP editor, QR scanner
+│   ├── TransferActionPanel.tsx # 6-category action strip (Photos, Videos, Audio, Docs, Folder, Paste)
+│   ├── TransferCard.tsx        # History item with Received/Sent badges, 16:9 previews, 360px protection
+│   ├── BatchProgress.tsx       # Shimmer progress bar, MB/s telemetry, remaining time, pause/cancel
+│   ├── PreferencesModal.tsx    # Grouped device settings (Local Mobile vs Remote Desktop)
+│   ├── SendTextModal.tsx       # Instant text & URL sharing bottom sheet with clipboard paste
+│   ├── ConfirmationDialog.tsx  # Semantic confirmation dialog with severity badges
+│   ├── MediaViewer.tsx         # Fullscreen image lightbox with zoom and pan
+│   ├── VideoPlayer.tsx         # Custom inline & fullscreen video player
+│   ├── AudioPlayer.tsx         # Waveform audio playback HUD
+│   ├── PdfViewer.tsx           # Inline PDF viewer
+│   ├── CodeViewer.tsx          # Syntax-highlighted code snippet viewer
+│   └── BrandLogo.tsx           # Animated SVG identity logo
+└── lib/
+    ├── api.ts                  # HTTP API client, pairing endpoints, error handling
+    ├── transport.ts            # Framed WebSocket transport with sequence counters
+    ├── crypto.ts               # WebCrypto + pure-JS noble-ciphers HKDF/AES-GCM
+    ├── uploads.ts              # Adaptive chunk streaming & worker queue
+    ├── downloads.ts            # Streamed download saver & filesystem bridge
+    ├── discovery.ts            # mDNS & UDP LAN device discovery
+    ├── shareTarget.ts          # Android native intent receiver
+    └── backButton.ts           # Hardware back-button stack manager
 ```
 
-### Windows Batch Scripts
-* `Start P2P.bat` — One-click launcher (auto-compiles if needed and boots in <10ms).
-* `build-desktop.bat` — Compiles standalone `p2p.exe` with embedded assets.
-* `scripts\build-apk.bat` — Compiles the Android APK via Gradle wrapper.
-* `scripts\install-phone.bat` — Pushes APK to phone via ADB.
+---
+
+## 🛠️ Developer & Live-Reload Workflow
+
+To iterate on the mobile UI without repeatedly rebuilding and reinstalling APKs, use the automated ADB Live-Reload runner:
+
+```bash
+npm --prefix apps/mobile run dev:live
+```
+
+This workflow automatically:
+1. Detects connected Android devices via ADB.
+2. Forwards port 5173 (`adb reverse tcp:5173 tcp:5173`).
+3. Starts the Vite dev server with Hot Module Replacement (HMR).
+4. Directs your phone's WebView to hot-reload changes within milliseconds.
 
 ---
 
-## 🧪 Comprehensive Verification & Test Suite
+## 🧪 Testing & Quality Assurance
 
-The test suite covers protocol compliance, multi-device routing, cryptographic security, file sanitization, and scale limits:
-
+### Go Test Suite (Desktop & Protocol)
 ```bash
 cd apps/cli
 go test -v ./...
 ```
+- **Crash Recovery:** `TestRestartTransferRecovery` validates chunk resumption after process kills.
+- **Multi-Device Targeting:** `TestPhase4_MultiDeviceTargeting` ensures isolated message delivery.
+- **Content Deduplication:** `TestPhase4_ContentDeduplication` verifies zero-byte transmission for identical files.
+- **Fuzzing Suite:** Continuous fuzz testing on filename sanitizers, chunk AAD bindings, and request signatures.
 
-### Tested Scenarios
-* **Multi-Device Targeted Routing** (`TestPhase4_MultiDeviceTargeting`): Verifies messages and transfers route exclusively to the targeted device without leaking to peers.
-* **Device-Isolated Outboxes** (`TestPhase4_DeviceIsolatedOutbox`): Verifies offline devices do not block others and properly dequeue messages on reconnect.
-* **Pre-Flight Deduplication** (`TestPhase4_ContentDeduplication`): Verifies pre-flight hash verification skips chunk transmission for identical files.
-* **Out-of-Order Parallel Chunk Assembly** (`TestPhase4_ParallelOutOfOrderChunks`): Verifies concurrent random-offset chunk writes assemble into bit-exact files.
-* **Flat $\mathcal{O}(1)$ Memory Footprint** (`TestPhase4_FlatMemoryScaling`): Verifies streaming multi-chunk files keeps heap memory flat without buffering.
-* **100+ Concurrent Transfer Stress Test** (`TestPhase4_100SimultaneousTransfers`): Verifies 100 simultaneous transfers complete with zero deadlocks or race conditions.
-* **Pprof Diagnostic Endpoint** (`TestPhase4_PprofEndpoint`): Verifies runtime heap and goroutine profilers are available.
-* **Fuzz Testing**: Continuous fuzzing on filename sanitization (`FuzzSanitizeFilename`), pairing code normalization (`FuzzNormalizePairCode`), chunk AAD binding (`FuzzChunkAAD`), and request HMAC signatures (`FuzzRequestSignature`).
-* **Security & Path Traversal**: Verified defenses against directory escape (`../../`), Zip Slip, Windows reserved names, and unauthenticated endpoint hits.
+### Mobile Build & TypeScript Verification
+```bash
+npm --prefix apps/mobile run build
+```
+Validates zero TypeScript compile errors (`tsc`) and bundles production assets with Vite.
 
 ---
 
-## 📂 Project Structure
+## 🌐 Network Troubleshooting
 
-```
-p2p/
-├── p2p.exe                          # Standalone desktop host binary (~15 MB)
-├── Start P2P.bat                    # Instant desktop launcher
-├── build-desktop.bat / .sh          # Desktop standalone binary compiler
-├── Makefile                         # Cross-platform build automation
-├── dist-apk/
-│   └── p2p-debug.apk                # Production native Android APK (~4.3 MB)
-├── scripts/
-│   ├── build-apk.bat / .sh          # Android APK build script (CLI, No Studio)
-│   ├── build-apk.js                 # Node.js APK build runner
-│   └── install-phone.bat / .sh      # ADB deployment script
-├── apps/
-│   ├── cli/                         # High-performance Go host backend
-│   │   ├── main.go                  # Server bootstrap, interactive REPL, routing
-│   │   ├── auth.go                  # AES-256-GCM / HMAC session manager
-│   │   ├── dedup.go                 # Pre-flight SHA-256 content deduplication
-│   │   ├── file_transfer.go         # Zero-RAM chunk streaming & WriteAt I/O
-│   │   ├── folder_transfer.go       # ZIP folder packaging with Zip Slip defenses
-│   │   ├── discovery.go             # mDNS ZeroConf & UDP LAN broadcast
-│   │   ├── clipboard_image_*.go     # Multi-OS image clipboard sync (Win/Mac/Linux)
-│   │   ├── protocol.go              # Shared wire protocol & message structs
-│   │   ├── state.go                 # Device pairing persistence
-│   │   ├── dist/                    # Embedded web assets (synced from mobile)
-│   │   ├── phase3_test.go           # Usability & folder transfer tests
-│   │   ├── phase4_test.go           # Multi-device, dedup, and scale tests
-│   │   └── security_phase2_test.go  # Security, rate-limit, and fuzz tests
-│   └── mobile/                      # React 18 + TypeScript + Vite + Capacitor
-│       ├── src/
-│       │   ├── App.tsx              # OLED workspace, transfer HUD, modal manager
-│       │   ├── components/          # Lightbox, Audio, Video, PDF, Code, Batch HUD
-│       │   └── lib/                 # Crypto, uploads, downloads, telemetry, discovery
-│       └── android/                 # Native Android Gradle wrapper project
-└── README.md
-```
+### Campus / Enterprise Wi-Fi (AP Client Isolation)
+Public and university Wi-Fi networks typically enable **AP Client Isolation**, which blocks devices on the same subnet from seeing each other.
+- **Fix 1 (Direct QR Pairing):** Tap **Scan QR Code** in the mobile app. The QR code contains direct connection parameters, bypassing multicast discovery.
+- **Fix 2 (Manual IP Entry):** Tap **Connect via IP** and enter the desktop's IP directly (e.g. `10.x.x.x:8080`).
+- **Fix 3 (Mobile Hotspot):** Turn on your phone's Wi-Fi hotspot and connect your computer to it. Hotspots do not enforce AP isolation and achieve maximum wire speeds (80–120 MB/s).
 
 ---
 
