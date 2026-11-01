@@ -54,14 +54,20 @@ func TestDownloadTransferPersistenceAndRecovery(t *testing.T) {
 		t.Fatalf("expected dlmeta file at %s: %v", metaPath, err)
 	}
 
-	// 2. Simulate server restart: clear memory
+	// 2. Test on-demand recovery via lookupTransfer
 	transfersMu.Lock()
 	delete(transfers, transferID)
 	transfersMu.Unlock()
 
-	if lookupTransfer(transferID) != nil {
-		t.Fatalf("expected transfer to be gone from memory before recovery")
+	recoveredOnDemand := lookupTransfer(transferID)
+	if recoveredOnDemand == nil || recoveredOnDemand.ID != transferID {
+		t.Fatalf("expected transfer to be recovered on-demand via lookupTransfer")
 	}
+
+	// Clear again for recoverOrSweepTempDir test
+	transfersMu.Lock()
+	delete(transfers, transferID)
+	transfersMu.Unlock()
 
 	// 3. Run recovery
 	recovered := recoverOrSweepTempDir()

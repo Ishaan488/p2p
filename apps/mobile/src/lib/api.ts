@@ -183,11 +183,43 @@ export class ServerApi {
     }
   }
 
+  // Helper to enforce request timeout and cleanly respect external AbortSignal
+  private async fetchWithDeadline(
+    url: string,
+    options: RequestInit = {},
+    timeoutMs = 12000,
+    externalSignal?: AbortSignal
+  ): Promise<Response> {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(new Error(`Network request timed out after ${timeoutMs}ms`)), timeoutMs);
+    let onAbort: (() => void) | undefined;
+    if (externalSignal) {
+      if (externalSignal.aborted) {
+        clearTimeout(timer);
+        ctrl.abort(externalSignal.reason);
+      } else {
+        onAbort = () => {
+          clearTimeout(timer);
+          ctrl.abort(externalSignal.reason);
+        };
+        externalSignal.addEventListener('abort', onAbort);
+      }
+    }
+    try {
+      return await fetch(url, { ...options, signal: ctrl.signal });
+    } finally {
+      clearTimeout(timer);
+      if (externalSignal && onAbort) {
+        externalSignal.removeEventListener('abort', onAbort);
+      }
+    }
+  }
+
   call<T = unknown>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
     return this.withSession(async () => {
       const { url, nonce, session } = await this.sign('POST', path);
       const sealed = await session.cipher.seal(utf8ToBytes(JSON.stringify(body)), `req\n${path}\n${nonce}`);
-      const res = await fetch(url, { method: 'POST', body: sealed as BodyInit, signal });
+      const res = await this.fetchWithDeadline(url, { method: 'POST', body: sealed as BodyInit }, 8000, signal);
       if (!res.ok) throw await failure(res, 'Request failed');
       const reply = await session.cipher.open(new Uint8Array(await res.arrayBuffer()), `res\n${path}\n${nonce}`);
       return JSON.parse(new TextDecoder().decode(reply)) as T;
@@ -211,7 +243,7 @@ export class ServerApi {
       const { url, session } = await this.sign('POST', '/upload', { transferId, chunkIndex: String(chunkIndex) });
       const rawBytes = data instanceof Uint8Array ? data : new Uint8Array(await data.arrayBuffer());
       const sealed = await session.cipher.seal(rawBytes, chunkContext(transferId, chunkIndex));
-      const res = await fetch(url, { method: 'POST', body: sealed as BodyInit, signal });
+      const res = await this.fetchWithDeadline(url, { method: 'POST', body: sealed as BodyInit }, 15000, signal);
       if (!res.ok) throw await failure(res, 'Chunk upload failed');
     });
   }
@@ -219,7 +251,7 @@ export class ServerApi {
   downloadChunk(transferId: string, chunkIndex: number, signal?: AbortSignal): Promise<Uint8Array> {
     return this.withSession(async () => {
       const { url, session } = await this.sign('GET', '/download', { transferId, chunkIndex: String(chunkIndex) });
-      const res = await fetch(url, { signal });
+      const res = await this.fetchWithDeadline(url, { method: 'GET' }, 12000, signal);
       if (!res.ok) throw await failure(res, 'Chunk download failed');
       return session.cipher.open(new Uint8Array(await res.arrayBuffer()), chunkContext(transferId, chunkIndex));
     });

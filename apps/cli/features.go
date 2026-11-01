@@ -247,17 +247,19 @@ func getJournalPath(partPath string) string {
 }
 
 func getDownloadMetaPath(id string) string {
-	transfersMu.Lock()
 	dir := tempDir
-	transfersMu.Unlock()
+	if dir == "" {
+		dir = filepath.Join(baseDir, "temp")
+	}
 	sum := sha256.Sum256([]byte(id))
 	return filepath.Join(dir, hex.EncodeToString(sum[:16])+".dlmeta.json")
 }
 
 func getDownloadJournalPath(id string) string {
-	transfersMu.Lock()
 	dir := tempDir
-	transfersMu.Unlock()
+	if dir == "" {
+		dir = filepath.Join(baseDir, "temp")
+	}
 	sum := sha256.Sum256([]byte(id))
 	return filepath.Join(dir, hex.EncodeToString(sum[:16])+".dlmeta.journal")
 }

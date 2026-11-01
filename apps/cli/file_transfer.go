@@ -291,8 +291,40 @@ func lookupTransfer(id string) *TransferState {
 	state := transfers[id]
 	if state != nil {
 		state.LastActive = time.Now().Unix()
+		return state
 	}
-	return state
+
+	// Disk fallback: check if it was persisted as a download (.dlmeta.json)
+	metaPath := getDownloadMetaPath(id)
+	if data, err := os.ReadFile(metaPath); err == nil {
+		var meta persistedTransferMeta
+		if json.Unmarshal(data, &meta) == nil && meta.ID == id && meta.IsDownload {
+			if fi, err := os.Stat(meta.FilePath); err == nil && !fi.IsDir() && fi.Size() == meta.TotalSize {
+				st := &TransferState{
+					ID:          meta.ID,
+					Filename:    meta.Filename,
+					TotalChunks: meta.TotalChunks,
+					ChunkSize:   meta.ChunkSize,
+					TotalSize:   meta.TotalSize,
+					FilePath:    meta.FilePath,
+					FinalPath:   meta.FinalPath,
+					State:       meta.State,
+					generation:  meta.Generation,
+					IsDownload:  true,
+					IsFolder:    meta.IsFolder,
+					FolderName:  meta.FolderName,
+					LastActive:  time.Now().Unix(),
+					Owner:       meta.Owner,
+					received:    meta.Received,
+					chunkHashes: meta.ChunkHashes,
+				}
+				transfers[id] = st
+				return st
+			}
+		}
+	}
+
+	return nil
 }
 
 // lookupUpload returns an in-progress upload, but only to the device that started it.
@@ -632,6 +664,12 @@ func handleUploadCancel(w http.ResponseWriter, r *http.Request, s *Session) {
 			Device:    s.Device.DisplayName(),
 			Status:    "Cancelled",
 		})
+	} else if dlState := lookupTransfer(req.TransferID); dlState != nil && dlState.IsDownload {
+		transfersMu.Lock()
+		delete(transfers, req.TransferID)
+		transfersMu.Unlock()
+		dlState.removeMeta()
+		printAsync(Yellow, "○ Cancelled", dlState.Filename, "")
 	}
 	s.writeResponse(w, r, map[string]bool{"ok": true})
 }

@@ -182,6 +182,15 @@ public class FileSaverPlugin extends Plugin {
             return;
         }
 
+        if (activeChannels.containsKey(fileId) || activeStreams.containsKey(fileId)) {
+            JSObject ret = new JSObject();
+            ret.put("success", true);
+            ret.put("fileId", fileId);
+            ret.put("resumed", true);
+            call.resolve(ret);
+            return;
+        }
+
         if (mimeType == null || mimeType.trim().isEmpty()) {
             mimeType = "application/octet-stream";
         }

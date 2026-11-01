@@ -376,6 +376,30 @@ export default function App() {
 
   // Sync server settings & flush offline outbox when connection is restored
   useEffect(() => {
+    if (status === 'disconnected' || status === 'error') {
+      for (const ctrl of activeDownloads.values()) {
+        ctrl.abort();
+      }
+      activeDownloads.clear();
+
+      setMessages(prev => prev.map(m => {
+        if (m.sender === 'other' && m.file && (m.file.isDownloading || m.file.status === 'downloading')) {
+          return {
+            ...m,
+            file: {
+              ...m.file,
+              isDownloading: false,
+              status: 'interrupted',
+              speed: undefined,
+              eta: undefined,
+              error: 'Disconnected — will resume when reconnected'
+            }
+          };
+        }
+        return m;
+      }));
+    }
+
     if (status === 'connected' && transport.isConnected()) {
       uploadQueue.resumeInterrupted(uploads.values());
 
@@ -491,8 +515,9 @@ export default function App() {
     if (dlCtrl) {
       dlCtrl.abort();
       activeDownloads.delete(id);
+      updateFile(id, { status: 'canceled', isDownloading: false, speed: undefined, eta: undefined });
+      return;
     }
-    clearDownloadCache(transferId);
 
     const upload = uploads.get(id);
     if (upload) {
@@ -506,8 +531,11 @@ export default function App() {
 
   const handleDelete = (id: string) => {
     const file = messages.find(m => m.id === id)?.file;
-    if (file?.status && file.status !== 'done' && file.status !== 'canceled') {
-      cancelUpload(id, file.transferId);
+    if (file) {
+      if (file.status && file.status !== 'done' && file.status !== 'canceled') {
+        cancelUpload(id, file.transferId);
+      }
+      clearDownloadCache(file.transferId);
     }
     setDeletingIds(prev => new Set(prev).add(id));
     setTimeout(() => {
@@ -830,17 +858,21 @@ export default function App() {
       }
     } catch (err) {
       activeDownloads.delete(id);
-      if (abortCtrl.signal.aborted) {
-        return;
-      }
+      const isAborted = abortCtrl.signal.aborted;
       const rawMsg = err instanceof Error ? err.message : 'Download failed';
-      const isInterrupted = !transport.isConnected() || rawMsg.includes('Failed to fetch') || rawMsg.includes('Network') || rawMsg.includes('Connection') || rawMsg.includes('timed out');
+      const isInterrupted = isAborted || !transport.isConnected() || rawMsg.includes('Failed to fetch') || rawMsg.includes('Network') || rawMsg.includes('Connection') || rawMsg.includes('timed out');
       updateFile(id, {
         isDownloading: false,
         status: isInterrupted ? 'interrupted' : 'error',
-        error: isInterrupted ? 'Interrupted — will resume when reconnected' : rawMsg
+        speed: undefined,
+        eta: undefined,
+        error: isInterrupted ? 'Paused · tap Resume or wait for reconnect' : rawMsg
       });
-      showToast(isInterrupted ? `Download paused: ${file.filename}` : `Failed to download ${file.filename}`, 'warning');
+      if (!isAborted && !isInterrupted) {
+        showToast(`Failed to download ${file.filename}`, 'warning');
+      } else if (!isAborted) {
+        showToast(`Download paused: ${file.filename}`, 'warning');
+      }
     }
   };
 

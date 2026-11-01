@@ -1126,6 +1126,13 @@ func (c *Client) readPump() {
 		}(c.device.ID, c.device.DisplayName())
 	}()
 
+	// Read timeout and keepalive pong handling
+	c.conn.SetReadDeadline(time.Now().Add(12 * time.Second))
+	c.conn.SetPongHandler(func(string) error {
+		c.conn.SetReadDeadline(time.Now().Add(12 * time.Second))
+		return nil
+	})
+
 	// Frames are encrypted and numbered per direction: anything replayed,
 	// reordered, dropped or forged fails to decrypt and ends the connection.
 	for counter := 0; ; counter++ {
@@ -1136,6 +1143,7 @@ func (c *Client) readPump() {
 			}
 			break
 		}
+		c.conn.SetReadDeadline(time.Now().Add(12 * time.Second))
 		plaintext, err := c.session.open(frame, fmt.Sprintf("c2s\n%d", counter))
 		if err != nil {
 			printAsync(Red, "! Security", c.device.DisplayName(), "dropped undecryptable frame")
@@ -1143,6 +1151,13 @@ func (c *Client) readPump() {
 		}
 		var msg Message
 		if json.Unmarshal(plaintext, &msg) != nil {
+			continue
+		}
+
+		if msg.Type == "ping" {
+			c.Enqueue(Message{Version: 1, Type: "pong"})
+			continue
+		} else if msg.Type == "pong" {
 			continue
 		}
 
@@ -1185,22 +1200,33 @@ func (c *Client) readPump() {
 }
 
 func (c *Client) writePump() {
+	ticker := time.NewTicker(3500 * time.Millisecond)
 	defer func() {
+		ticker.Stop()
 		c.Close()
 	}()
-	for counter := 0; ; counter++ {
-		msg, ok := <-c.send
-		if !ok {
-			c.conn.WriteMessage(websocket.CloseMessage, []byte{})
-			return
-		}
-		data, err := json.Marshal(msg)
-		if err != nil {
-			return
-		}
-		frame := c.session.seal(data, fmt.Sprintf("s2c\n%d", counter))
-		if err := c.conn.WriteMessage(websocket.BinaryMessage, frame); err != nil {
-			return
+	for counter := 0; ; {
+		select {
+		case msg, ok := <-c.send:
+			if !ok {
+				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
+			data, err := json.Marshal(msg)
+			if err != nil {
+				return
+			}
+			frame := c.session.seal(data, fmt.Sprintf("s2c\n%d", counter))
+			counter++
+			c.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			if err := c.conn.WriteMessage(websocket.BinaryMessage, frame); err != nil {
+				return
+			}
+		case <-ticker.C:
+			c.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
 		}
 	}
 }

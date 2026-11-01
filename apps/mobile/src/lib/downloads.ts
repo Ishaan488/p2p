@@ -92,18 +92,27 @@ function blobToBase64(blob: Blob): Promise<string> {
 // Session chunk cache to preserve downloaded chunks across network drops, terminal restarts, and retries
 const downloadChunksCache = new Map<string, (Blob | null)[]>();
 
+// Bitmap tracking for direct-to-disk chunk progress across network pauses and retries
+const directDownloadBitmaps = new Map<string, Uint8Array>();
+
 export function clearDownloadCache(transferId: string): void {
   downloadChunksCache.delete(transferId);
+  directDownloadBitmaps.delete(transferId);
+  if (Capacitor.isNativePlatform()) {
+    FileSaver.abortSaveFile({ fileId: `dl_${transferId}` }).catch(() => {});
+  }
 }
 
 export function getCachedDownloadBytes(transferId: string): number {
   const parts = downloadChunksCache.get(transferId);
-  if (!parts) return 0;
-  let sum = 0;
-  for (const p of parts) {
-    if (p) sum += p.size;
+  if (parts) {
+    let sum = 0;
+    for (const p of parts) {
+      if (p) sum += p.size;
+    }
+    return sum;
   }
-  return sum;
+  return 0;
 }
 
 // Fetches a file from the PC chunk by chunk, decrypting each one. The result
@@ -302,7 +311,7 @@ export async function downloadDirectToDisk(
     return { success: true, path: options.filename };
   }
 
-  const fileId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  const fileId = `dl_${info.transferId}`;
   const subDir = options.subDir !== undefined ? options.subDir : getDownloadSubDir();
 
   await FileSaver.startSaveFile({
@@ -313,9 +322,26 @@ export async function downloadDirectToDisk(
   });
 
   const chunkSize = Math.ceil(info.totalSize / info.totalChunks);
-  const completed = new Uint8Array(info.totalChunks);
+  let completed = directDownloadBitmaps.get(info.transferId);
+  if (!completed || completed.length !== info.totalChunks) {
+    completed = new Uint8Array(info.totalChunks);
+    directDownloadBitmaps.set(info.transferId, completed);
+  }
+
   let receivedBytes = 0;
+  for (let i = 0; i < info.totalChunks; i++) {
+    if (completed[i]) {
+      const isLast = i === info.totalChunks - 1;
+      const expectedChunkLen = isLast ? (info.totalSize - i * chunkSize) : chunkSize;
+      receivedBytes += expectedChunkLen;
+    }
+  }
+
   const tracker = new SpeedTracker();
+  if (receivedBytes > 0) {
+    const resumePct = Math.round((receivedBytes / info.totalSize) * 100);
+    onProgress(receivedBytes, 0, `Resumed at ${resumePct}%`);
+  }
 
   await startTransferForeground('P2P Link Download', `Downloading ${options.filename}...`);
 
@@ -379,14 +405,14 @@ export async function downloadDirectToDisk(
     }
 
     const res = await FileSaver.finishSaveFile({ fileId, expectedSize: info.totalSize });
+    directDownloadBitmaps.delete(info.transferId);
     playTransferSuccessChime();
     return res;
   } catch (err) {
     next = info.totalChunks;
     await Promise.allSettled(workers);
-    try {
-      await FileSaver.abortSaveFile({ fileId });
-    } catch {}
+    // Keep file handle and chunk bitmap intact for seamless reconnect resume.
+    // Explicit cancellation or item deletion clears it via clearDownloadCache().
     throw err;
   } finally {
     await stopTransferForeground();

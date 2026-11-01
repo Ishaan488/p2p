@@ -22,9 +22,18 @@ if errorlevel 1 (
 )
 
 :start
-rem If standalone p2p.exe does not exist, build it once
-if not exist "%~dp0p2p.exe" (
-    echo [INFO] Standalone binary p2p.exe not found. Building desktop binary...
+rem If p2p.exe does not exist or Go files are newer, rebuild it
+set NEED_BUILD=0
+if not exist "%~dp0p2p.exe" set NEED_BUILD=1
+if %NEED_BUILD%==0 (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$exe = Get-Item '%~dp0p2p.exe'; $newest = Get-ChildItem '%~dp0apps\cli\*.go' | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($newest -and $newest.LastWriteTime -gt $exe.LastWriteTime) { exit 1 } else { exit 0 }" >nul 2>&1
+    if errorlevel 1 (
+        echo [INFO] Go source files updated. Rebuilding p2p.exe...
+        set NEED_BUILD=1
+    )
+)
+if %NEED_BUILD%==1 (
+    echo [INFO] Building desktop binary p2p.exe...
     call "%~dp0build-desktop.bat"
     if errorlevel 1 (
         echo.

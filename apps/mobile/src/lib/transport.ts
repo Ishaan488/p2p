@@ -22,6 +22,38 @@ export class WebSocketTransport implements Transport {
   private inbox: Promise<void> = Promise.resolve();
   private sent = 0;
   private received = 0;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private lastReceived = 0;
+
+  private stopHeartbeat() {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
+  private startHeartbeat(ws: WebSocket) {
+    this.stopHeartbeat();
+    this.lastReceived = Date.now();
+    this.heartbeatTimer = setInterval(() => {
+      if (this.ws !== ws || ws.readyState !== WebSocket.OPEN) {
+        this.stopHeartbeat();
+        return;
+      }
+      // If no frame received for > 7.5 seconds, consider socket dead and disconnect immediately
+      if (Date.now() - this.lastReceived > 7500) {
+        this.stopHeartbeat();
+        this.ws = null;
+        try {
+          ws.close();
+        } catch {}
+        this.setStatus('disconnected');
+        return;
+      }
+      // Send application ping
+      this.send(JSON.stringify({ version: 1, type: 'ping' }));
+    }, 3000);
+  }
 
   // Every frame is encrypted with the session's cipher and numbered, so a
   // frame that is forged, replayed or out of order fails to open.
@@ -49,6 +81,7 @@ export class WebSocketTransport implements Transport {
 
       const timeoutId = setTimeout(() => {
         if (current() && ws.readyState !== WebSocket.OPEN) {
+          this.stopHeartbeat();
           ws.close();
           this.ws = null;
           this.setStatus('error');
@@ -59,11 +92,13 @@ export class WebSocketTransport implements Transport {
       ws.onopen = () => {
         clearTimeout(timeoutId);
         if (!current()) return;
+        this.startHeartbeat(ws);
         this.setStatus('connected');
         resolve();
       };
 
       ws.onclose = () => {
+        this.stopHeartbeat();
         clearTimeout(timeoutId);
         if (!current()) return;
         this.ws = null;
@@ -71,6 +106,7 @@ export class WebSocketTransport implements Transport {
       };
 
       ws.onerror = () => {
+        this.stopHeartbeat();
         clearTimeout(timeoutId);
         if (!current()) return;
         const wasOpen = ws.readyState === WebSocket.OPEN;
@@ -82,16 +118,31 @@ export class WebSocketTransport implements Transport {
       };
 
       ws.onmessage = (event) => {
+        this.lastReceived = Date.now();
         this.inbox = this.inbox.then(async () => {
           if (!current()) return;
           try {
             const frame = await cipher.open(new Uint8Array(event.data as ArrayBuffer), `s2c\n${this.received++}`);
+            const text = new TextDecoder().decode(frame);
+            try {
+              const parsed = JSON.parse(text);
+              if (parsed.type === 'ping') {
+                this.send(JSON.stringify({ version: 1, type: 'pong' }));
+                return;
+              }
+              if (parsed.type === 'pong') {
+                return;
+              }
+            } catch {}
             if (current() && this.messageCallback) {
-              this.messageCallback(new TextDecoder().decode(frame));
+              this.messageCallback(text);
             }
           } catch {
             // The stream can no longer be trusted (or is out of step): start over.
-            if (current()) ws.close();
+            if (current()) {
+              this.stopHeartbeat();
+              ws.close();
+            }
           }
         });
       };
@@ -99,6 +150,7 @@ export class WebSocketTransport implements Transport {
   }
 
   disconnect(): void {
+    this.stopHeartbeat();
     if (this.ws) {
       const ws = this.ws;
       this.ws = null;
