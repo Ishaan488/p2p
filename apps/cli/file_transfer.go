@@ -914,6 +914,13 @@ func startSendTransfer(filePath string) error {
 	return startSendTransferTargeted(filePath, nil)
 }
 
+func computeFileTransferID(filePath string, totalSize int64, modTime int64) string {
+	h := sha256.New()
+	h.Write([]byte(fmt.Sprintf("%s:%d:%d", filepath.Clean(filePath), totalSize, modTime)))
+	sum := h.Sum(nil)
+	return "dl-" + hex.EncodeToString(sum[:12])
+}
+
 func startSendTransferTargeted(filePath string, targetDevice *Device) error {
 	cleanPath := filepath.Clean(filePath)
 	absPath, err := filepath.Abs(cleanPath)
@@ -930,8 +937,8 @@ func startSendTransferTargeted(filePath string, targetDevice *Device) error {
 
 	filename := filepath.Base(absPath)
 	filename = sanitizeFilename(filename)
-	transferId := randomID()
 	totalSize := stat.Size()
+	transferId := computeFileTransferID(absPath, totalSize, stat.ModTime().Unix())
 	chunkSize := int64(defaultChunkSize)
 	var totalChunks int
 	if totalSize == 0 {
@@ -958,7 +965,12 @@ func startSendTransferTargeted(filePath string, targetDevice *Device) error {
 	}
 
 	transfersMu.Lock()
-	transfers[transferId] = state
+	if existing, ok := transfers[transferId]; ok && existing.IsDownload {
+		existing.LastActive = time.Now().Unix()
+		state = existing
+	} else {
+		transfers[transferId] = state
+	}
 	transfersMu.Unlock()
 
 	// Persist download state so desktop terminal restarts don't cause 404 for mobile

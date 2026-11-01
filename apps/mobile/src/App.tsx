@@ -10,6 +10,7 @@ import {
   getDownloadSubDir,
   setDownloadSubDir,
   clearDownloadCache,
+  getCachedDownloadBytes,
   FileSaver
 } from './lib/downloads';
 import {
@@ -632,30 +633,85 @@ export default function App() {
         } else if (msg.type === 'file_start') {
           const kind = getMediaKind(msg.payload.filename);
           const trust = localStorage.getItem('p2p_trust_pc') !== 'false';
-          const fileInfo = {
-            filename: msg.payload.filename,
-            transferId: msg.payload.transferId,
-            totalSize: msg.payload.totalSize,
-            totalChunks: msg.payload.totalChunks,
-            chunkSize: msg.payload.chunkSize,
-            isDownloading: false,
-            progress: 0,
-            mediaKind: kind,
-            isPendingApproval: !trust
-          };
-          setMessages(prev => [...prev, {
-            id: msg.id,
-            file: fileInfo,
-            sender: 'other',
-            timestamp: msg.timestamp * 1000
-          }]);
+          const transferId = msg.payload.transferId;
+          const filename = msg.payload.filename;
+          const totalSize = msg.payload.totalSize;
+          const totalChunks = msg.payload.totalChunks;
+          const chunkSize = msg.payload.chunkSize;
 
-          // Automatically download small images (< 25 MB) if PC is trusted
-          if (trust && kind === 'image' && msg.payload.totalSize < 25 * 1024 * 1024) {
-            setTimeout(() => {
-              handleDownload(msg.id, fileInfo, false);
-            }, 100);
-          }
+          setMessages(prev => {
+            // Check if we already have an existing transfer card for this file or transferId
+            const existingIdx = prev.findIndex(m =>
+              m.file && (
+                m.file.transferId === transferId ||
+                (m.file.filename === filename && m.file.totalSize === totalSize && m.file.status !== 'done')
+              )
+            );
+
+            if (existingIdx !== -1) {
+              const existing = prev[existingIdx];
+              const cachedBytes = getCachedDownloadBytes(transferId, totalSize, totalChunks) ||
+                (existing.file?.progress ? (existing.file.progress / 100) * totalSize : 0);
+              const progressPct = totalSize > 0 ? (cachedBytes / totalSize) * 100 : 0;
+              const effectiveProgress = Math.max(existing.file?.progress || 0, progressPct);
+
+              const updatedFile = {
+                ...existing.file,
+                filename,
+                transferId,
+                totalSize,
+                totalChunks,
+                chunkSize,
+                isDownloading: false,
+                status: effectiveProgress > 0 ? 'interrupted' : (existing.file?.status || 'interrupted'),
+                progress: effectiveProgress,
+                isPendingApproval: !trust
+              };
+
+              const next: TransferItem[] = [...prev];
+              next[existingIdx] = {
+                ...existing,
+                file: updatedFile,
+                timestamp: msg.timestamp * 1000
+              };
+
+              if (trust && effectiveProgress > 0) {
+                setTimeout(() => {
+                  handleDownload(existing.id, updatedFile, updatedFile.saveToDisk ?? true);
+                }, 300);
+              }
+              return next;
+            }
+
+            // Brand new transfer
+            const cachedBytes = getCachedDownloadBytes(transferId, totalSize, totalChunks);
+            const initialProgress = totalSize > 0 ? (cachedBytes / totalSize) * 100 : 0;
+            const fileInfo = {
+              filename,
+              transferId,
+              totalSize,
+              totalChunks,
+              chunkSize,
+              isDownloading: false,
+              progress: initialProgress,
+              mediaKind: kind,
+              isPendingApproval: !trust
+            };
+
+            const next: TransferItem[] = [...prev, {
+              id: msg.id,
+              file: fileInfo,
+              sender: 'other' as const,
+              timestamp: msg.timestamp * 1000
+            }];
+
+            if (trust && (kind === 'image' && totalSize < 25 * 1024 * 1024 || initialProgress > 0)) {
+              setTimeout(() => {
+                handleDownload(msg.id, fileInfo, false);
+              }, 100);
+            }
+            return next;
+          });
         } else if (msg.type === 'clipboard') {
           if (localStorage.getItem('p2p_clipboard_sync') === 'false') return;
           const text = (msg.payload?.text || '').trim();

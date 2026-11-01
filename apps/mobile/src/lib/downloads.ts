@@ -92,23 +92,100 @@ function blobToBase64(blob: Blob): Promise<string> {
 // Session chunk cache to preserve downloaded chunks across network drops, terminal restarts, and retries
 const downloadChunksCache = new Map<string, (Blob | null)[]>();
 
-// Bitmap tracking for direct-to-disk chunk progress across network pauses and retries
+// In-memory cache of direct-to-disk chunk bitmaps
 const directDownloadBitmaps = new Map<string, Uint8Array>();
+
+export function loadChunkBitmap(transferId: string, totalChunks: number): Uint8Array {
+  const cached = directDownloadBitmaps.get(transferId);
+  if (cached && cached.length === totalChunks) {
+    return cached;
+  }
+  try {
+    const raw = localStorage.getItem(`p2p_chunk_bitmap_${transferId}`);
+    if (raw && raw.length === totalChunks) {
+      const arr = new Uint8Array(totalChunks);
+      for (let i = 0; i < totalChunks; i++) {
+        if (raw.charCodeAt(i) === 49) arr[i] = 1;
+      }
+      directDownloadBitmaps.set(transferId, arr);
+      return arr;
+    }
+  } catch {}
+  const fresh = new Uint8Array(totalChunks);
+  directDownloadBitmaps.set(transferId, fresh);
+  return fresh;
+}
+
+let bitmapSaveTimeout: ReturnType<typeof setTimeout> | null = null;
+const pendingBitmaps = new Map<string, Uint8Array>();
+
+export function saveChunkBitmap(transferId: string, bitmap: Uint8Array): void {
+  directDownloadBitmaps.set(transferId, bitmap);
+  pendingBitmaps.set(transferId, bitmap);
+  if (!bitmapSaveTimeout) {
+    bitmapSaveTimeout = setTimeout(() => {
+      bitmapSaveTimeout = null;
+      for (const [tid, bm] of pendingBitmaps.entries()) {
+        try {
+          let str = '';
+          for (let i = 0; i < bm.length; i++) {
+            str += bm[i] ? '1' : '0';
+          }
+          localStorage.setItem(`p2p_chunk_bitmap_${tid}`, str);
+        } catch {}
+      }
+      pendingBitmaps.clear();
+    }, 150);
+  }
+}
+
+export function flushChunkBitmap(transferId: string): void {
+  const bm = directDownloadBitmaps.get(transferId);
+  if (bm) {
+    try {
+      let str = '';
+      for (let i = 0; i < bm.length; i++) {
+        str += bm[i] ? '1' : '0';
+      }
+      localStorage.setItem(`p2p_chunk_bitmap_${transferId}`, str);
+    } catch {}
+  }
+}
+
+export function removeChunkBitmap(transferId: string): void {
+  directDownloadBitmaps.delete(transferId);
+  pendingBitmaps.delete(transferId);
+  try {
+    localStorage.removeItem(`p2p_chunk_bitmap_${transferId}`);
+  } catch {}
+}
 
 export function clearDownloadCache(transferId: string): void {
   downloadChunksCache.delete(transferId);
-  directDownloadBitmaps.delete(transferId);
+  removeChunkBitmap(transferId);
   if (Capacitor.isNativePlatform()) {
     FileSaver.abortSaveFile({ fileId: `dl_${transferId}` }).catch(() => {});
   }
 }
 
-export function getCachedDownloadBytes(transferId: string): number {
+export function getCachedDownloadBytes(transferId: string, totalSize?: number, totalChunks?: number): number {
   const parts = downloadChunksCache.get(transferId);
   if (parts) {
     let sum = 0;
     for (const p of parts) {
       if (p) sum += p.size;
+    }
+    return sum;
+  }
+  if (totalSize && totalChunks) {
+    const bitmap = loadChunkBitmap(transferId, totalChunks);
+    const chunkSize = Math.ceil(totalSize / totalChunks);
+    let sum = 0;
+    for (let i = 0; i < totalChunks; i++) {
+      if (bitmap[i]) {
+        const isLast = i === totalChunks - 1;
+        sum += isLast ? (totalSize - i * chunkSize) : chunkSize;
+      }
     }
     return sum;
   }
@@ -322,11 +399,7 @@ export async function downloadDirectToDisk(
   });
 
   const chunkSize = Math.ceil(info.totalSize / info.totalChunks);
-  let completed = directDownloadBitmaps.get(info.transferId);
-  if (!completed || completed.length !== info.totalChunks) {
-    completed = new Uint8Array(info.totalChunks);
-    directDownloadBitmaps.set(info.transferId, completed);
-  }
+  const completed = loadChunkBitmap(info.transferId, info.totalChunks);
 
   let receivedBytes = 0;
   for (let i = 0; i < info.totalChunks; i++) {
@@ -378,6 +451,7 @@ export async function downloadDirectToDisk(
       await FileSaver.writeChunk({ fileId, offset, base64Chunk });
 
       completed[index] = 1;
+      saveChunkBitmap(info.transferId, completed);
       receivedBytes += chunk.length;
 
       const speed = tracker.update(receivedBytes);
@@ -405,12 +479,13 @@ export async function downloadDirectToDisk(
     }
 
     const res = await FileSaver.finishSaveFile({ fileId, expectedSize: info.totalSize });
-    directDownloadBitmaps.delete(info.transferId);
+    removeChunkBitmap(info.transferId);
     playTransferSuccessChime();
     return res;
   } catch (err) {
     next = info.totalChunks;
     await Promise.allSettled(workers);
+    flushChunkBitmap(info.transferId);
     // Keep file handle and chunk bitmap intact for seamless reconnect resume.
     // Explicit cancellation or item deletion clears it via clearDownloadCache().
     throw err;

@@ -5,6 +5,7 @@ import android.content.ContentResolver;
 import android.content.ContentUris;
 import android.content.ContentValues;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.media.MediaScannerConnection;
 import android.net.Uri;
@@ -33,17 +34,17 @@ import java.util.concurrent.ConcurrentHashMap;
 @CapacitorPlugin(name = "FileSaver")
 public class FileSaverPlugin extends Plugin {
 
-    private final Map<String, OutputStream> activeStreams = new ConcurrentHashMap<>();
-    private final Map<String, FileChannel> activeChannels = new ConcurrentHashMap<>();
-    private final Map<String, ParcelFileDescriptor> activePfds = new ConcurrentHashMap<>();
-    private final Map<String, RandomAccessFile> activeRaws = new ConcurrentHashMap<>();
-    private final Map<String, Uri> activeUris = new ConcurrentHashMap<>();
-    private final Map<String, ContentValues> activeContentValues = new ConcurrentHashMap<>();
-    private final Map<String, File> activeFiles = new ConcurrentHashMap<>();
-    private final Map<String, String> activePaths = new ConcurrentHashMap<>();
-    private final Map<String, String> activeDisplayNames = new ConcurrentHashMap<>();
-    private final Map<String, String> activeMimeTypes = new ConcurrentHashMap<>();
-    private final Map<String, String> activeSubDirs = new ConcurrentHashMap<>();
+    private static final Map<String, OutputStream> activeStreams = new ConcurrentHashMap<>();
+    private static final Map<String, FileChannel> activeChannels = new ConcurrentHashMap<>();
+    private static final Map<String, ParcelFileDescriptor> activePfds = new ConcurrentHashMap<>();
+    private static final Map<String, RandomAccessFile> activeRaws = new ConcurrentHashMap<>();
+    private static final Map<String, Uri> activeUris = new ConcurrentHashMap<>();
+    private static final Map<String, ContentValues> activeContentValues = new ConcurrentHashMap<>();
+    private static final Map<String, File> activeFiles = new ConcurrentHashMap<>();
+    private static final Map<String, String> activePaths = new ConcurrentHashMap<>();
+    private static final Map<String, String> activeDisplayNames = new ConcurrentHashMap<>();
+    private static final Map<String, String> activeMimeTypes = new ConcurrentHashMap<>();
+    private static final Map<String, String> activeSubDirs = new ConcurrentHashMap<>();
 
     private String sanitizeSubDir(String subDir) {
         if (subDir == null) return "";
@@ -199,6 +200,66 @@ public class FileSaverPlugin extends Plugin {
                 ? Environment.DIRECTORY_DOWNLOADS
                 : (Environment.DIRECTORY_DOWNLOADS + "/" + subDir);
 
+        SharedPreferences prefs = getContext().getSharedPreferences("p2p_filesaver_resumption", Context.MODE_PRIVATE);
+
+        // Check if an existing file descriptor is already open/persisted for this fileId
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            String savedUriStr = prefs.getString("uri_" + fileId, null);
+            if (savedUriStr != null) {
+                try {
+                    Uri savedUri = Uri.parse(savedUriStr);
+                    ContentResolver resolver = getContext().getContentResolver();
+                    ParcelFileDescriptor pfd = resolver.openFileDescriptor(savedUri, "rw");
+                    if (pfd != null) {
+                        FileChannel channel = new FileOutputStream(pfd.getFileDescriptor()).getChannel();
+                        activePfds.put(fileId, pfd);
+                        activeChannels.put(fileId, channel);
+                        activeUris.put(fileId, savedUri);
+                        activePaths.put(fileId, prefs.getString("path_" + fileId, relativeDir + "/" + filename));
+                        activeDisplayNames.put(fileId, prefs.getString("name_" + fileId, filename));
+                        activeMimeTypes.put(fileId, prefs.getString("mime_" + fileId, mimeType));
+                        activeSubDirs.put(fileId, prefs.getString("subdir_" + fileId, subDir));
+
+                        JSObject ret = new JSObject();
+                        ret.put("success", true);
+                        ret.put("fileId", fileId);
+                        ret.put("resumed", true);
+                        call.resolve(ret);
+                        return;
+                    }
+                } catch (Exception e) {
+                    prefs.edit().remove("uri_" + fileId).apply();
+                }
+            }
+        } else {
+            String savedFilePath = prefs.getString("file_" + fileId, null);
+            if (savedFilePath != null) {
+                File targetFile = new File(savedFilePath);
+                if (targetFile.exists()) {
+                    try {
+                        RandomAccessFile raf = new RandomAccessFile(targetFile, "rw");
+                        FileChannel channel = raf.getChannel();
+                        activeRaws.put(fileId, raf);
+                        activeChannels.put(fileId, channel);
+                        activeFiles.put(fileId, targetFile);
+                        activePaths.put(fileId, targetFile.getAbsolutePath());
+                        activeDisplayNames.put(fileId, prefs.getString("name_" + fileId, filename));
+                        activeMimeTypes.put(fileId, prefs.getString("mime_" + fileId, mimeType));
+                        activeSubDirs.put(fileId, prefs.getString("subdir_" + fileId, subDir));
+
+                        JSObject ret = new JSObject();
+                        ret.put("success", true);
+                        ret.put("fileId", fileId);
+                        ret.put("resumed", true);
+                        call.resolve(ret);
+                        return;
+                    } catch (Exception e) {
+                        prefs.edit().remove("file_" + fileId).apply();
+                    }
+                }
+            }
+        }
+
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 ContentResolver resolver = getContext().getContentResolver();
@@ -228,6 +289,14 @@ public class FileSaverPlugin extends Plugin {
                 activeDisplayNames.put(fileId, filename);
                 activeMimeTypes.put(fileId, mimeType);
                 activeSubDirs.put(fileId, subDir);
+
+                prefs.edit()
+                    .putString("uri_" + fileId, uri.toString())
+                    .putString("path_" + fileId, relativeDir + "/" + filename)
+                    .putString("name_" + fileId, filename)
+                    .putString("mime_" + fileId, mimeType)
+                    .putString("subdir_" + fileId, subDir)
+                    .apply();
 
                 JSObject ret = new JSObject();
                 ret.put("success", true);
@@ -266,6 +335,13 @@ public class FileSaverPlugin extends Plugin {
                 activeDisplayNames.put(fileId, filename);
                 activeMimeTypes.put(fileId, mimeType);
                 activeSubDirs.put(fileId, subDir);
+
+                prefs.edit()
+                    .putString("file_" + fileId, targetFile.getAbsolutePath())
+                    .putString("name_" + fileId, filename)
+                    .putString("mime_" + fileId, mimeType)
+                    .putString("subdir_" + fileId, subDir)
+                    .apply();
 
                 JSObject ret = new JSObject();
                 ret.put("success", true);
@@ -436,6 +512,16 @@ public class FileSaverPlugin extends Plugin {
                 );
             }
 
+            SharedPreferences prefs = getContext().getSharedPreferences("p2p_filesaver_resumption", Context.MODE_PRIVATE);
+            prefs.edit()
+                .remove("uri_" + fileId)
+                .remove("path_" + fileId)
+                .remove("name_" + fileId)
+                .remove("mime_" + fileId)
+                .remove("subdir_" + fileId)
+                .remove("file_" + fileId)
+                .apply();
+
             JSObject ret = new JSObject();
             ret.put("success", true);
             ret.put("path", savedPath != null ? savedPath : displayName);
@@ -463,8 +549,15 @@ public class FileSaverPlugin extends Plugin {
         try { if (raf != null) raf.close(); } catch (Exception ignored) {}
         try { if (os != null) os.close(); } catch (Exception ignored) {}
 
+        SharedPreferences prefs = getContext().getSharedPreferences("p2p_filesaver_resumption", Context.MODE_PRIVATE);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             Uri uri = activeUris.remove(fileId);
+            if (uri == null) {
+                String uriStr = prefs.getString("uri_" + fileId, null);
+                if (uriStr != null) {
+                    try { uri = Uri.parse(uriStr); } catch (Exception ignored) {}
+                }
+            }
             if (uri != null) {
                 try {
                     getContext().getContentResolver().delete(uri, null, null);
@@ -473,6 +566,12 @@ public class FileSaverPlugin extends Plugin {
             activeContentValues.remove(fileId);
         } else {
             File f = activeFiles.remove(fileId);
+            if (f == null) {
+                String legacyPath = prefs.getString("file_" + fileId, null);
+                if (legacyPath != null) {
+                    f = new File(legacyPath);
+                }
+            }
             if (f != null && f.exists()) {
                 f.delete();
             }
@@ -481,6 +580,15 @@ public class FileSaverPlugin extends Plugin {
         activeDisplayNames.remove(fileId);
         activeMimeTypes.remove(fileId);
         activeSubDirs.remove(fileId);
+
+        prefs.edit()
+            .remove("uri_" + fileId)
+            .remove("path_" + fileId)
+            .remove("name_" + fileId)
+            .remove("mime_" + fileId)
+            .remove("subdir_" + fileId)
+            .remove("file_" + fileId)
+            .apply();
 
         JSObject ret = new JSObject();
         ret.put("aborted", true);
