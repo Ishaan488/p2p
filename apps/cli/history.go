@@ -41,17 +41,7 @@ func loadHistory() {
 	}
 }
 
-func recordTransfer(rec TransferRecord) {
-	historyMu.Lock()
-	defer historyMu.Unlock()
-	if rec.Timestamp == 0 {
-		rec.Timestamp = time.Now().Unix()
-	}
-	history = append([]TransferRecord{rec}, history...)
-	if len(history) > 200 {
-		history = history[:200]
-	}
-
+func saveHistoryLocked() {
 	data, err := json.MarshalIndent(history, "", "  ")
 	if err == nil {
 		_ = os.MkdirAll(baseDir, 0755)
@@ -60,6 +50,70 @@ func recordTransfer(rec TransferRecord) {
 			_ = os.Rename(tmp, historyPath())
 		}
 	}
+}
+
+func recordTransfer(rec TransferRecord) {
+	historyMu.Lock()
+	defer historyMu.Unlock()
+	if rec.Timestamp == 0 {
+		rec.Timestamp = time.Now().Unix()
+	}
+	for i := range history {
+		if history[i].ID == rec.ID {
+			if rec.Device != "" && history[i].Device == "" {
+				history[i].Device = rec.Device
+			}
+			history[i].Status = rec.Status
+			history[i].Filename = rec.Filename
+			saveHistoryLocked()
+			return
+		}
+	}
+	history = append([]TransferRecord{rec}, history...)
+	if len(history) > 200 {
+		history = history[:200]
+	}
+	saveHistoryLocked()
+}
+
+func isRecordFileValid(r *TransferRecord) bool {
+	if r == nil || r.Status != "Completed" {
+		return false
+	}
+	p := filepath.Join(receiveDir, r.Filename)
+	fi, err := os.Stat(p)
+	return err == nil && fi.Size() == r.Size
+}
+
+func lookupCompletedTransfer(id string) *TransferRecord {
+	historyMu.Lock()
+	defer historyMu.Unlock()
+	for i := range history {
+		if history[i].ID == id && history[i].Status == "Completed" {
+			r := history[i]
+			if isRecordFileValid(&r) {
+				return &r
+			}
+			return nil
+		}
+	}
+	p := historyPath()
+	if data, err := os.ReadFile(p); err == nil {
+		var diskHistory []TransferRecord
+		if json.Unmarshal(data, &diskHistory) == nil {
+			for i := range diskHistory {
+				if diskHistory[i].ID == id && diskHistory[i].Status == "Completed" {
+					history = diskHistory
+					r := diskHistory[i]
+					if isRecordFileValid(&r) {
+						return &r
+					}
+					return nil
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func printTransferHistory() {

@@ -3,6 +3,8 @@ node_modules/
 dist/
 dist-ssr/
 *.local
+vite.config.ts.timestamp-*
+*.timestamp-*.mjs
 
 # Go
 apps/cli/*.exe

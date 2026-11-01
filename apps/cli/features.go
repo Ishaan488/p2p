@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -222,25 +224,39 @@ type persistedTransferMeta struct {
 	ChunkSize   int64  `json:"chunkSize"`
 	TotalSize   int64  `json:"totalSize"`
 	FilePath    string `json:"filePath"`
+	FinalPath   string `json:"finalPath,omitempty"`
+	State       string `json:"state,omitempty"`
+	Generation  int64  `json:"generation"`
 	IsDownload  bool   `json:"isDownload"`
 	IsFolder    bool   `json:"isFolder"`
 	FolderName  string `json:"folderName,omitempty"`
 	LastActive  int64  `json:"lastActive"`
-	Owner       string `json:"owner"`
-	Received    []bool `json:"received"`
+	Owner       string   `json:"owner"`
+	Received    []bool   `json:"received"`
+	ChunkHashes []string `json:"chunkHashes,omitempty"`
 }
 
 func getMetaPath(partPath string) string {
 	return strings.TrimSuffix(partPath, ".part") + ".meta.json"
 }
 
-func (s *TransferState) saveMeta() {
+func (s *TransferState) saveMeta() error {
 	if s == nil || s.IsDownload || s.FilePath == "" {
-		return
+		return nil
 	}
+	s.metaMu.Lock()
+	defer s.metaMu.Unlock()
+
 	s.mu.Lock()
+	s.generation++
 	recCopy := make([]bool, len(s.received))
 	copy(recCopy, s.received)
+	hashCopy := make([]string, len(s.chunkHashes))
+	copy(hashCopy, s.chunkHashes)
+	stName := s.State
+	if stName == "" {
+		stName = "transferring"
+	}
 	meta := persistedTransferMeta{
 		ID:          s.ID,
 		Filename:    s.Filename,
@@ -248,33 +264,172 @@ func (s *TransferState) saveMeta() {
 		ChunkSize:   s.ChunkSize,
 		TotalSize:   s.TotalSize,
 		FilePath:    s.FilePath,
+		FinalPath:   s.FinalPath,
+		State:       stName,
+		Generation:  s.generation,
 		IsDownload:  s.IsDownload,
 		IsFolder:    s.IsFolder,
 		FolderName:  s.FolderName,
 		LastActive:  time.Now().Unix(),
 		Owner:       s.Owner,
 		Received:    recCopy,
+		ChunkHashes: hashCopy,
 	}
 	s.mu.Unlock()
 
 	data, err := json.Marshal(&meta)
 	if err != nil {
-		return
+		return fmt.Errorf("marshal metadata: %w", err)
 	}
+
 	metaPath := getMetaPath(s.FilePath)
-	tmpPath := metaPath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0600); err == nil {
-		_ = os.Rename(tmpPath, metaPath)
+	tmpPath := fmt.Sprintf("%s.tmp.%d.%d", metaPath, os.Getpid(), time.Now().UnixNano())
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
+		return fmt.Errorf("write metadata tmp: %w", err)
 	}
+
+	if err := os.Rename(tmpPath, metaPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("rename metadata to %s: %w", metaPath, err)
+	}
+	return nil
 }
 
 func (s *TransferState) removeMeta() {
 	if s == nil || s.FilePath == "" {
 		return
 	}
+	s.metaMu.Lock()
+	defer s.metaMu.Unlock()
+
 	metaPath := getMetaPath(s.FilePath)
 	_ = os.Remove(metaPath)
-	_ = os.Remove(metaPath + ".tmp")
+	tmps, _ := filepath.Glob(metaPath + ".tmp*")
+	for _, tp := range tmps {
+		_ = os.Remove(tp)
+	}
+}
+
+type metaCandidate struct {
+	path    string
+	meta    persistedTransferMeta
+	count   int
+	modTime time.Time
+}
+
+func parseMetaCandidate(path string, expectedPartPath string, now int64) (*metaCandidate, error) {
+	b, err := os.ReadFile(path)
+	if err != nil || len(b) == 0 {
+		return nil, fmt.Errorf("read: %w", err)
+	}
+	var m persistedTransferMeta
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, fmt.Errorf("json unmarshal: %w", err)
+	}
+	if m.ID == "" || m.TotalChunks <= 0 || m.ChunkSize <= 0 || m.TotalSize < 0 {
+		return nil, fmt.Errorf("invalid dimensions")
+	}
+	if len(m.Received) != m.TotalChunks {
+		return nil, fmt.Errorf("received length mismatch")
+	}
+	if m.FilePath != "" && m.FilePath != expectedPartPath {
+		return nil, fmt.Errorf("filepath mismatch")
+	}
+	sum := sha256.Sum256([]byte(m.ID))
+	expectedBase := hex.EncodeToString(sum[:16]) + ".part"
+	if filepath.Base(expectedPartPath) != expectedBase {
+		return nil, fmt.Errorf("transfer ID mismatch with part filename")
+	}
+	if now-m.LastActive > transferTTL {
+		return nil, fmt.Errorf("manifest expired")
+	}
+	if partFi, err := os.Stat(expectedPartPath); err == nil {
+		partSize := partFi.Size()
+		for i, ok := range m.Received {
+			if ok {
+				chunkLen := m.ChunkSize
+				if int64(i) == int64(m.TotalChunks-1) && m.TotalSize%m.ChunkSize != 0 {
+					chunkLen = m.TotalSize % m.ChunkSize
+				}
+				if partSize < int64(i)*m.ChunkSize+chunkLen {
+					m.Received[i] = false
+				}
+			}
+		}
+	}
+	cnt := 0
+	for _, ok := range m.Received {
+		if ok {
+			cnt++
+		}
+	}
+	if cnt > m.TotalChunks {
+		return nil, fmt.Errorf("count exceeds total chunks")
+	}
+	fi, _ := os.Stat(path)
+	mt := time.Time{}
+	if fi != nil {
+		mt = fi.ModTime()
+	}
+	return &metaCandidate{
+		path:    path,
+		meta:    m,
+		count:   cnt,
+		modTime: mt,
+	}, nil
+}
+
+// isBetterMeta implements defensible candidate ranking:
+// 1. Monotonically increasing generation number (higher generation strictly wins).
+// 2. Monotonic bitmap subsumption (if equal generation, strict superset wins).
+// 3. Received chunk count (if equal generation and not a strict superset).
+// 4. LastActive / File modification time (most recent wins).
+func isBetterMeta(a, b *metaCandidate) bool {
+	if a == nil {
+		return false
+	}
+	if b == nil {
+		return true
+	}
+	// 1. Generation sequence
+	if a.meta.Generation != b.meta.Generation {
+		return a.meta.Generation > b.meta.Generation
+	}
+
+	// 2. Monotonic bitmap superset check
+	aHasAllB := true
+	bHasAllA := true
+	minLen := len(a.meta.Received)
+	if len(b.meta.Received) < minLen {
+		minLen = len(b.meta.Received)
+	}
+	for i := 0; i < minLen; i++ {
+		if b.meta.Received[i] && !a.meta.Received[i] {
+			aHasAllB = false
+		}
+		if a.meta.Received[i] && !b.meta.Received[i] {
+			bHasAllA = false
+		}
+	}
+	if aHasAllB && !bHasAllA {
+		return true // A strictly subsumes B
+	}
+	if bHasAllA && !aHasAllB {
+		return false // B strictly subsumes A
+	}
+
+	// 3. Received count
+	if a.count != b.count {
+		return a.count > b.count
+	}
+
+	// 4. LastActive
+	if a.meta.LastActive != b.meta.LastActive {
+		return a.meta.LastActive > b.meta.LastActive
+	}
+
+	// 5. Modification time
+	return a.modTime.After(b.modTime)
 }
 
 // recoverOrSweepTempDir reloads valid, non-expired partial uploads that have a
@@ -290,36 +445,154 @@ func recoverOrSweepTempDir() int {
 	partFiles, _ := filepath.Glob(filepath.Join(dir, "*.part"))
 	for _, partPath := range partFiles {
 		metaPath := getMetaPath(partPath)
-		metaBytes, err := os.ReadFile(metaPath)
-		if err != nil {
-			// No sidecar metadata -> orphaned .part file from an ungraceful abort; sweep it
-			_ = os.Remove(partPath)
-			continue
+
+		// 1. Collect all candidate manifest paths (primary metaPath + any .tmp* files)
+		var candidatePaths []string
+		if _, err := os.Stat(metaPath); err == nil {
+			candidatePaths = append(candidatePaths, metaPath)
+		}
+		tmps, _ := filepath.Glob(metaPath + ".tmp*")
+		candidatePaths = append(candidatePaths, tmps...)
+
+		// 2. Parse and validate each candidate
+		var validCandidates []*metaCandidate
+		for _, cp := range candidatePaths {
+			if cand, err := parseMetaCandidate(cp, partPath, now); err == nil {
+				validCandidates = append(validCandidates, cand)
+			}
 		}
 
-		var meta persistedTransferMeta
-		if err := json.Unmarshal(metaBytes, &meta); err != nil ||
-			meta.ID == "" ||
-			meta.TotalChunks <= 0 ||
-			len(meta.Received) != meta.TotalChunks ||
-			now-meta.LastActive > transferTTL {
+		// 3. If no valid manifest exists, sweep orphaned .part and any corrupt/invalid metadata files
+		if len(validCandidates) == 0 {
 			_ = os.Remove(partPath)
 			_ = os.Remove(metaPath)
+			for _, tp := range tmps {
+				_ = os.Remove(tp)
+			}
 			continue
 		}
 
+		// 4. Select the best manifest using defensible multi-attribute ranking
+		best := validCandidates[0]
+		for i := 1; i < len(validCandidates); i++ {
+			if isBetterMeta(validCandidates[i], best) {
+				best = validCandidates[i]
+			}
+		}
+
+		// Merge confirmed chunk receipts and digests from all valid candidates into best manifest.
+		// This guarantees monotonic chunk preservation (preventing chunk loss if a newer
+		// generation snapshot missed an out-of-order chunk or equal-generation tiebreak occurs).
+		if len(best.meta.ChunkHashes) != best.meta.TotalChunks {
+			best.meta.ChunkHashes = make([]string, best.meta.TotalChunks)
+		}
+		for _, cand := range validCandidates {
+			for i := 0; i < len(best.meta.Received) && i < len(cand.meta.Received); i++ {
+				if cand.meta.Received[i] {
+					best.meta.Received[i] = true
+					if i < len(cand.meta.ChunkHashes) && cand.meta.ChunkHashes[i] != "" {
+						best.meta.ChunkHashes[i] = cand.meta.ChunkHashes[i]
+					}
+				}
+			}
+		}
+
+		// Adversarial Content Integrity Validation:
+		// Verify that physical .part file bytes on disk match the cryptographic chunk hashes.
+		// If unwritten sparse blocks, interrupted writes, or corruptions occurred, strip phantom chunks.
+		if pf, err := os.Open(partPath); err == nil {
+			buf := make([]byte, best.meta.ChunkSize)
+			for i := 0; i < best.meta.TotalChunks; i++ {
+				if best.meta.Received[i] && i < len(best.meta.ChunkHashes) && best.meta.ChunkHashes[i] != "" {
+					wantLen := best.meta.ChunkSize
+					if int64(i) == int64(best.meta.TotalChunks-1) && best.meta.TotalSize%best.meta.ChunkSize != 0 {
+						wantLen = best.meta.TotalSize % best.meta.ChunkSize
+					}
+					n, rerr := pf.ReadAt(buf[:wantLen], int64(i)*best.meta.ChunkSize)
+					if rerr != nil || int64(n) != wantLen {
+						best.meta.Received[i] = false
+						continue
+					}
+					sum := sha256.Sum256(buf[:wantLen])
+					actualHash := hex.EncodeToString(sum[:16])
+					if actualHash != best.meta.ChunkHashes[i] {
+						best.meta.Received[i] = false
+					}
+				}
+			}
+			pf.Close()
+		}
+
+		best.count = 0
+		for _, ok := range best.meta.Received {
+			if ok {
+				best.count++
+			}
+		}
+
+		// 5. Save/promote best merged candidate to metaPath atomically
+		mergedData, err := json.Marshal(&best.meta)
+		if err == nil {
+			tmpPromote := fmt.Sprintf("%s.tmp.%d.%d", metaPath, os.Getpid(), time.Now().UnixNano())
+			if err := os.WriteFile(tmpPromote, mergedData, 0600); err == nil {
+				_ = os.Rename(tmpPromote, metaPath)
+			}
+		} else if best.path != metaPath {
+			_ = os.Rename(best.path, metaPath)
+		}
+
+		// Clean up all other temporary files for this transfer so they don't linger
+		for _, cand := range validCandidates {
+			if cand.path != metaPath && cand.path != best.path {
+				_ = os.Remove(cand.path)
+			}
+		}
+		for _, tp := range tmps {
+			if tp != metaPath && tp != best.path {
+				_ = os.Remove(tp)
+			}
+		}
+
+		meta := best.meta
+
+		// 6. Handle Crash-Safe Finalization Recovery Transitions
+		if meta.State == "finalizing" && meta.FinalPath != "" {
+			// Case A: The file was already moved to destination before crash
+			if fi, err := os.Stat(meta.FinalPath); err == nil && fi.Size() == meta.TotalSize {
+				_ = os.Remove(partPath)
+				_ = os.Remove(metaPath)
+				recordTransfer(TransferRecord{
+					ID:        meta.ID,
+					Filename:  filepath.Base(meta.FinalPath),
+					Size:      meta.TotalSize,
+					Direction: "Received",
+					Status:    "Completed",
+				})
+				continue
+			}
+
+			// Case B: Crash occurred before or during move; finish moving .part to FinalPath
+			if _, err := os.Stat(partPath); err == nil {
+				if err := moveToFinalPath(partPath, meta.FinalPath); err == nil {
+					_ = os.Remove(metaPath)
+					recordTransfer(TransferRecord{
+						ID:        meta.ID,
+						Filename:  filepath.Base(meta.FinalPath),
+						Size:      meta.TotalSize,
+						Direction: "Received",
+						Status:    "Completed",
+					})
+					continue
+				}
+			}
+		}
+
+		// 7. Normal active transfer state recovery
 		f, err := os.OpenFile(partPath, os.O_RDWR, 0644)
 		if err != nil {
 			_ = os.Remove(partPath)
 			_ = os.Remove(metaPath)
 			continue
-		}
-
-		recCount := 0
-		for _, ok := range meta.Received {
-			if ok {
-				recCount++
-			}
 		}
 
 		st := &TransferState{
@@ -330,13 +603,17 @@ func recoverOrSweepTempDir() int {
 			TotalSize:     meta.TotalSize,
 			File:          f,
 			FilePath:      partPath,
+			FinalPath:     meta.FinalPath,
+			State:         meta.State,
+			generation:    meta.Generation,
 			IsDownload:    false,
 			IsFolder:      meta.IsFolder,
 			FolderName:    meta.FolderName,
 			LastActive:    meta.LastActive,
 			Owner:         meta.Owner,
 			received:      meta.Received,
-			receivedCount: recCount,
+			chunkHashes:   meta.ChunkHashes,
+			receivedCount: best.count,
 		}
 
 		transfersMu.Lock()
@@ -345,12 +622,31 @@ func recoverOrSweepTempDir() int {
 		recoveredCount++
 	}
 
-	// Also clean up any orphaned .meta.json files that have no matching .part file
-	metaFiles, _ := filepath.Glob(filepath.Join(dir, "*.meta.json"))
+	// Also clean up any orphaned .meta.json or .meta.json.tmp* files that have no matching .part file
+	metaFiles, _ := filepath.Glob(filepath.Join(dir, "*.meta.json*"))
 	for _, mp := range metaFiles {
-		pp := strings.TrimSuffix(mp, ".meta.json") + ".part"
-		if _, err := os.Stat(pp); os.IsNotExist(err) {
-			_ = os.Remove(mp)
+		idx := strings.Index(mp, ".meta.json")
+		if idx > 0 {
+			basePart := mp[:idx] + ".part"
+			if _, err := os.Stat(basePart); os.IsNotExist(err) {
+				// Check if this orphaned metadata was finalizing a completed file
+				b, err := os.ReadFile(mp)
+				if err == nil {
+					var m persistedTransferMeta
+					if json.Unmarshal(b, &m) == nil && m.State == "finalizing" && m.FinalPath != "" {
+						if fi, err := os.Stat(m.FinalPath); err == nil && fi.Size() == m.TotalSize {
+							recordTransfer(TransferRecord{
+								ID:        m.ID,
+								Filename:  filepath.Base(m.FinalPath),
+								Size:      m.TotalSize,
+								Direction: "Received",
+								Status:    "Completed",
+							})
+						}
+					}
+				}
+				_ = os.Remove(mp)
+			}
 		}
 	}
 

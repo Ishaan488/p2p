@@ -20,10 +20,10 @@ import {
   setClientBandwidthLimitBps
 } from './lib/uploads';
 import {
-  QrCode, LogOut,
-  Trash2, UploadCloud, Lock, Wifi,
+  LogOut,
+  Trash2, UploadCloud, Lock,
   ShieldCheck, ShieldAlert, Unlink, MoreVertical,
-  Sun, Moon, Monitor, Laptop, Edit3, Sliders
+  Sun, Moon, Monitor, Sliders
 } from 'lucide-react';
 import { BrandLogo } from './components/BrandLogo';
 import { checkPendingShare, onSharedData } from './lib/shareTarget';
@@ -53,6 +53,7 @@ import { TransferActionPanel } from './components/TransferActionPanel';
 import { SendTextModal } from './components/SendTextModal';
 import { ConfirmationDialog } from './components/ConfirmationDialog';
 import { PreferencesModal } from './components/PreferencesModal';
+import { ConnectionScreen } from './components/ConnectionScreen';
 
 function isImageFilename(name: string): boolean {
   return /\.(jpg|jpeg|png|gif|webp|svg|bmp)$/i.test(name);
@@ -1168,254 +1169,44 @@ export default function App() {
         </header>
 
         {/* Connection Setup Content */}
-        <main className="connection-page">
-          <div className="connection-stage">
-            {isScanning ? (
-              <div className="scanner-card">
-                <div className="scanner-header">
-                  <h2 className="scanner-title">Scan QR Code</h2>
-                  <p className="scanner-subtitle">
-                    Point your camera at the QR code on your computer
-                  </p>
-                </div>
-                <div id="qr-reader" className="qr-viewport" />
-                <button
-                  type="button"
-                  onClick={() => setIsScanning(false)}
-                  className="btn btn-secondary full-width"
-                >
-                  Cancel
-                </button>
-              </div>
-            ) : (
-              <>
-                {pairing ? (
-                  <div className="continuity-card">
-                    <div className="continuity-ring-wrap">
-                      <div className={`continuity-icon-circle ${status === 'connecting' ? 'pulsing' : ''}`}>
-                        <Laptop size={26} strokeWidth={1.8} />
-                      </div>
-                      <span className={`continuity-status-badge ${status}`} />
-                    </div>
-
-                    <h2 className="continuity-title">{pairing.serverName || 'Desktop PC'}</h2>
-                    <p className="continuity-meta">
-                      <span className="mono-text">{address || 'Local Wi-Fi'}</span>
-                      <span className="meta-dot">·</span>
-                      <span>{pairing.deviceName}</span>
-                    </p>
-
-                    {(cameraError || connectError) && (
-                      <div className="connection-alert error">
-                        {cameraError || connectError}
-                      </div>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={handleQuickConnect}
-                      disabled={status === 'connecting'}
-                      className="btn btn-primary btn-large full-width continuity-primary-btn"
-                    >
-                      <span>
-                        {status === 'connecting' ? 'Connecting...' : 'Connect'}
-                      </span>
-                    </button>
-
-                    <div className="continuity-quick-actions">
-                      <button
-                        type="button"
-                        onClick={() => setIsScanning(true)}
-                        className="ghost-pill-btn"
-                      >
-                        <QrCode size={14} />
-                        <span>Scan QR</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setIsEditingIp(v => !v)}
-                        className={`ghost-pill-btn ${isEditingIp ? 'active' : ''}`}
-                      >
-                        <Edit3 size={14} />
-                        <span>Change IP</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setIsPrefsOpen(true)}
-                        className="ghost-pill-btn"
-                      >
-                        <Sliders size={14} />
-                        <span>Rename</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setConfirmDialog({
-                            isOpen: true,
-                            title: 'Unpair Desktop?',
-                            message: 'You will need to scan the QR code on your computer to pair again.',
-                            confirmLabel: 'Unpair',
-                            variant: 'danger',
-                            icon: 'unlink',
-                            onConfirm: async () => {
-                              setConfirmDialog(prev => ({ ...prev, isOpen: false }));
-                              try {
-                                await api.unpair();
-                              } catch {}
-                              savePairing(null);
-                              showToast('Unpaired from desktop', 'info');
-                            }
-                          });
-                        }}
-                        className="ghost-pill-btn danger"
-                      >
-                        <Unlink size={14} />
-                        <span>Unpair</span>
-                      </button>
-                    </div>
-
-                    {isEditingIp && (
-                      <form onSubmit={handleConnect} className="inline-ip-editor">
-                        <input
-                          type="text"
-                          className="form-input form-input-mono"
-                          value={address}
-                          onChange={e => setAddress(e.target.value)}
-                          placeholder="192.168.1.15:8080"
-                          autoFocus
-                        />
-                        <button
-                          type="submit"
-                          className="btn btn-primary"
-                          disabled={status === 'connecting'}
-                        >
-                          Save
-                        </button>
-                      </form>
-                    )}
-                  </div>
-                ) : (
-                  <div className="continuity-card">
-                    <div className="continuity-ring-wrap">
-                      <div className="continuity-icon-circle">
-                        <BrandLogo size={28} connected={true} />
-                      </div>
-                    </div>
-
-                    <h2 className="continuity-title">Connect to Desktop</h2>
-                    <p className="continuity-subtitle">
-                      Scan the QR code displayed on your computer to pair over local Wi-Fi.
-                    </p>
-
-                    {(cameraError || connectError) && (
-                      <div className="connection-alert error">
-                        {cameraError || connectError}
-                      </div>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={() => setIsScanning(true)}
-                      className="btn btn-primary btn-large full-width continuity-primary-btn"
-                    >
-                      <QrCode size={17} />
-                      <span>Scan QR Code</span>
-                    </button>
-
-                    <div className="continuity-quick-actions">
-                      <button
-                        type="button"
-                        onClick={() => setIsEditingIp(v => !v)}
-                        className={`ghost-pill-btn ${isEditingIp ? 'active' : ''}`}
-                      >
-                        <Edit3 size={14} />
-                        <span>{isEditingIp ? 'Hide manual setup' : 'Connect via IP address'}</span>
-                      </button>
-                    </div>
-
-                    {isEditingIp && (
-                      <form onSubmit={handleConnect} className="manual-drawer-form">
-                        <div className="form-field">
-                          <label className="form-label">Desktop IP & Port</label>
-                          <input
-                            type="text"
-                            className="form-input form-input-mono"
-                            value={address}
-                            onChange={e => setAddress(e.target.value)}
-                            placeholder="192.168.1.15:8080"
-                          />
-                        </div>
-                        <div className="form-field">
-                          <label className="form-label">Device Name</label>
-                          <input
-                            type="text"
-                            className="form-input"
-                            value={deviceName}
-                            onChange={e => setDeviceName(e.target.value)}
-                            maxLength={40}
-                          />
-                        </div>
-                        <button
-                          type="submit"
-                          className="btn btn-primary full-width"
-                          disabled={status === 'connecting'}
-                        >
-                          {status === 'connecting' ? 'Waiting for PC...' : 'Pair & Connect'}
-                        </button>
-                      </form>
-                    )}
-                  </div>
-                )}
-
-                {/* Discovered LAN Devices */}
-                {discoveredDevices.filter(d => !pairing || `${d.host}:${d.port}` !== address).length > 0 && (
-                  <div className="discovered-section">
-                    <div className="section-label">
-                      <Wifi size={12} />
-                      <span>AVAILABLE ON WI-FI</span>
-                    </div>
-                    <div className="discovered-list">
-                      {discoveredDevices
-                        .filter(d => !pairing || `${d.host}:${d.port}` !== address)
-                        .map(d => (
-                          <div key={`${d.host}:${d.port}`} className="discovered-card">
-                            <div className="discovered-meta">
-                              <span className="discovered-name">{d.serverName || d.name}</span>
-                              <span className="discovered-address">{d.host}:{d.port}</span>
-                            </div>
-                            <button
-                              type="button"
-                              className="btn btn-secondary btn-compact"
-                              onClick={() => {
-                                const targetHost = `${d.host}:${d.port}`;
-                                setAddress(targetHost);
-                                localStorage.setItem('p2p_address', targetHost);
-                                pairAndConnect(targetHost, undefined, d.scheme, d.cert);
-                              }}
-                            >
-                              Connect
-                            </button>
-                          </div>
-                        ))}
-                    </div>
-                  </div>
-                )}
-
-                {!pairing && discoveryTip && discoveredDevices.length === 0 && isEditingIp && (
-                  <p className="discovery-caption">{discoveryTip}</p>
-                )}
-              </>
-            )}
-          </div>
-
-          <footer className="connection-minimal-footer">
-            <Lock size={11} />
-            <span>End-to-end AES-256 encrypted · Local Wi-Fi only</span>
-          </footer>
-        </main>
+        <ConnectionScreen
+          status={status}
+          address={address}
+          setAddress={setAddress}
+          pairing={pairing}
+          deviceName={deviceName}
+          setDeviceName={setDeviceName}
+          connectError={connectError}
+          cameraError={cameraError}
+          isScanning={isScanning}
+          setIsScanning={setIsScanning}
+          isEditingIp={isEditingIp}
+          setIsEditingIp={setIsEditingIp}
+          discoveredDevices={discoveredDevices}
+          discoveryTip={discoveryTip}
+          onQuickConnect={handleQuickConnect}
+          onManualConnect={handleConnect}
+          onPairAndConnect={pairAndConnect}
+          onOpenPreferences={() => setIsPrefsOpen(true)}
+          onUnpairPrompt={() => {
+            setConfirmDialog({
+              isOpen: true,
+              title: 'Unpair Desktop?',
+              message: 'You will need to scan the QR code on your computer to pair again.',
+              confirmLabel: 'Unpair',
+              variant: 'danger',
+              icon: 'unlink',
+              onConfirm: async () => {
+                setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+                try {
+                  await api.unpair();
+                } catch {}
+                savePairing(null);
+                showToast('Unpaired from desktop', 'info');
+              }
+            });
+          }}
+        />
 
         <PreferencesModal
           isOpen={isPrefsOpen}
@@ -1792,6 +1583,10 @@ export default function App() {
             </section>
           );
         })}
+
+        {filteredMessages.length > 0 && (
+          <div className="activity-scroll-spacer" aria-hidden="true" />
+        )}
       </main>
 
       {/* Hidden Native File & Folder Inputs */}
@@ -1816,6 +1611,7 @@ export default function App() {
         onOpenFilePicker={handleOpenFilePicker}
         onOpenSendText={() => setIsSendTextOpen(true)}
         onQuickSendClipboard={handleQuickSendClipboard}
+        targetDeviceName={pairing?.serverName || 'Desktop PC'}
       />
 
       {/* 5. Dedicated Text & Link Entry Modal */}

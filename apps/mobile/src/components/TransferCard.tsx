@@ -21,7 +21,8 @@ import {
   FileText,
   Image as ImageIcon,
   Music,
-  Video as VideoIcon
+  Video as VideoIcon,
+  ShieldCheck
 } from 'lucide-react';
 import { formatBytes, formatSpeed, MediaKind } from '../lib/telemetry';
 import { AudioPlayer } from './AudioPlayer';
@@ -66,7 +67,7 @@ export interface TransferItem {
   isPending?: boolean;
 }
 
-interface TransferCardProps {
+export interface TransferCardProps {
   item: TransferItem;
   isDeleting: boolean;
   onCopy: (text: string) => void;
@@ -152,18 +153,18 @@ export const TransferCard: React.FC<TransferCardProps> = ({
   const isSent = item.sender === 'me';
   const file = item.file;
 
-  const isImageFile = file && (
+  const isImageFile = !!file && (
     file.mediaKind === 'image' ||
     /\.(jpg|jpeg|png|gif|webp|svg|bmp|heic|avif)$/i.test(file.filename)
   );
-  const isVideoFile = file && (
+  const isVideoFile = !!file && (
     file.mediaKind === 'video' ||
     /\.(mp4|mkv|mov|webm|avi|m4v|3gp)$/i.test(file.filename)
   );
 
-  const hasVisualMedia = (isImageFile || isVideoFile) && (file?.blobUrl || file?.thumbnailUrl);
+  const hasVisualMedia = (isImageFile || isVideoFile) && !!(file?.blobUrl || file?.thumbnailUrl);
   const hasRichEmbed =
-    (file?.blobUrl && (file.mediaKind === 'audio' || file.mediaKind === 'pdf')) ||
+    (!!file?.blobUrl && (file.mediaKind === 'audio' || file.mediaKind === 'pdf')) ||
     !!file?.snippet;
 
   const isTextLong = !!item.text && item.text.length > 240;
@@ -182,54 +183,264 @@ export const TransferCard: React.FC<TransferCardProps> = ({
     setTimeout(() => setJustCopied(false), 1800);
   };
 
-  // Render Direction Badge inline
+  // Inline direction metadata pill + info row with strict non-wrapping ellipsis truncation
   const renderDirectionMeta = (extraText?: string) => (
-    <div className="meta-inline-row">
-      <span className={`dir-badge ${isSent ? 'sent' : 'received'}`}>
-        {isSent ? <ArrowUpRight size={11} strokeWidth={2.5} /> : <ArrowDownLeft size={11} strokeWidth={2.5} />}
+    <div
+      className="meta-inline-row"
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '0.35rem',
+        fontSize: '0.71rem',
+        minWidth: 0,
+        flexWrap: 'nowrap',
+        overflow: 'hidden',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <span
+        className={`dir-pill ${isSent ? 'dir-sent' : 'dir-received'}`}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '3px',
+          padding: '2px 7px',
+          borderRadius: '9999px',
+          fontSize: '0.68rem',
+          fontWeight: 600,
+          lineHeight: 1.3,
+          flexShrink: 0,
+          background: isSent ? 'var(--surface-secondary)' : 'var(--success-subtle)',
+          color: isSent ? 'var(--text-secondary)' : 'var(--success)',
+          border: `1px solid ${isSent ? 'var(--border-subtle)' : 'var(--success-border)'}`,
+        }}
+      >
+        {isSent ? (
+          <ArrowUpRight size={10} strokeWidth={2.5} />
+        ) : (
+          <ArrowDownLeft size={10} strokeWidth={2.5} />
+        )}
         <span>{isSent ? 'Sent' : 'Received'}</span>
       </span>
-      {extraText && (
-        <>
-          <span className="meta-dot">·</span>
-          <span className="meta-mono">{extraText}</span>
-        </>
-      )}
-      <span className="meta-dot">·</span>
-      <span className="meta-time">{timeStr}</span>
-      {item.isPending && (
-        <>
-          <span className="meta-dot">·</span>
-          <span className="meta-queued">Queued</span>
-        </>
-      )}
+
+      <span
+        style={{
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          color: 'var(--text-secondary)',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '0.28rem',
+          fontSize: '0.71rem',
+        }}
+      >
+        {extraText && (
+          <>
+            <span style={{ color: 'var(--text-tertiary)' }}>·</span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.69rem' }}>{extraText}</span>
+          </>
+        )}
+        <span style={{ color: 'var(--text-tertiary)' }}>·</span>
+        <span style={{ color: 'var(--text-tertiary)' }}>{timeStr}</span>
+        {item.isPending && (
+          <>
+            <span style={{ color: 'var(--text-tertiary)' }}>·</span>
+            <span style={{ color: 'var(--warning)', fontWeight: 600 }}>Queued</span>
+          </>
+        )}
+      </span>
     </div>
   );
 
   return (
-    <article className={`transfer-card ${isDeleting ? 'deleting' : ''}`}>
+    <article
+      className={`transfer-card ${isDeleting ? 'deleting' : ''}`}
+      style={{
+        background: 'var(--surface)',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 'var(--radius-md)',
+        padding: '0.75rem 0.85rem',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '0.55rem',
+        boxShadow: 'var(--shadow-sm)',
+        overflow: 'hidden',
+        position: 'relative'
+      }}
+    >
+      <style>{`
+        .transfer-card {
+          background: var(--surface);
+          border: 1px solid var(--border-subtle);
+          border-radius: var(--radius-md);
+          padding: 0.75rem 0.85rem;
+          display: flex;
+          flex-direction: column;
+          gap: 0.55rem;
+          box-shadow: var(--shadow-sm);
+          overflow: hidden;
+          position: relative;
+          transition: transform var(--transition-fast, 150ms ease), opacity var(--transition-fast, 150ms ease);
+          animation: cardSlideIn 220ms var(--ease-spring, cubic-bezier(0.16, 1, 0.3, 1));
+        }
+        .transfer-card.deleting {
+          opacity: 0;
+          transform: scale(0.96);
+        }
+        .card-pill-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.3rem;
+          height: 28px;
+          padding: 0 0.65rem;
+          border-radius: var(--radius-full, 9999px);
+          background: var(--surface-secondary);
+          border: 1px solid var(--border-subtle);
+          color: var(--text-primary);
+          font-size: 0.72rem;
+          font-weight: 600;
+          font-variant-numeric: tabular-nums;
+          text-decoration: none;
+          cursor: pointer;
+          transition: transform var(--transition-fast, 150ms ease), background var(--transition-fast, 150ms ease), border-color var(--transition-fast, 150ms ease);
+          white-space: nowrap;
+          user-select: none;
+          -webkit-user-select: none;
+        }
+        .card-pill-btn:hover:not(:disabled) {
+          background: var(--surface-hover);
+          border-color: var(--border-strong);
+        }
+        .card-pill-btn:active:not(:disabled) {
+          transform: scale(0.96);
+        }
+        .card-pill-btn:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+        .card-pill-primary {
+          background: var(--btn-primary-bg) !important;
+          color: var(--btn-primary-text) !important;
+          border-color: transparent !important;
+        }
+        .card-pill-primary:hover:not(:disabled) {
+          background: var(--btn-primary-hover) !important;
+        }
+        .card-icon-only-btn {
+          width: 28px;
+          height: 28px;
+          border-radius: var(--radius-full, 9999px);
+          background: transparent;
+          border: none;
+          color: var(--text-tertiary);
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          transition: var(--transition-fast, 150ms ease);
+          flex-shrink: 0;
+        }
+        .card-icon-only-btn:hover,
+        .card-icon-only-btn:active {
+          background: var(--error-subtle);
+          color: var(--error);
+        }
+        .media-stage-box:hover .video-play-circle,
+        .media-stage-box:active .video-play-circle {
+          transform: scale(1.08);
+          background: var(--accent) !important;
+          color: #17161D !important;
+        }
+        .approval-btn:active {
+          transform: scale(0.97);
+        }
+        .progress-ctrl-btn:active {
+          transform: scale(0.92);
+        }
+        .progress-ctrl-btn:hover {
+          color: var(--text-primary);
+          border-color: var(--text-tertiary);
+        }
+        .progress-cancel:hover {
+          color: var(--error) !important;
+          background: var(--error-subtle) !important;
+          border-color: var(--error-border) !important;
+        }
+        @media (max-width: 360px) {
+          .transfer-card {
+            padding: 0.65rem 0.72rem;
+            gap: 0.5rem;
+          }
+          .card-pill-btn {
+            height: 26px;
+            padding: 0 0.5rem;
+            font-size: 0.7rem;
+            gap: 0.22rem;
+          }
+          .card-actions-group {
+            gap: 0.25rem !important;
+          }
+        }
+      `}</style>
+
       {/* =========================================================
           1. TEXT OR LINK SNIPPET CARD (Single Clean Surface)
           ========================================================= */}
       {item.text && !file && (
-        <div className="text-transfer-layout">
-          <div className="text-body-wrap">
-            <p className="card-text-body">{displayText}</p>
+        <div className="text-transfer-layout" style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
+          <div className="text-body-wrap" style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+            <p
+              className="card-text-body"
+              style={{
+                fontSize: '0.88rem',
+                lineHeight: 1.5,
+                color: 'var(--text-primary)',
+                wordBreak: 'break-word',
+                whiteSpace: 'pre-wrap'
+              }}
+            >
+              {displayText}
+            </p>
             {isTextLong && (
               <button
                 type="button"
                 className="card-text-expand-btn"
                 onClick={() => setIsExpanded(e => !e)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--accent)',
+                  fontSize: '0.74rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  alignSelf: 'flex-start',
+                  padding: 0
+                }}
               >
                 {isExpanded ? 'Show less' : 'Read full text'}
               </button>
             )}
           </div>
 
-          <div className="card-unified-footer">
-            {renderDirectionMeta(detectedUrl ? 'Link' : `${item.text.length} chars`)}
+          <div
+            className="card-unified-footer"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '0.5rem',
+              paddingTop: '0.5rem',
+              borderTop: '1px solid var(--border-subtle)',
+              minWidth: 0
+            }}
+          >
+            <div style={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
+              {renderDirectionMeta(detectedUrl ? 'Link' : `${item.text.length} chars`)}
+            </div>
 
-            <div className="card-actions-group">
+            <div className="card-actions-group" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}>
               {detectedUrl && (
                 <a
                   href={detectedUrl}
@@ -246,6 +457,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                 type="button"
                 className="card-pill-btn card-pill-primary"
                 onClick={handleCopyClick}
+                title="Copy text"
               >
                 {justCopied ? <Check size={13} /> : <Copy size={13} />}
                 <span>{justCopied ? 'Copied' : 'Copy'}</span>
@@ -257,7 +469,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                 title="Remove"
                 aria-label="Remove"
               >
-                <Trash2 size={14} />
+                <Trash2 size={13} />
               </button>
             </div>
           </div>
@@ -268,37 +480,146 @@ export const TransferCard: React.FC<TransferCardProps> = ({
           2. INCOMING FILE APPROVAL PROMPT
           ========================================================= */}
       {file && file.isPendingApproval && (
-        <div className="approval-layout">
-          <div className="file-row-main">
-            <div className="file-squircle-icon">
+        <div className="approval-layout" style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+          <div
+            className="file-row-main"
+            style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', minWidth: 0 }}
+          >
+            <div
+              className="file-squircle-icon"
+              style={{
+                width: '40px',
+                height: '40px',
+                borderRadius: '10px',
+                background: 'var(--surface-secondary)',
+                border: '1px solid var(--border-subtle)',
+                color: 'var(--accent)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0
+              }}
+            >
               {getFileIcon(file.filename, file.mediaKind)}
             </div>
-            <div className="file-row-text">
-              <span className="file-row-title">{file.filename}</span>
+            <div className="file-row-text" style={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '2px' }}>
+                <span
+                  style={{
+                    fontSize: '0.68rem',
+                    fontWeight: 600,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.04em',
+                    color: 'var(--warning)',
+                    background: 'var(--warning-subtle)',
+                    border: '1px solid var(--warning-border)',
+                    padding: '1px 6px',
+                    borderRadius: 'var(--radius-full, 9999px)'
+                  }}
+                >
+                  Incoming File
+                </span>
+              </div>
+              <span
+                className="file-row-title"
+                title={file.filename}
+                style={{
+                  fontSize: '0.88rem',
+                  fontWeight: 600,
+                  letterSpacing: '-0.01em',
+                  color: 'var(--text-primary)',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  display: 'block'
+                }}
+              >
+                {file.filename}
+              </span>
               {renderDirectionMeta(`${formatBytes(file.totalSize)} · ${fileExt}`)}
             </div>
           </div>
-          <div className="approval-actions">
+
+          <div
+            className="approval-actions"
+            style={{
+              display: 'flex',
+              gap: '0.4rem',
+              paddingTop: '0.2rem',
+              alignItems: 'center'
+            }}
+          >
             <button
               type="button"
               className="approval-btn approval-reject"
               onClick={() => onRejectApproval(item.id)}
+              style={{
+                flex: 1,
+                height: '34px',
+                borderRadius: '8px',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '4px',
+                background: 'var(--error-subtle)',
+                color: 'var(--error)',
+                border: '1px solid var(--error-border)',
+                transition: 'var(--transition-fast)'
+              }}
             >
-              Decline
+              <X size={13} />
+              <span>Decline</span>
             </button>
             <button
               type="button"
               className="approval-btn approval-accept"
               onClick={() => onAcceptApproval(item.id, file)}
+              style={{
+                flex: 1,
+                height: '34px',
+                borderRadius: '8px',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '4px',
+                background: 'var(--btn-primary-bg)',
+                color: 'var(--btn-primary-text)',
+                border: 'none',
+                transition: 'var(--transition-fast)'
+              }}
             >
-              Accept
+              <Check size={13} strokeWidth={2.5} />
+              <span>Accept</span>
             </button>
             <button
               type="button"
               className="approval-btn approval-trust"
               onClick={() => onAlwaysTrustApproval(item.id, file)}
+              style={{
+                flex: 1.1,
+                height: '34px',
+                borderRadius: '8px',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '4px',
+                background: 'var(--surface-secondary)',
+                border: '1px solid var(--accent-border)',
+                color: 'var(--accent)',
+                transition: 'var(--transition-fast)'
+              }}
             >
-              Always Trust
+              <ShieldCheck size={13} />
+              <span>Always Trust</span>
             </button>
           </div>
         </div>
@@ -308,10 +629,24 @@ export const TransferCard: React.FC<TransferCardProps> = ({
           3. VISUAL MEDIA CARD (Image / Video Preview + Unified Footer)
           ========================================================= */}
       {file && !file.isPendingApproval && hasVisualMedia && (
-        <div className="media-transfer-layout">
+        <div className="media-transfer-layout" style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
           {isImageFile ? (
             <div
               className="media-stage-box"
+              style={{
+                width: '100%',
+                aspectRatio: '16 / 9',
+                maxHeight: 'none',
+                borderRadius: 'var(--radius-sm)',
+                overflow: 'hidden',
+                border: '1px solid var(--border-subtle)',
+                background: 'var(--surface-secondary)',
+                position: 'relative',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}
               onClick={() => {
                 const src = file.blobUrl || file.thumbnailUrl!;
                 onOpenMedia({
@@ -327,11 +662,54 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                 src={file.blobUrl || file.thumbnailUrl}
                 alt={file.filename}
                 loading="lazy"
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'cover',
+                  display: 'block'
+                }}
               />
+              <div
+                className="media-tap-hint"
+                style={{
+                  position: 'absolute',
+                  bottom: '8px',
+                  right: '8px',
+                  background: 'rgba(23, 22, 29, 0.72)',
+                  backdropFilter: 'blur(8px)',
+                  WebkitBackdropFilter: 'blur(8px)',
+                  color: 'var(--text-primary)',
+                  borderRadius: 'var(--radius-full, 9999px)',
+                  padding: '3px 8px',
+                  fontSize: '0.68rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  border: '1px solid rgba(255, 255, 255, 0.12)'
+                }}
+              >
+                <Eye size={11} />
+                <span>View</span>
+              </div>
             </div>
           ) : (
             <div
               className="media-stage-box video-stage"
+              style={{
+                width: '100%',
+                aspectRatio: '16 / 9',
+                height: 'auto',
+                maxHeight: 'none',
+                borderRadius: 'var(--radius-sm)',
+                overflow: 'hidden',
+                border: '1px solid var(--border-subtle)',
+                background: '#09080E',
+                position: 'relative',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}
               onClick={() => {
                 if (file.blobUrl) {
                   onOpenMedia({
@@ -351,36 +729,155 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                   src={file.thumbnailUrl}
                   alt={file.filename}
                   className="video-thumbnail-img"
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    objectFit: 'cover',
+                    display: 'block'
+                  }}
                 />
               ) : (
-                <div className="video-placeholder-backdrop">
-                  <VideoIcon size={28} />
+                <div
+                  className="video-placeholder-backdrop"
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                    color: 'var(--text-tertiary)'
+                  }}
+                >
+                  <VideoIcon size={32} />
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                    Video Preview
+                  </span>
                 </div>
               )}
-              <div className="video-play-overlay">
-                <div className="video-play-circle">
-                  <Play size={20} fill="currentColor" style={{ marginLeft: '2px' }} />
+              <div
+                className="video-play-overlay"
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: 'rgba(15, 14, 19, 0.35)',
+                  backdropFilter: 'blur(2px)',
+                  WebkitBackdropFilter: 'blur(2px)',
+                }}
+              >
+                <div
+                  className="video-play-circle"
+                  style={{
+                    width: '46px',
+                    height: '46px',
+                    borderRadius: '50%',
+                    background: 'rgba(32, 30, 39, 0.88)',
+                    border: '1px solid rgba(255, 255, 255, 0.22)',
+                    backdropFilter: 'blur(10px)',
+                    WebkitBackdropFilter: 'blur(10px)',
+                    color: 'var(--accent)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.45)',
+                    transition: 'transform var(--transition-fast, 150ms ease)'
+                  }}
+                >
+                  <Play size={18} fill="currentColor" style={{ marginLeft: '2px' }} />
                 </div>
               </div>
             </div>
           )}
 
-          <div className="media-unified-footer">
-            <div className="media-footer-info">
-              <span className="file-row-title" title={file.filename}>{file.filename}</span>
+          <div
+            className="media-unified-footer"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '0.5rem',
+              minWidth: 0
+            }}
+          >
+            <div
+              className="media-footer-info"
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.18rem',
+                minWidth: 0,
+                flex: 1,
+                overflow: 'hidden'
+              }}
+            >
+              <span
+                className="file-row-title"
+                title={file.filename}
+                style={{
+                  fontSize: '0.86rem',
+                  fontWeight: 600,
+                  letterSpacing: '-0.01em',
+                  color: 'var(--text-primary)',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  display: 'block'
+                }}
+              >
+                {file.filename}
+              </span>
               {renderDirectionMeta(`${formatBytes(file.totalSize)} · ${fileExt}`)}
             </div>
 
-            <div className="card-actions-group">
+            <div className="card-actions-group" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}>
+              <button
+                type="button"
+                className="card-pill-btn"
+                onClick={() => {
+                  if (isImageFile) {
+                    const src = file.blobUrl || file.thumbnailUrl!;
+                    onOpenMedia({
+                      type: 'image',
+                      src,
+                      filename: file.filename,
+                      fileSize: file.totalSize,
+                      onDownload: () => onDownload(item.id, file, true)
+                    });
+                  } else if (isVideoFile) {
+                    if (file.blobUrl) {
+                      onOpenMedia({
+                        type: 'video',
+                        src: file.blobUrl,
+                        filename: file.filename,
+                        fileSize: file.totalSize,
+                        onDownload: () => onDownload(item.id, file, true)
+                      });
+                    } else {
+                      onDownload(item.id, file, false);
+                    }
+                  }
+                }}
+                title="Preview media"
+              >
+                <Eye size={13} />
+                <span>Preview</span>
+              </button>
+
               <button
                 type="button"
                 className="card-pill-btn card-pill-primary"
                 onClick={() => onDownload(item.id, file, true)}
                 disabled={file.isDownloading}
+                title="Save file"
               >
                 <Download size={13} />
                 <span>{file.isDownloading ? `${Math.round(file.progress || 0)}%` : 'Save'}</span>
               </button>
+
               <button
                 type="button"
                 className="card-icon-only-btn"
@@ -388,7 +885,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                 title="Remove"
                 aria-label="Remove"
               >
-                <Trash2 size={14} />
+                <Trash2 size={13} />
               </button>
             </div>
           </div>
@@ -399,15 +896,46 @@ export const TransferCard: React.FC<TransferCardProps> = ({
           4. RICH EMBEDDED VIEWERS (Audio / PDF / Code)
           ========================================================= */}
       {file && !file.isPendingApproval && !hasVisualMedia && hasRichEmbed && (
-        <div className="embed-transfer-layout">
-          <div className="card-unified-footer embed-header-bar">
-            {renderDirectionMeta(`${formatBytes(file.totalSize)} · ${fileExt}`)}
-            <div className="card-actions-group">
+        <div className="embed-transfer-layout" style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
+          <div
+            className="embed-header-bar"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '0.5rem',
+              paddingBottom: '0.45rem',
+              borderBottom: '1px solid var(--border-subtle)',
+              minWidth: 0
+            }}
+          >
+            <div style={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
+              <span
+                className="file-row-title"
+                title={file.filename}
+                style={{
+                  fontSize: '0.86rem',
+                  fontWeight: 600,
+                  color: 'var(--text-primary)',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  display: 'block',
+                  marginBottom: '2px'
+                }}
+              >
+                {file.filename}
+              </span>
+              {renderDirectionMeta(`${formatBytes(file.totalSize)} · ${fileExt}`)}
+            </div>
+
+            <div className="card-actions-group" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}>
               <button
                 type="button"
                 className="card-pill-btn card-pill-primary"
                 onClick={() => onDownload(item.id, file, true)}
                 disabled={file.isDownloading}
+                title="Save file"
               >
                 <Download size={13} />
                 <span>{file.isDownloading ? `${Math.round(file.progress || 0)}%` : 'Save'}</span>
@@ -419,55 +947,129 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                 title="Remove"
                 aria-label="Remove"
               >
-                <Trash2 size={14} />
+                <Trash2 size={13} />
               </button>
             </div>
           </div>
 
-          {file.blobUrl && file.mediaKind === 'audio' ? (
-            <AudioPlayer
-              src={file.blobUrl}
-              filename={file.filename}
-              fileSize={file.totalSize}
-            />
-          ) : file.blobUrl && file.mediaKind === 'pdf' ? (
-            <PdfViewer
-              src={file.blobUrl}
-              filename={file.filename}
-              fileSize={file.totalSize}
-            />
-          ) : file.snippet ? (
-            <CodeViewer
-              filename={file.filename}
-              snippet={file.snippet}
-              fullContent={file.fullContent}
-              totalLines={file.totalLines}
-              fileSize={file.totalSize}
-              onCopyNotice={onToast}
-            />
-          ) : null}
+          <div
+            className="embed-frame-wrapper"
+            style={{
+              borderRadius: 'var(--radius-sm)',
+              overflow: 'hidden',
+              border: '1px solid var(--border-subtle)',
+              background: 'var(--surface-secondary)'
+            }}
+          >
+            {file.blobUrl && file.mediaKind === 'audio' ? (
+              <AudioPlayer
+                src={file.blobUrl}
+                filename={file.filename}
+                fileSize={file.totalSize}
+              />
+            ) : file.blobUrl && file.mediaKind === 'pdf' ? (
+              <PdfViewer
+                src={file.blobUrl}
+                filename={file.filename}
+                fileSize={file.totalSize}
+              />
+            ) : file.snippet ? (
+              <CodeViewer
+                filename={file.filename}
+                snippet={file.snippet}
+                fullContent={file.fullContent}
+                totalLines={file.totalLines}
+                fileSize={file.totalSize}
+                onCopyNotice={onToast}
+              />
+            ) : null}
+          </div>
         </div>
       )}
 
       {/* =========================================================
-          5. SINGLE-ROW FILE CARD (Apple Files / Google Files Style)
-          No nested boxes! Clean icon + title/meta + actions
+          5. SINGLE-ROW FILE CARD (Apple Files / Clean Spatial Style)
+          No nested boxes! Clean squircle icon + title/meta + action pills
           ========================================================= */}
       {file && !file.isPendingApproval && !hasVisualMedia && !hasRichEmbed && (
-        <div className="file-single-row-layout">
-          <div className="file-row-main">
-            <div className="file-squircle-icon">
+        <div
+          className="file-single-row-layout"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '0.65rem',
+            minWidth: 0
+          }}
+        >
+          <div
+            className="file-row-main"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.75rem',
+              minWidth: 0,
+              flex: 1,
+              overflow: 'hidden'
+            }}
+          >
+            <div
+              className="file-squircle-icon"
+              style={{
+                width: '40px',
+                height: '40px',
+                borderRadius: '10px',
+                background: 'var(--surface-secondary)',
+                border: '1px solid var(--border-subtle)',
+                color: 'var(--accent)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0
+              }}
+            >
               {getFileIcon(file.filename, file.mediaKind)}
             </div>
-            <div className="file-row-text">
-              <span className="file-row-title" title={file.filename}>
+            <div
+              className="file-row-text"
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.2rem',
+                minWidth: 0,
+                flex: 1,
+                overflow: 'hidden'
+              }}
+            >
+              <span
+                className="file-row-title"
+                title={file.filename}
+                style={{
+                  fontSize: '0.86rem',
+                  fontWeight: 600,
+                  letterSpacing: '-0.01em',
+                  color: 'var(--text-primary)',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  display: 'block'
+                }}
+              >
                 {file.filename}
               </span>
               {renderDirectionMeta(`${formatBytes(file.totalSize)} · ${fileExt}`)}
             </div>
           </div>
 
-          <div className="card-actions-group">
+          <div
+            className="card-actions-group"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.35rem',
+              flexShrink: 0
+            }}
+          >
             {(isImageFile ||
               isVideoFile ||
               file.mediaKind === 'audio' ||
@@ -504,7 +1106,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
               title="Remove"
               aria-label="Remove"
             >
-              <Trash2 size={14} />
+              <Trash2 size={13} />
             </button>
           </div>
         </div>
@@ -514,34 +1116,137 @@ export const TransferCard: React.FC<TransferCardProps> = ({
           6. LIVE PROGRESS BAR (Active Upload or Download)
           ========================================================= */}
       {file && !file.isPendingApproval && !isSent && file.isDownloading && (
-        <div className="progress-container">
-          <div className="progress-bar-track">
+        <div className="progress-container" style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', paddingTop: '0.25rem' }}>
+          <div
+            className="progress-bar-track"
+            style={{
+              height: '4px',
+              background: 'var(--surface-secondary)',
+              borderRadius: 'var(--radius-full, 9999px)',
+              overflow: 'hidden'
+            }}
+          >
             <div
               className="progress-bar-indicator"
-              style={{ width: `${Math.min(100, file.progress || 0)}%` }}
+              style={{
+                height: '100%',
+                background: 'var(--accent)',
+                borderRadius: 'var(--radius-full, 9999px)',
+                transition: 'width 140ms linear',
+                width: `${Math.min(100, file.progress || 0)}%`
+              }}
             />
           </div>
-          <div className="progress-meta-row">
-            <span className="progress-status-label">
-              Receiving & decrypting · {Math.round(file.progress || 0)}%
+          <div
+            className="progress-meta-row"
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              fontSize: '0.7rem',
+              fontVariantNumeric: 'tabular-nums',
+              color: 'var(--text-secondary)'
+            }}
+          >
+            <span
+              className="progress-status-label"
+              style={{
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                minWidth: 0,
+                flex: 1
+              }}
+            >
+              Receiving · {Math.round(file.progress || 0)}%
+              {file.speed ? ` · ${formatSpeed(file.speed)}` : ''}
+              {file.eta ? ` · ${file.eta}` : ''}
             </span>
+
+            <div className="progress-controls" style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexShrink: 0 }}>
+              <button
+                type="button"
+                className="progress-ctrl-btn progress-cancel"
+                onClick={() => onCancelUpload(item.id, file.transferId)}
+                title="Cancel download"
+                aria-label="Cancel download"
+                style={{
+                  background: 'var(--surface-secondary)',
+                  border: '1px solid var(--border-subtle)',
+                  color: 'var(--text-secondary)',
+                  width: '22px',
+                  height: '22px',
+                  borderRadius: '50%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer'
+                }}
+              >
+                <X size={11} />
+              </button>
+            </div>
           </div>
         </div>
       )}
 
       {file && !file.isPendingApproval && isSent && file.status && file.status !== 'done' && (
-        <div className="progress-container">
+        <div className="progress-container" style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', paddingTop: '0.25rem' }}>
           {file.status !== 'canceled' && (
-            <div className="progress-bar-track">
+            <div
+              className="progress-bar-track"
+              style={{
+                height: '4px',
+                background: 'var(--surface-secondary)',
+                borderRadius: 'var(--radius-full, 9999px)',
+                overflow: 'hidden'
+              }}
+            >
               <div
                 className="progress-bar-indicator"
-                style={{ width: `${Math.min(100, file.progress || 0)}%` }}
+                style={{
+                  height: '100%',
+                  background: file.status === 'error'
+                    ? 'var(--error)'
+                    : file.status === 'paused'
+                    ? 'var(--warning)'
+                    : 'var(--accent)',
+                  borderRadius: 'var(--radius-full, 9999px)',
+                  transition: 'width 140ms linear',
+                  width: `${Math.min(100, file.progress || 0)}%`
+                }}
               />
             </div>
           )}
 
-          <div className="progress-meta-row">
-            <span className="progress-status-label">
+          <div
+            className="progress-meta-row"
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              fontSize: '0.7rem',
+              fontVariantNumeric: 'tabular-nums',
+              color: 'var(--text-secondary)',
+              minWidth: 0,
+              gap: '0.5rem'
+            }}
+          >
+            <span
+              className="progress-status-label"
+              style={{
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                minWidth: 0,
+                flex: 1,
+                color: file.status === 'error'
+                  ? 'var(--error)'
+                  : file.status === 'interrupted' || file.status === 'paused'
+                  ? 'var(--warning)'
+                  : 'var(--text-secondary)'
+              }}
+            >
               {file.status === 'uploading' && (
                 <>
                   {Math.round(file.progress || 0)}% · {formatSpeed(file.speed || 0)}
@@ -555,7 +1260,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
               {file.status === 'error' && (file.error || 'Transfer failed')}
             </span>
 
-            <div className="progress-controls">
+            <div className="progress-controls" style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexShrink: 0 }}>
               {(file.status === 'queued' || file.status === 'paused') && onTogglePriority && (
                 <button
                   type="button"
@@ -563,8 +1268,21 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                   onClick={() => onTogglePriority(item.id)}
                   title={file.priority === 'high' ? 'High Priority (Tap to reset)' : 'Prioritize in queue'}
                   aria-label="Prioritize transfer"
+                  style={{
+                    background: file.priority === 'high' ? 'var(--accent)' : 'var(--surface-secondary)',
+                    borderColor: file.priority === 'high' ? 'var(--accent)' : 'var(--border-subtle)',
+                    color: file.priority === 'high' ? '#17161D' : 'var(--text-secondary)',
+                    width: '22px',
+                    height: '22px',
+                    borderRadius: '50%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer',
+                    border: '1px solid var(--border-subtle)'
+                  }}
                 >
-                  <ArrowUp size={11} />
+                  <ArrowUp size={11} strokeWidth={2.5} />
                 </button>
               )}
               {file.status === 'uploading' && (
@@ -574,6 +1292,18 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                   onClick={() => onPauseUpload(item.id)}
                   title="Pause"
                   aria-label="Pause"
+                  style={{
+                    background: 'var(--surface-secondary)',
+                    border: '1px solid var(--border-subtle)',
+                    color: 'var(--text-secondary)',
+                    width: '22px',
+                    height: '22px',
+                    borderRadius: '50%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer'
+                  }}
                 >
                   <Pause size={11} />
                 </button>
@@ -585,6 +1315,18 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                   onClick={() => onResumeUpload(item.id)}
                   title={file.status === 'error' ? 'Retry transfer' : 'Resume'}
                   aria-label={file.status === 'error' ? 'Retry transfer' : 'Resume'}
+                  style={{
+                    background: 'var(--surface-secondary)',
+                    border: '1px solid var(--border-subtle)',
+                    color: 'var(--accent)',
+                    width: '22px',
+                    height: '22px',
+                    borderRadius: '50%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer'
+                  }}
                 >
                   {file.status === 'error' ? <RotateCcw size={11} /> : <Play size={11} />}
                 </button>
@@ -596,6 +1338,18 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                   onClick={() => onCancelUpload(item.id, file.transferId)}
                   title="Cancel"
                   aria-label="Cancel"
+                  style={{
+                    background: 'var(--surface-secondary)',
+                    border: '1px solid var(--border-subtle)',
+                    color: 'var(--text-secondary)',
+                    width: '22px',
+                    height: '22px',
+                    borderRadius: '50%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer'
+                  }}
                 >
                   <X size={11} />
                 </button>
@@ -604,7 +1358,18 @@ export const TransferCard: React.FC<TransferCardProps> = ({
           </div>
 
           {file.error && (
-            <div className="transfer-error-notice">
+            <div
+              className="transfer-error-notice"
+              style={{
+                fontSize: '0.73rem',
+                color: 'var(--error)',
+                padding: '0.3rem 0.55rem',
+                borderRadius: '6px',
+                background: 'var(--error-subtle)',
+                border: '1px solid var(--error-border)',
+                lineHeight: 1.35
+              }}
+            >
               {file.error}
             </div>
           )}

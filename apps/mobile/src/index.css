@@ -104,7 +104,7 @@
   --warning-border: rgba(153, 117, 47, 0.20);
 
   /* Primary Interactive CTA */
-  --btn-primary-bg: #8872B5;
+  --btn-primary-bg: #7E66AC;
   --btn-primary-text: #FFFFFF;
   --btn-primary-hover: #7963A5;
   --btn-primary-pressed: #6A5595;
@@ -973,7 +973,7 @@ textarea {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 0.5rem 1.1rem 6.25rem;
+  padding: 0.5rem 1.1rem 0;
   display: flex;
   flex-direction: column;
   gap: 1.15rem;
@@ -984,6 +984,14 @@ textarea {
 .activity-scroll-area.is-empty {
   justify-content: center;
   align-items: center;
+  padding-bottom: calc(7rem + env(safe-area-inset-bottom, 0px));
+}
+
+.activity-scroll-spacer {
+  height: calc(12.5rem + env(safe-area-inset-bottom, 0px));
+  min-height: calc(12.5rem + env(safe-area-inset-bottom, 0px));
+  flex-shrink: 0;
+  pointer-events: none;
 }
 
 /* Date Group Section */
@@ -2023,7 +2031,9 @@ textarea {
 .ghost-pill-btn,
 .dialog-close-btn,
 .sheet-close-btn,
-.progress-ctrl-btn {
+.progress-ctrl-btn,
+.btn-compact,
+.batch-btn {
   position: relative;
 }
 
@@ -2032,7 +2042,9 @@ textarea {
 .card-icon-only-btn::after,
 .dialog-close-btn::after,
 .sheet-close-btn::after,
-.progress-ctrl-btn::after {
+.progress-ctrl-btn::after,
+.btn-compact::after,
+.batch-btn::after {
   content: '';
   position: absolute;
   top: 50%;

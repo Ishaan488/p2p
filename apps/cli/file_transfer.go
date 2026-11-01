@@ -46,6 +46,9 @@ type TransferState struct {
 	TotalSize   int64
 	File        *os.File
 	FilePath    string
+	FinalPath   string // target path in receive directory once finalization begins
+	State       string // "transferring", "finalizing", "completed"
+	generation  int64  // monotonically increasing commit sequence
 	IsDownload  bool   // true if Windows is sending to phone
 	IsFolder    bool   // true if transfer is a streamed directory/folder
 	FolderName  string // uncompressed directory name
@@ -57,9 +60,14 @@ type TransferState struct {
 	fileMu sync.RWMutex
 	closed bool
 
+	// metaMu serializes disk metadata persistence to prevent stale snapshot overwrites,
+	// lost updates, and temporary file collision races under concurrent worker uploads.
+	metaMu sync.Mutex
+
 	mu            sync.Mutex // guards received/receivedCount
 	received      []bool
 	receivedCount int
+	chunkHashes   []string // 16-byte truncated SHA-256 digests for recovery verification
 }
 
 var (
@@ -388,15 +396,22 @@ func handleUploadInit(w http.ResponseWriter, r *http.Request, s *Session) {
 			TotalSize:   req.TotalSize,
 			File:        f,
 			FilePath:    path,
+			State:       "transferring",
+			generation:  1,
 			Owner:       s.Device.ID,
 			received:    make([]bool, req.TotalChunks),
+			chunkHashes: make([]string, req.TotalChunks),
 		}
 		transfers[req.TransferID] = state
 	}
 	state.LastActive = time.Now().Unix()
 	transfersMu.Unlock()
 
-	state.saveMeta()
+	if err := state.saveMeta(); err != nil {
+		printAsync(Red, "! Meta Error", state.Filename, fmt.Sprintf("initial metadata persistence failed: %v", err))
+		httpError(w, http.StatusInternalServerError, "Failed to persist transfer metadata")
+		return
+	}
 
 	s.writeResponse(w, r, uploadStatus{
 		TransferID:  state.ID,
@@ -450,7 +465,15 @@ func handleUploadChunk(w http.ResponseWriter, r *http.Request, s *Session) {
 		return
 	}
 
+	// Record chunk cryptographic digest for crash-consistent content verification
+	sum := sha256.Sum256(body)
+	cHash := hex.EncodeToString(sum[:16])
+
 	state.mu.Lock()
+	if len(state.chunkHashes) != state.TotalChunks {
+		state.chunkHashes = make([]string, state.TotalChunks)
+	}
+	state.chunkHashes[chunkIndex] = cHash
 	if !state.received[chunkIndex] {
 		state.received[chunkIndex] = true
 		state.receivedCount++
@@ -458,7 +481,11 @@ func handleUploadChunk(w http.ResponseWriter, r *http.Request, s *Session) {
 	count := state.receivedCount
 	state.mu.Unlock()
 
-	state.saveMeta()
+	if err := state.saveMeta(); err != nil {
+		printAsync(Red, "! Meta Error", state.Filename, fmt.Sprintf("metadata persistence failed: %v", err))
+		httpError(w, http.StatusInternalServerError, "Failed to persist transfer metadata")
+		return
+	}
 
 	w.WriteHeader(http.StatusOK)
 
@@ -507,6 +534,11 @@ func handleUploadComplete(w http.ResponseWriter, r *http.Request, s *Session) {
 	}
 	state := lookupUpload(req.TransferID, s)
 	if state == nil {
+		// Idempotent retry: check if transfer already completed (e.g. client retrying after lost response)
+		if rec := lookupCompletedTransfer(req.TransferID); rec != nil {
+			s.writeResponse(w, r, map[string]string{"filename": rec.Filename})
+			return
+		}
 		httpError(w, http.StatusNotFound, "Unknown transfer")
 		return
 	}
@@ -525,26 +557,29 @@ func handleUploadComplete(w http.ResponseWriter, r *http.Request, s *Session) {
 	state.fileMu.Lock()
 	if state.closed {
 		state.fileMu.Unlock()
+		if rec := lookupCompletedTransfer(req.TransferID); rec != nil {
+			s.writeResponse(w, r, map[string]string{"filename": rec.Filename})
+			return
+		}
 		httpError(w, http.StatusNotFound, "Unknown transfer")
 		return
 	}
 	state.closed = true
 	state.File.Close()
-	state.removeMeta()
 	state.fileMu.Unlock()
+
+	dir := receiveDir
+	finalPath, err := finalizeUpload(state, dir)
+	if err != nil {
+		printAsync(Red, "! Error", state.Filename, fmt.Sprintf("save failed: %v", err))
+		httpError(w, http.StatusInternalServerError, "Failed to save file: "+err.Error())
+		return
+	}
 
 	transfersMu.Lock()
 	delete(transfers, state.ID)
-	dir := receiveDir
 	transfersMu.Unlock()
 
-	finalPath, err := moveIntoDir(state.FilePath, dir, state.Filename)
-	if err != nil {
-		os.Remove(state.FilePath)
-		printAsync(Red, "! Error", state.Filename, fmt.Sprintf("save failed: %v", err))
-		httpError(w, http.StatusInternalServerError, "Failed to save file")
-		return
-	}
 	printAsync(Green, "↓ File", state.Filename, fmt.Sprintf("%s · saved to received\\", formatSize(state.TotalSize)))
 	go func(p string, sz int64, nm string) {
 		if h, err := computeFileSHA256(p); err == nil {
@@ -553,7 +588,7 @@ func handleUploadComplete(w http.ResponseWriter, r *http.Request, s *Session) {
 	}(finalPath, state.TotalSize, state.Filename)
 	recordTransfer(TransferRecord{
 		ID:        state.ID,
-		Filename:  state.Filename,
+		Filename:  filepath.Base(finalPath),
 		Size:      state.TotalSize,
 		Direction: "Received",
 		Device:    s.Device.DisplayName(),
@@ -589,6 +624,100 @@ func handleUploadCancel(w http.ResponseWriter, r *http.Request, s *Session) {
 }
 
 var moveMu sync.Mutex
+
+// finalizeUpload atomically commits an upload to the receive directory with crash-safe recovery.
+func finalizeUpload(state *TransferState, dir string) (string, error) {
+	moveMu.Lock()
+	defer moveMu.Unlock()
+
+	cleanDir, err := filepath.Abs(dir)
+	if err != nil {
+		cleanDir = filepath.Clean(dir)
+	}
+	if err := os.MkdirAll(cleanDir, 0755); err != nil {
+		return "", err
+	}
+	cleanFilename := sanitizeFilename(filepath.Base(filepath.Clean(state.Filename)))
+	ext := filepath.Ext(cleanFilename)
+	name := strings.TrimSuffix(cleanFilename, ext)
+
+	var finalPath string
+	for counter := 0; counter < 10000; counter++ {
+		candidate := cleanFilename
+		if counter > 0 {
+			candidate = fmt.Sprintf("%s (%d)%s", name, counter, ext)
+		}
+		p := filepath.Join(cleanDir, candidate)
+		rel, err := filepath.Rel(cleanDir, p)
+		if err != nil || strings.HasPrefix(rel, "..") || rel == "." {
+			return "", fmt.Errorf("invalid destination path: %s", p)
+		}
+		if _, err := os.Stat(p); err == nil {
+			continue
+		}
+		finalPath = p
+		break
+	}
+	if finalPath == "" {
+		return "", fmt.Errorf("could not find unique destination path")
+	}
+
+	// 1. Record State = "finalizing" and FinalPath in metadata before moving the .part file
+	state.mu.Lock()
+	state.State = "finalizing"
+	state.FinalPath = finalPath
+	state.mu.Unlock()
+
+	if err := state.saveMeta(); err != nil {
+		return "", fmt.Errorf("persist finalization metadata: %w", err)
+	}
+
+	// 2. Move file
+	if err := os.Rename(state.FilePath, finalPath); err != nil {
+		if err := copyExclusive(state.FilePath, finalPath); err != nil {
+			return "", fmt.Errorf("move file to destination: %w", err)
+		}
+		_ = os.Remove(state.FilePath)
+	}
+
+	// 3. File is safely in receiveDir; record completion to history BEFORE removing metadata
+	// to prevent any crash window where neither metadata nor history records the transfer.
+	recordTransfer(TransferRecord{
+		ID:        state.ID,
+		Filename:  filepath.Base(finalPath),
+		Size:      state.TotalSize,
+		Direction: "Received",
+		Status:    "Completed",
+	})
+
+	// 4. File is safely recorded in transfer history; safely remove metadata
+	state.removeMeta()
+
+	return finalPath, nil
+}
+
+// moveToFinalPath moves src to finalPath atomically or via exclusive copy.
+func moveToFinalPath(src, finalPath string) error {
+	moveMu.Lock()
+	defer moveMu.Unlock()
+
+	cleanDir := filepath.Dir(finalPath)
+	if err := os.MkdirAll(cleanDir, 0755); err != nil {
+		return err
+	}
+
+	// Try atomic rename
+	if err := os.Rename(src, finalPath); err == nil {
+		return nil
+	}
+
+	// Fallback to exclusive copy across partitions (guarantees no overwrite)
+	if err := copyExclusive(src, finalPath); err == nil {
+		_ = os.Remove(src)
+		return nil
+	}
+	return fmt.Errorf("failed to move %s to %s", src, finalPath)
+}
 
 // moveIntoDir moves src into dir under a collision-free name and returns the final path.
 func moveIntoDir(src, dir, filename string) (string, error) {

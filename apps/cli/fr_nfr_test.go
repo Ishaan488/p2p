@@ -96,7 +96,7 @@ func TestRestartTransferRecovery(t *testing.T) {
 		received:      []bool{true, false},
 		receivedCount: 1,
 	}
-	st.saveMeta()
+	_ = st.saveMeta()
 	f.Close()
 
 	// Simulate server restart: clear in-memory transfers map and run cleanTempDir()
