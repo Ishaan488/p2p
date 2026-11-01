@@ -1,0 +1,502 @@
+{
+  "run_id": "20261031T165643Z-0f3b9c",
+  "timestamp_utc": "2026-10-31T16:56:43Z",
+  "scenario": "concurrent_loopback",
+  "label": "Measured: N simultaneous uploads, Go client -\u003e real p2p.exe over LOOPBACK TCP",
+  "params": {
+    "chunk": "1MiB",
+    "counts": "1,2,5",
+    "size_each": "64MiB",
+    "trials": 3,
+    "workers_per_transfer": 2
+  },
+  "environment": {
+    "host": "LAPTOP-VVMI67PG",
+    "os": "Microsoft Windows 11 Home Single Language 10.0.26300",
+    "cpu": "11th Gen Intel(R) Core(TM) i5-1155G7 @ 2.50GHz",
+    "logical_cpus": 8,
+    "ram_bytes": "16952647680",
+    "model": "LENOVO 82H8",
+    "disk": "NVMe INTEL SSDPEKNW512GZL / SSD",
+    "go_version": "go1.27.0",
+    "sut_path": "E:\\personal\\p2p\\p2p.exe",
+    "sut_sha256": "4b5f7bc1076610a30d4894da4a3e320cfa332755782bd5336550773bd51040bb",
+    "sut_mtime": "2026-10-31T21:27:17+05:30",
+    "git_commit": "fdc6376598376e62a6e32274320a84375f3cc83c",
+    "git_dirty_files": "M docs/performance_benchmark.md; ?? apps/cli/bench/; ?? apps/cli/benchmark_suite_test.go; ?? benchmark_results/",
+    "network": {
+      "Authentication": "WPA2-Enterprise",
+      "Band": "5 GHz",
+      "Channel": "116",
+      "Radio type": "802.11ax",
+      "Receive rate (Mbps)": "454",
+      "SSID": "SRMIST",
+      "Signal": "64%",
+      "Transmit rate (Mbps)": "649"
+    }
+  },
+  "trials": [
+    {
+      "index": 1,
+      "group": "transfers=1,size=64MiB,workers=2",
+      "warmup": true,
+      "success": true,
+      "bytes": 67108864,
+      "files": 1,
+      "elapsed_seconds": 0.5632823,
+      "throughput_MiB_per_s": 113.61976046469061,
+      "integrity": "1/1 verified, 0 failed, 0 mismatch",
+      "server_process": {
+        "samples": 4,
+        "working_set_avg_MiB": 22.0576171875,
+        "working_set_median_MiB": 23.728515625,
+        "working_set_max_sampled_MiB": 25.53515625,
+        "private_bytes_avg_MiB": 56.337890625,
+        "private_bytes_max_sampled_MiB": 59.53125,
+        "cpu_seconds": 0.40625,
+        "wall_seconds": 0.5632823,
+        "cpu_pct_of_all_cores": 9.015239782964954,
+        "cpu_pct_of_one_core": 72.12191826371964
+      },
+      "extra": {
+        "aggregate_MiB_per_s": 113.61976046469061,
+        "per_transfer_MiB_per_s": {
+          "n": 1,
+          "min": 117.74792377293785,
+          "max": 117.74792377293785,
+          "mean": 117.74792377293785,
+          "median": 117.74792377293785,
+          "stdev_sample": 0,
+          "cov_pct": 0,
+          "p95": 117.74792377293785,
+          "ci95_mean_lo": 0,
+          "ci95_mean_hi": 0
+        }
+      }
+    },
+    {
+      "index": 2,
+      "group": "transfers=1,size=64MiB,workers=2",
+      "warmup": false,
+      "success": true,
+      "bytes": 67108864,
+      "files": 1,
+      "elapsed_seconds": 0.4077546,
+      "throughput_MiB_per_s": 156.95715020750225,
+      "integrity": "1/1 verified, 0 failed, 0 mismatch",
+      "server_process": {
+        "samples": 4,
+        "working_set_avg_MiB": 24.333984375,
+        "working_set_median_MiB": 24.2890625,
+        "working_set_max_sampled_MiB": 24.95703125,
+        "private_bytes_avg_MiB": 58.2451171875,
+        "private_bytes_max_sampled_MiB": 58.89453125,
+        "cpu_seconds": 0.375,
+        "wall_seconds": 0.4077546,
+        "cpu_pct_of_all_cores": 11.495885024963544,
+        "cpu_pct_of_one_core": 91.96708019970835
+      },
+      "extra": {
+        "aggregate_MiB_per_s": 156.95715020750225,
+        "per_transfer_MiB_per_s": {
+          "n": 1,
+          "min": 157.17323929134517,
+          "max": 157.17323929134517,
+          "mean": 157.17323929134517,
+          "median": 157.17323929134517,
+          "stdev_sample": 0,
+          "cov_pct": 0,
+          "p95": 157.17323929134517,
+          "ci95_mean_lo": 0,
+          "ci95_mean_hi": 0
+        }
+      }
+    },
+    {
+      "index": 3,
+      "group": "transfers=1,size=64MiB,workers=2",
+      "warmup": false,
+      "success": true,
+      "bytes": 67108864,
+      "files": 1,
+      "elapsed_seconds": 0.4869079,
+      "throughput_MiB_per_s": 131.4416956471645,
+      "integrity": "1/1 verified, 0 failed, 0 mismatch",
+      "server_process": {
+        "samples": 5,
+        "working_set_avg_MiB": 23.67734375,
+        "working_set_median_MiB": 23.2578125,
+        "working_set_max_sampled_MiB": 26.359375,
+        "private_bytes_avg_MiB": 57.50078125,
+        "private_bytes_max_sampled_MiB": 60.1796875,
+        "cpu_seconds": 0.3125,
+        "wall_seconds": 0.4869079,
+        "cpu_pct_of_all_cores": 8.022564431589629,
+        "cpu_pct_of_one_core": 64.18051545271703
+      },
+      "extra": {
+        "aggregate_MiB_per_s": 131.4416956471645,
+        "per_transfer_MiB_per_s": {
+          "n": 1,
+          "min": 131.441938604292,
+          "max": 131.441938604292,
+          "mean": 131.441938604292,
+          "median": 131.441938604292,
+          "stdev_sample": 0,
+          "cov_pct": 0,
+          "p95": 131.441938604292,
+          "ci95_mean_lo": 0,
+          "ci95_mean_hi": 0
+        }
+      }
+    },
+    {
+      "index": 4,
+      "group": "transfers=1,size=64MiB,workers=2",
+      "warmup": false,
+      "success": true,
+      "bytes": 67108864,
+      "files": 1,
+      "elapsed_seconds": 0.4528595,
+      "throughput_MiB_per_s": 141.3241855365737,
+      "integrity": "1/1 verified, 0 failed, 0 mismatch",
+      "server_process": {
+        "samples": 5,
+        "working_set_avg_MiB": 23.440625,
+        "working_set_median_MiB": 23.2578125,
+        "working_set_max_sampled_MiB": 26.21484375,
+        "private_bytes_avg_MiB": 57.1765625,
+        "private_bytes_max_sampled_MiB": 59.9140625,
+        "cpu_seconds": 0.546875,
+        "wall_seconds": 0.4528595,
+        "cpu_pct_of_all_cores": 15.09505155572534,
+        "cpu_pct_of_one_core": 120.76041244580271
+      },
+      "extra": {
+        "aggregate_MiB_per_s": 141.3241855365737,
+        "per_transfer_MiB_per_s": {
+          "n": 1,
+          "min": 141.32434157210082,
+          "max": 141.32434157210082,
+          "mean": 141.32434157210082,
+          "median": 141.32434157210082,
+          "stdev_sample": 0,
+          "cov_pct": 0,
+          "p95": 141.32434157210082,
+          "ci95_mean_lo": 0,
+          "ci95_mean_hi": 0
+        }
+      }
+    },
+    {
+      "index": 1,
+      "group": "transfers=2,size=64MiB,workers=2",
+      "warmup": true,
+      "success": true,
+      "bytes": 134217728,
+      "files": 2,
+      "elapsed_seconds": 0.6414972,
+      "throughput_MiB_per_s": 199.5332169805262,
+      "integrity": "2/2 verified, 0 failed, 0 mismatch",
+      "server_process": {
+        "samples": 5,
+        "working_set_avg_MiB": 28.40546875,
+        "working_set_median_MiB": 29.78515625,
+        "working_set_max_sampled_MiB": 35.18359375,
+        "private_bytes_avg_MiB": 62.36875,
+        "private_bytes_max_sampled_MiB": 68.9140625,
+        "cpu_seconds": 0.71875,
+        "wall_seconds": 0.6414972,
+        "cpu_pct_of_all_cores": 14.005322236792303,
+        "cpu_pct_of_one_core": 112.04257789433842
+      },
+      "extra": {
+        "aggregate_MiB_per_s": 199.5332169805262,
+        "per_transfer_MiB_per_s": {
+          "n": 2,
+          "min": 99.76663959457332,
+          "max": 101.66136915625829,
+          "mean": 100.71400437541581,
+          "median": 100.71400437541581,
+          "stdev_sample": 1.3397761215820563,
+          "cov_pct": 1.3302778793185333,
+          "p95": 101.56663267817405,
+          "ci95_mean_lo": 88.6767874700312,
+          "ci95_mean_hi": 112.75122128080042
+        }
+      }
+    },
+    {
+      "index": 2,
+      "group": "transfers=2,size=64MiB,workers=2",
+      "warmup": false,
+      "success": true,
+      "bytes": 134217728,
+      "files": 2,
+      "elapsed_seconds": 0.6876982,
+      "throughput_MiB_per_s": 186.12815912561643,
+      "integrity": "2/2 verified, 0 failed, 0 mismatch",
+      "server_process": {
+        "samples": 5,
+        "working_set_avg_MiB": 31.68046875,
+        "working_set_median_MiB": 31.76171875,
+        "working_set_max_sampled_MiB": 34.578125,
+        "private_bytes_avg_MiB": 65.36015625,
+        "private_bytes_max_sampled_MiB": 68.296875,
+        "cpu_seconds": 0.65625,
+        "wall_seconds": 0.6876982,
+        "cpu_pct_of_all_cores": 11.928379338494706,
+        "cpu_pct_of_one_core": 95.42703470795765
+      },
+      "extra": {
+        "aggregate_MiB_per_s": 186.12815912561643,
+        "per_transfer_MiB_per_s": {
+          "n": 2,
+          "min": 93.06410662820016,
+          "max": 93.1773776974123,
+          "mean": 93.12074216280624,
+          "median": 93.12074216280624,
+          "stdev_sample": 0.0800947411521494,
+          "cov_pct": 0.08601170833896166,
+          "p95": 93.17171414395169,
+          "ci95_mean_lo": 92.40113106010156,
+          "ci95_mean_hi": 93.84035326551091
+        }
+      }
+    },
+    {
+      "index": 3,
+      "group": "transfers=2,size=64MiB,workers=2",
+      "warmup": false,
+      "success": true,
+      "bytes": 134217728,
+      "files": 2,
+      "elapsed_seconds": 0.7091964,
+      "throughput_MiB_per_s": 180.4859697539356,
+      "integrity": "2/2 verified, 0 failed, 0 mismatch",
+      "server_process": {
+        "samples": 6,
+        "working_set_avg_MiB": 29.155598958333332,
+        "working_set_median_MiB": 30.21484375,
+        "working_set_max_sampled_MiB": 33.109375,
+        "private_bytes_avg_MiB": 62.740885416666664,
+        "private_bytes_max_sampled_MiB": 66.66015625,
+        "cpu_seconds": 0.890625,
+        "wall_seconds": 0.7091964,
+        "cpu_pct_of_all_cores": 15.697784844931531,
+        "cpu_pct_of_one_core": 125.58227875945225
+      },
+      "extra": {
+        "aggregate_MiB_per_s": 180.4859697539356,
+        "per_transfer_MiB_per_s": {
+          "n": 2,
+          "min": 90.24303577572348,
+          "max": 96.87751654486337,
+          "mean": 93.56027616029343,
+          "median": 93.56027616029343,
+          "stdev_sample": 4.691286341510553,
+          "cov_pct": 5.014186077725062,
+          "p95": 96.54579250640637,
+          "ci95_mean_lo": 51.411419833947754,
+          "ci95_mean_hi": 135.7091324866391
+        }
+      }
+    },
+    {
+      "index": 4,
+      "group": "transfers=2,size=64MiB,workers=2",
+      "warmup": false,
+      "success": true,
+      "bytes": 134217728,
+      "files": 2,
+      "elapsed_seconds": 0.7005309,
+      "throughput_MiB_per_s": 182.71856387776756,
+      "integrity": "2/2 verified, 0 failed, 0 mismatch",
+      "server_process": {
+        "samples": 5,
+        "working_set_avg_MiB": 30.82265625,
+        "working_set_median_MiB": 29.5390625,
+        "working_set_max_sampled_MiB": 34.9453125,
+        "private_bytes_avg_MiB": 64.38515625,
+        "private_bytes_max_sampled_MiB": 68.4765625,
+        "cpu_seconds": 0.828125,
+        "wall_seconds": 0.7005309,
+        "cpu_pct_of_all_cores": 14.776739327273072,
+        "cpu_pct_of_one_core": 118.21391461818457
+      },
+      "extra": {
+        "aggregate_MiB_per_s": 182.71856387776756,
+        "per_transfer_MiB_per_s": {
+          "n": 2,
+          "min": 91.35939931194953,
+          "max": 91.42791837201163,
+          "mean": 91.39365884198058,
+          "median": 91.39365884198058,
+          "stdev_sample": 0.04845029201044016,
+          "cov_pct": 0.05301275014518305,
+          "p95": 91.42449241900853,
+          "ci95_mean_lo": 90.95835725340605,
+          "ci95_mean_hi": 91.82896043055511
+        }
+      }
+    },
+    {
+      "index": 1,
+      "group": "transfers=5,size=64MiB,workers=2",
+      "warmup": true,
+      "success": true,
+      "bytes": 335544320,
+      "files": 5,
+      "elapsed_seconds": 1.7772926999999998,
+      "throughput_MiB_per_s": 180.04912752975355,
+      "integrity": "5/5 verified, 0 failed, 0 mismatch",
+      "server_process": {
+        "samples": 10,
+        "working_set_avg_MiB": 39.894921875,
+        "working_set_median_MiB": 42.66015625,
+        "working_set_max_sampled_MiB": 53.53515625,
+        "private_bytes_avg_MiB": 73.947265625,
+        "private_bytes_max_sampled_MiB": 87.46484375,
+        "cpu_seconds": 1.828125,
+        "wall_seconds": 1.7772926999999998,
+        "cpu_pct_of_all_cores": 12.857512158801981,
+        "cpu_pct_of_one_core": 102.86009727041585
+      },
+      "extra": {
+        "aggregate_MiB_per_s": 180.04912752975355,
+        "per_transfer_MiB_per_s": {
+          "n": 5,
+          "min": 36.00983968869494,
+          "max": 37.277984845334224,
+          "mean": 36.4241033337992,
+          "median": 36.35184266922493,
+          "stdev_sample": 0.5073513959948165,
+          "cov_pct": 1.3929001665334815,
+          "p95": 37.10399788575054,
+          "ci95_mean_lo": 35.7942443628495,
+          "ci95_mean_hi": 37.05396230474891
+        }
+      }
+    },
+    {
+      "index": 2,
+      "group": "transfers=5,size=64MiB,workers=2",
+      "warmup": false,
+      "success": true,
+      "bytes": 335544320,
+      "files": 5,
+      "elapsed_seconds": 1.8421269,
+      "throughput_MiB_per_s": 173.71224533988402,
+      "integrity": "5/5 verified, 0 failed, 0 mismatch",
+      "server_process": {
+        "samples": 11,
+        "working_set_avg_MiB": 36.70667613636363,
+        "working_set_median_MiB": 35.6640625,
+        "working_set_max_sampled_MiB": 41.921875,
+        "private_bytes_avg_MiB": 70.4637784090909,
+        "private_bytes_max_sampled_MiB": 76.1171875,
+        "cpu_seconds": 2.328125,
+        "wall_seconds": 1.8421269,
+        "cpu_pct_of_all_cores": 15.797805514918654,
+        "cpu_pct_of_one_core": 126.38244411934923
+      },
+      "extra": {
+        "aggregate_MiB_per_s": 173.71224533988402,
+        "per_transfer_MiB_per_s": {
+          "n": 5,
+          "min": 34.7424660419537,
+          "max": 38.65661031056358,
+          "mean": 36.55740554092474,
+          "median": 36.17488976550193,
+          "stdev_sample": 1.5547945251666602,
+          "cov_pct": 4.253022068062576,
+          "p95": 38.437263393203104,
+          "ci95_mean_lo": 34.627182647303854,
+          "ci95_mean_hi": 38.48762843454563
+        }
+      }
+    },
+    {
+      "index": 3,
+      "group": "transfers=5,size=64MiB,workers=2",
+      "warmup": false,
+      "success": true,
+      "bytes": 335544320,
+      "files": 5,
+      "elapsed_seconds": 1.7404405,
+      "throughput_MiB_per_s": 183.86149943074756,
+      "integrity": "5/5 verified, 0 failed, 0 mismatch",
+      "server_process": {
+        "samples": 11,
+        "working_set_avg_MiB": 35.81924715909091,
+        "working_set_median_MiB": 34.19140625,
+        "working_set_max_sampled_MiB": 47.81640625,
+        "private_bytes_avg_MiB": 69.38103693181819,
+        "private_bytes_max_sampled_MiB": 81.41015625,
+        "cpu_seconds": 2.140625,
+        "wall_seconds": 1.7404405,
+        "cpu_pct_of_all_cores": 15.374161024177498,
+        "cpu_pct_of_one_core": 122.99328819341999
+      },
+      "extra": {
+        "aggregate_MiB_per_s": 183.86149943074756,
+        "per_transfer_MiB_per_s": {
+          "n": 5,
+          "min": 36.81021115257372,
+          "max": 39.37550449865139,
+          "mean": 38.36018713304755,
+          "median": 38.90972518182697,
+          "stdev_sample": 1.0477255132577716,
+          "cov_pct": 2.7312836343156137,
+          "p95": 39.28545350534846,
+          "ci95_mean_lo": 37.05947264043377,
+          "ci95_mean_hi": 39.66090162566134
+        }
+      }
+    },
+    {
+      "index": 4,
+      "group": "transfers=5,size=64MiB,workers=2",
+      "warmup": false,
+      "success": true,
+      "bytes": 335544320,
+      "files": 5,
+      "elapsed_seconds": 1.7360112,
+      "throughput_MiB_per_s": 184.33060800529395,
+      "integrity": "5/5 verified, 0 failed, 0 mismatch",
+      "server_process": {
+        "samples": 11,
+        "working_set_avg_MiB": 40.47301136363637,
+        "working_set_median_MiB": 38.59375,
+        "working_set_max_sampled_MiB": 54.9609375,
+        "private_bytes_avg_MiB": 74.0262784090909,
+        "private_bytes_max_sampled_MiB": 88.50390625,
+        "cpu_seconds": 2.0625,
+        "wall_seconds": 1.7360112,
+        "cpu_pct_of_all_cores": 14.850854648864015,
+        "cpu_pct_of_one_core": 118.80683719091212
+      },
+      "extra": {
+        "aggregate_MiB_per_s": 184.33060800529395,
+        "per_transfer_MiB_per_s": {
+          "n": 5,
+          "min": 36.879849484114295,
+          "max": 39.21513361024937,
+          "mean": 38.11667330069277,
+          "median": 38.524047432733404,
+          "stdev_sample": 0.9979905364330698,
+          "cov_pct": 2.6182519354723732,
+          "p95": 39.113140291968165,
+          "ci95_mean_lo": 36.87770303815366,
+          "ci95_mean_hi": 39.35564356323187
+        }
+      }
+    }
+  ],
+  "notes": [
+    "Aggregate = N*size / wall time from first request to last completion. Per-transfer = size / that transfer's own elapsed. These are different numbers and must not be conflated.",
+    "transfers=1: lifetime PeakWorkingSet=30.2 MiB",
+    "transfers=2: lifetime PeakWorkingSet=38.0 MiB",
+    "transfers=5: lifetime PeakWorkingSet=55.3 MiB"
+  ]
+}

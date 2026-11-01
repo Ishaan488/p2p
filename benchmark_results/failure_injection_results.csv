@@ -1,0 +1,207 @@
+test_id,repetition,scenario,file_size_bytes,chunk_size_bytes,workers,interrupt_pct,acknowledged_chunks,persisted_chunks,retransmitted_chunks,duplicate_writes,subset_verified,missing_chunk_ids,recovery_status,integrity_sha256,elapsed_seconds,failure_details
+T1,1,Client abort at 25%,33554432,1048576,4,25,11,11,0,0,true,[],SUCCESS,sha256-match,0.169,
+T1,2,Client abort at 25%,33554432,1048576,4,25,11,11,0,0,true,[],SUCCESS,sha256-match,0.197,
+T1,3,Client abort at 25%,33554432,1048576,4,25,11,11,0,0,true,[],SUCCESS,sha256-match,0.147,
+T1,4,Client abort at 25%,33554432,1048576,4,25,11,11,0,0,true,[],SUCCESS,sha256-match,0.153,
+T1,5,Client abort at 25%,33554432,1048576,4,25,11,11,0,0,true,[],SUCCESS,sha256-match,0.166,
+T1,6,Client abort at 25%,33554432,1048576,4,25,11,11,0,0,true,[],SUCCESS,sha256-match,0.172,
+T1,7,Client abort at 25%,33554432,1048576,4,25,11,11,0,0,true,[],SUCCESS,sha256-match,0.166,
+T1,8,Client abort at 25%,33554432,1048576,4,25,11,11,0,0,true,[],SUCCESS,sha256-match,0.256,
+T1,9,Client abort at 25%,33554432,1048576,4,25,11,11,0,0,true,[],SUCCESS,sha256-match,0.179,
+T1,10,Client abort at 25%,33554432,1048576,4,25,11,11,0,0,true,[],SUCCESS,sha256-match,0.221,
+T2,1,Client abort at 50%,33554432,1048576,4,50,19,19,0,0,true,[],SUCCESS,sha256-match,0.196,
+T2,2,Client abort at 50%,33554432,1048576,4,50,19,19,0,0,true,[],SUCCESS,sha256-match,0.178,
+T2,3,Client abort at 50%,33554432,1048576,4,50,19,19,0,0,true,[],SUCCESS,sha256-match,0.190,
+T2,4,Client abort at 50%,33554432,1048576,4,50,19,19,0,0,true,[],SUCCESS,sha256-match,0.235,
+T2,5,Client abort at 50%,33554432,1048576,4,50,19,19,0,0,true,[],SUCCESS,sha256-match,0.116,
+T2,6,Client abort at 50%,33554432,1048576,4,50,19,19,0,0,true,[],SUCCESS,sha256-match,0.183,
+T2,7,Client abort at 50%,33554432,1048576,4,50,19,19,0,0,true,[],SUCCESS,sha256-match,0.139,
+T2,8,Client abort at 50%,33554432,1048576,4,50,19,19,0,0,true,[],SUCCESS,sha256-match,0.154,
+T2,9,Client abort at 50%,33554432,1048576,4,50,19,19,0,0,true,[],SUCCESS,sha256-match,0.208,
+T2,10,Client abort at 50%,33554432,1048576,4,50,19,19,0,0,true,[],SUCCESS,sha256-match,0.134,
+T3,1,Client abort at 75%,33554432,1048576,4,75,27,27,0,0,true,[],SUCCESS,sha256-match,0.433,
+T3,2,Client abort at 75%,33554432,1048576,4,75,27,27,0,0,true,[],SUCCESS,sha256-match,0.213,
+T3,3,Client abort at 75%,33554432,1048576,4,75,27,27,0,0,true,[],SUCCESS,sha256-match,0.137,
+T3,4,Client abort at 75%,33554432,1048576,4,75,27,27,0,0,true,[],SUCCESS,sha256-match,0.207,
+T3,5,Client abort at 75%,33554432,1048576,4,75,27,27,0,0,true,[],SUCCESS,sha256-match,0.181,
+T3,6,Client abort at 75%,33554432,1048576,4,75,27,27,0,0,true,[],SUCCESS,sha256-match,0.127,
+T3,7,Client abort at 75%,33554432,1048576,4,75,27,27,0,0,true,[],SUCCESS,sha256-match,0.137,
+T3,8,Client abort at 75%,33554432,1048576,4,75,27,27,0,0,true,[],SUCCESS,sha256-match,0.398,
+T3,9,Client abort at 75%,33554432,1048576,4,75,27,27,0,0,true,[],SUCCESS,sha256-match,0.139,
+T3,10,Client abort at 75%,33554432,1048576,4,75,27,27,0,0,true,[],SUCCESS,sha256-match,0.222,
+T4,1,Server process killed at 25%,33554432,1048576,4,25,8,8,0,0,true,[],SUCCESS,sha256-match,0.251,
+T4,2,Server process killed at 25%,33554432,1048576,4,25,8,8,0,0,true,[],SUCCESS,sha256-match,0.235,
+T4,3,Server process killed at 25%,33554432,1048576,4,25,8,8,0,0,true,[],SUCCESS,sha256-match,0.219,
+T4,4,Server process killed at 25%,33554432,1048576,4,25,8,8,0,0,true,[],SUCCESS,sha256-match,0.262,
+T4,5,Server process killed at 25%,33554432,1048576,4,25,8,8,0,0,true,[],SUCCESS,sha256-match,0.286,
+T4,6,Server process killed at 25%,33554432,1048576,4,25,8,8,0,0,true,[],SUCCESS,sha256-match,0.232,
+T4,7,Server process killed at 25%,33554432,1048576,4,25,8,8,0,0,true,[],SUCCESS,sha256-match,0.226,
+T4,8,Server process killed at 25%,33554432,1048576,4,25,8,8,0,0,true,[],SUCCESS,sha256-match,0.285,
+T4,9,Server process killed at 25%,33554432,1048576,4,25,8,9,0,0,true,[],SUCCESS,sha256-match,0.248,
+T4,10,Server process killed at 25%,33554432,1048576,4,25,9,9,0,0,true,[],SUCCESS,sha256-match,0.357,
+T5,1,Server process killed at 50%,33554432,1048576,4,50,17,18,0,0,true,[],SUCCESS,sha256-match,0.282,
+T5,2,Server process killed at 50%,33554432,1048576,4,50,17,17,0,0,true,[],SUCCESS,sha256-match,0.212,
+T5,3,Server process killed at 50%,33554432,1048576,4,50,18,18,0,0,true,[],SUCCESS,sha256-match,0.280,
+T5,4,Server process killed at 50%,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.203,
+T5,5,Server process killed at 50%,33554432,1048576,4,50,18,19,0,0,true,[],SUCCESS,sha256-match,0.276,
+T5,6,Server process killed at 50%,33554432,1048576,4,50,17,17,0,0,true,[],SUCCESS,sha256-match,0.237,
+T5,7,Server process killed at 50%,33554432,1048576,4,50,17,17,0,0,true,[],SUCCESS,sha256-match,0.397,
+T5,8,Server process killed at 50%,33554432,1048576,4,50,17,17,0,0,true,[],SUCCESS,sha256-match,0.222,
+T5,9,Server process killed at 50%,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.249,
+T5,10,Server process killed at 50%,33554432,1048576,4,50,16,17,0,0,true,[],SUCCESS,sha256-match,0.209,
+T6,1,Server process killed at 75%,33554432,1048576,4,75,25,26,0,0,true,[],SUCCESS,sha256-match,0.230,
+T6,2,Server process killed at 75%,33554432,1048576,4,75,25,25,0,0,true,[],SUCCESS,sha256-match,0.241,
+T6,3,Server process killed at 75%,33554432,1048576,4,75,24,24,0,0,true,[],SUCCESS,sha256-match,0.229,
+T6,4,Server process killed at 75%,33554432,1048576,4,75,24,25,0,0,true,[],SUCCESS,sha256-match,0.219,
+T6,5,Server process killed at 75%,33554432,1048576,4,75,25,25,0,0,true,[],SUCCESS,sha256-match,0.215,
+T6,6,Server process killed at 75%,33554432,1048576,4,75,24,24,0,0,true,[],SUCCESS,sha256-match,0.233,
+T6,7,Server process killed at 75%,33554432,1048576,4,75,24,24,0,0,true,[],SUCCESS,sha256-match,0.250,
+T6,8,Server process killed at 75%,33554432,1048576,4,75,25,25,0,0,true,[],SUCCESS,sha256-match,0.220,
+T6,9,Server process killed at 75%,33554432,1048576,4,75,24,25,0,0,true,[],SUCCESS,sha256-match,0.212,
+T6,10,Server process killed at 75%,33554432,1048576,4,75,24,24,0,0,true,[],SUCCESS,sha256-match,0.373,
+T7,1,Server killed during concurrent metadata updates,33554432,131072,8,50,129,133,0,0,true,[],SUCCESS,sha256-match,0.846,
+T7,2,Server killed during concurrent metadata updates,33554432,131072,8,50,129,132,0,0,true,[],SUCCESS,sha256-match,0.641,
+T7,3,Server killed during concurrent metadata updates,33554432,131072,8,50,128,128,0,0,true,[],SUCCESS,sha256-match,0.613,
+T7,4,Server killed during concurrent metadata updates,33554432,131072,8,50,129,130,0,0,true,[],SUCCESS,sha256-match,0.614,
+T7,5,Server killed during concurrent metadata updates,33554432,131072,8,50,128,135,0,0,true,[],SUCCESS,sha256-match,0.725,
+T7,6,Server killed during concurrent metadata updates,33554432,131072,8,50,128,128,0,0,true,[],SUCCESS,sha256-match,0.616,
+T7,7,Server killed during concurrent metadata updates,33554432,131072,8,50,130,130,0,0,true,[],SUCCESS,sha256-match,0.833,
+T7,8,Server killed during concurrent metadata updates,33554432,131072,8,50,128,133,0,0,true,[],SUCCESS,sha256-match,0.812,
+T7,9,Server killed during concurrent metadata updates,33554432,131072,8,50,128,131,0,0,true,[],SUCCESS,sha256-match,0.570,
+T7,10,Server killed during concurrent metadata updates,33554432,131072,8,50,131,131,0,0,true,[],SUCCESS,sha256-match,0.577,
+T8,1,Server restarted with partially written metadata,33554432,1048576,4,50,17,18,0,0,true,[],SUCCESS,sha256-match,0.247,
+T8,2,Server restarted with partially written metadata,33554432,1048576,4,50,17,18,0,0,true,[],SUCCESS,sha256-match,0.243,
+T8,3,Server restarted with partially written metadata,33554432,1048576,4,50,17,17,0,0,true,[],SUCCESS,sha256-match,0.237,
+T8,4,Server restarted with partially written metadata,33554432,1048576,4,50,17,17,0,0,true,[],SUCCESS,sha256-match,0.364,
+T8,5,Server restarted with partially written metadata,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.229,
+T8,6,Server restarted with partially written metadata,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.340,
+T8,7,Server restarted with partially written metadata,33554432,1048576,4,50,17,17,0,0,true,[],SUCCESS,sha256-match,0.261,
+T8,8,Server restarted with partially written metadata,33554432,1048576,4,50,17,19,0,0,true,[],SUCCESS,sha256-match,0.220,
+T8,9,Server restarted with partially written metadata,33554432,1048576,4,50,17,17,0,0,true,[],SUCCESS,sha256-match,0.231,
+T8,10,Server restarted with partially written metadata,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.267,
+T9,1,Server restarted with corrupted metadata,33554432,1048576,4,50,0,0,0,0,true,[],SUCCESS,n/a,0.000,corrupt metadata safely detected and swept without crash
+T9,2,Server restarted with corrupted metadata,33554432,1048576,4,50,0,0,0,0,true,[],SUCCESS,n/a,0.000,corrupt metadata safely detected and swept without crash
+T9,3,Server restarted with corrupted metadata,33554432,1048576,4,50,0,0,0,0,true,[],SUCCESS,n/a,0.000,corrupt metadata safely detected and swept without crash
+T9,4,Server restarted with corrupted metadata,33554432,1048576,4,50,0,0,0,0,true,[],SUCCESS,n/a,0.000,corrupt metadata safely detected and swept without crash
+T9,5,Server restarted with corrupted metadata,33554432,1048576,4,50,0,0,0,0,true,[],SUCCESS,n/a,0.000,corrupt metadata safely detected and swept without crash
+T9,6,Server restarted with corrupted metadata,33554432,1048576,4,50,0,0,0,0,true,[],SUCCESS,n/a,0.000,corrupt metadata safely detected and swept without crash
+T9,7,Server restarted with corrupted metadata,33554432,1048576,4,50,0,0,0,0,true,[],SUCCESS,n/a,0.000,corrupt metadata safely detected and swept without crash
+T9,8,Server restarted with corrupted metadata,33554432,1048576,4,50,0,0,0,0,true,[],SUCCESS,n/a,0.000,corrupt metadata safely detected and swept without crash
+T9,9,Server restarted with corrupted metadata,33554432,1048576,4,50,0,0,0,0,true,[],SUCCESS,n/a,0.000,corrupt metadata safely detected and swept without crash
+T9,10,Server restarted with corrupted metadata,33554432,1048576,4,50,0,0,0,0,true,[],SUCCESS,n/a,0.000,corrupt metadata safely detected and swept without crash
+T10,1,Duplicate chunks received during recovery,33554432,1048576,4,50,19,19,0,4,true,[],SUCCESS,sha256-match,0.161,
+T10,2,Duplicate chunks received during recovery,33554432,1048576,4,50,19,19,0,4,true,[],SUCCESS,sha256-match,0.137,
+T10,3,Duplicate chunks received during recovery,33554432,1048576,4,50,19,19,0,4,true,[],SUCCESS,sha256-match,0.216,
+T10,4,Duplicate chunks received during recovery,33554432,1048576,4,50,19,19,0,4,true,[],SUCCESS,sha256-match,0.162,
+T10,5,Duplicate chunks received during recovery,33554432,1048576,4,50,19,19,0,4,true,[],SUCCESS,sha256-match,0.332,
+T10,6,Duplicate chunks received during recovery,33554432,1048576,4,50,19,19,0,4,true,[],SUCCESS,sha256-match,0.146,
+T10,7,Duplicate chunks received during recovery,33554432,1048576,4,50,19,19,0,4,true,[],SUCCESS,sha256-match,0.162,
+T10,8,Duplicate chunks received during recovery,33554432,1048576,4,50,19,19,0,4,true,[],SUCCESS,sha256-match,0.193,
+T10,9,Duplicate chunks received during recovery,33554432,1048576,4,50,19,19,0,4,true,[],SUCCESS,sha256-match,0.200,
+T10,10,Duplicate chunks received during recovery,33554432,1048576,4,50,19,19,0,4,true,[],SUCCESS,sha256-match,0.211,
+E1,1,Corrupted non-empty primary manifest with valid .tmp manifest,33554432,1048576,4,50,19,19,0,0,true,[],SUCCESS,sha256-match,0.242,
+E1,2,Corrupted non-empty primary manifest with valid .tmp manifest,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.236,
+E1,3,Corrupted non-empty primary manifest with valid .tmp manifest,33554432,1048576,4,50,17,17,0,0,true,[],SUCCESS,sha256-match,0.453,
+E1,4,Corrupted non-empty primary manifest with valid .tmp manifest,33554432,1048576,4,50,16,17,0,0,true,[],SUCCESS,sha256-match,0.338,
+E1,5,Corrupted non-empty primary manifest with valid .tmp manifest,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.259,
+E1,6,Corrupted non-empty primary manifest with valid .tmp manifest,33554432,1048576,4,50,17,17,0,0,true,[],SUCCESS,sha256-match,0.262,
+E1,7,Corrupted non-empty primary manifest with valid .tmp manifest,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.307,
+E1,8,Corrupted non-empty primary manifest with valid .tmp manifest,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.214,
+E1,9,Corrupted non-empty primary manifest with valid .tmp manifest,33554432,1048576,4,50,17,18,0,0,true,[],SUCCESS,sha256-match,0.211,
+E1,10,Corrupted non-empty primary manifest with valid .tmp manifest,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.230,
+E2,1,Multiple temporary manifests with different generation numbers,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.501,
+E2,2,Multiple temporary manifests with different generation numbers,33554432,1048576,4,50,17,17,0,0,true,[],SUCCESS,sha256-match,0.321,
+E2,3,Multiple temporary manifests with different generation numbers,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.238,
+E2,4,Multiple temporary manifests with different generation numbers,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.278,
+E2,5,Multiple temporary manifests with different generation numbers,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.255,
+E2,6,Multiple temporary manifests with different generation numbers,33554432,1048576,4,50,16,18,0,0,true,[],SUCCESS,sha256-match,0.234,
+E2,7,Multiple temporary manifests with different generation numbers,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.275,
+E2,8,Multiple temporary manifests with different generation numbers,33554432,1048576,4,50,16,17,0,0,true,[],SUCCESS,sha256-match,0.251,
+E2,9,Multiple temporary manifests with different generation numbers,33554432,1048576,4,50,18,18,0,0,true,[],SUCCESS,sha256-match,0.287,
+E2,10,Multiple temporary manifests with different generation numbers,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.244,
+E3,1,Multiple temporary manifests with strict superset chunk IDs,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.253,
+E3,2,Multiple temporary manifests with strict superset chunk IDs,33554432,1048576,4,50,17,17,0,0,true,[],SUCCESS,sha256-match,0.257,
+E3,3,Multiple temporary manifests with strict superset chunk IDs,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.297,
+E3,4,Multiple temporary manifests with strict superset chunk IDs,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.253,
+E3,5,Multiple temporary manifests with strict superset chunk IDs,33554432,1048576,4,50,17,17,0,0,true,[],SUCCESS,sha256-match,0.287,
+E3,6,Multiple temporary manifests with strict superset chunk IDs,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.451,
+E3,7,Multiple temporary manifests with strict superset chunk IDs,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.247,
+E3,8,Multiple temporary manifests with strict superset chunk IDs,33554432,1048576,4,50,16,18,0,0,true,[],SUCCESS,sha256-match,0.235,
+E3,9,Multiple temporary manifests with strict superset chunk IDs,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.219,
+E3,10,Multiple temporary manifests with strict superset chunk IDs,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.277,
+E4,1,Older manifest presented alongside newer committed generation,33554432,1048576,4,50,17,17,0,0,true,[],SUCCESS,sha256-match,0.205,
+E4,2,Older manifest presented alongside newer committed generation,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.221,
+E4,3,Older manifest presented alongside newer committed generation,33554432,1048576,4,50,17,17,0,0,true,[],SUCCESS,sha256-match,0.263,
+E4,4,Older manifest presented alongside newer committed generation,33554432,1048576,4,50,16,17,0,0,true,[],SUCCESS,sha256-match,0.202,
+E4,5,Older manifest presented alongside newer committed generation,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.216,
+E4,6,Older manifest presented alongside newer committed generation,33554432,1048576,4,50,17,17,0,0,true,[],SUCCESS,sha256-match,0.208,
+E4,7,Older manifest presented alongside newer committed generation,33554432,1048576,4,50,16,17,0,0,true,[],SUCCESS,sha256-match,0.222,
+E4,8,Older manifest presented alongside newer committed generation,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.205,
+E4,9,Older manifest presented alongside newer committed generation,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.229,
+E4,10,Older manifest presented alongside newer committed generation,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.207,
+E5,1,Invalid transfer ID in temporary manifest,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.202,
+E5,2,Invalid transfer ID in temporary manifest,33554432,1048576,4,50,17,18,0,0,true,[],SUCCESS,sha256-match,0.253,
+E5,3,Invalid transfer ID in temporary manifest,33554432,1048576,4,50,17,17,0,0,true,[],SUCCESS,sha256-match,0.205,
+E5,4,Invalid transfer ID in temporary manifest,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.223,
+E5,5,Invalid transfer ID in temporary manifest,33554432,1048576,4,50,17,17,0,0,true,[],SUCCESS,sha256-match,0.222,
+E5,6,Invalid transfer ID in temporary manifest,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.217,
+E5,7,Invalid transfer ID in temporary manifest,33554432,1048576,4,50,16,17,0,0,true,[],SUCCESS,sha256-match,0.202,
+E5,8,Invalid transfer ID in temporary manifest,33554432,1048576,4,50,16,17,0,0,true,[],SUCCESS,sha256-match,0.190,
+E5,9,Invalid transfer ID in temporary manifest,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.217,
+E5,10,Invalid transfer ID in temporary manifest,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.242,
+E6,1,Truncated temporary manifest,33554432,1048576,4,50,17,17,0,0,true,[],SUCCESS,sha256-match,0.207,
+E6,2,Truncated temporary manifest,33554432,1048576,4,50,16,17,0,0,true,[],SUCCESS,sha256-match,0.221,
+E6,3,Truncated temporary manifest,33554432,1048576,4,50,16,17,0,0,true,[],SUCCESS,sha256-match,0.207,
+E6,4,Truncated temporary manifest,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.231,
+E6,5,Truncated temporary manifest,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.202,
+E6,6,Truncated temporary manifest,33554432,1048576,4,50,17,17,0,0,true,[],SUCCESS,sha256-match,0.212,
+E6,7,Truncated temporary manifest,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.215,
+E6,8,Truncated temporary manifest,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.218,
+E6,9,Truncated temporary manifest,33554432,1048576,4,50,17,17,0,0,true,[],SUCCESS,sha256-match,0.230,
+E6,10,Truncated temporary manifest,33554432,1048576,4,50,16,16,0,0,true,[],SUCCESS,sha256-match,0.222,
+E7,1,Crash during finalization before move (part still in tempDir),33554432,1048576,4,100,32,32,0,0,true,[],SUCCESS,sha256-match,0.261,recovered from mid-finalization crash before move: .part successfully moved to final destination
+E7,2,Crash during finalization before move (part still in tempDir),33554432,1048576,4,100,32,32,0,0,true,[],SUCCESS,sha256-match,0.243,recovered from mid-finalization crash before move: .part successfully moved to final destination
+E7,3,Crash during finalization before move (part still in tempDir),33554432,1048576,4,100,32,32,0,0,true,[],SUCCESS,sha256-match,0.288,recovered from mid-finalization crash before move: .part successfully moved to final destination
+E7,4,Crash during finalization before move (part still in tempDir),33554432,1048576,4,100,32,32,0,0,true,[],SUCCESS,sha256-match,0.279,recovered from mid-finalization crash before move: .part successfully moved to final destination
+E7,5,Crash during finalization before move (part still in tempDir),33554432,1048576,4,100,32,32,0,0,true,[],SUCCESS,sha256-match,0.281,recovered from mid-finalization crash before move: .part successfully moved to final destination
+E7,6,Crash during finalization before move (part still in tempDir),33554432,1048576,4,100,32,32,0,0,true,[],SUCCESS,sha256-match,0.285,recovered from mid-finalization crash before move: .part successfully moved to final destination
+E7,7,Crash during finalization before move (part still in tempDir),33554432,1048576,4,100,32,32,0,0,true,[],SUCCESS,sha256-match,0.279,recovered from mid-finalization crash before move: .part successfully moved to final destination
+E7,8,Crash during finalization before move (part still in tempDir),33554432,1048576,4,100,32,32,0,0,true,[],SUCCESS,sha256-match,0.291,recovered from mid-finalization crash before move: .part successfully moved to final destination
+E7,9,Crash during finalization before move (part still in tempDir),33554432,1048576,4,100,32,32,0,0,true,[],SUCCESS,sha256-match,0.251,recovered from mid-finalization crash before move: .part successfully moved to final destination
+E7,10,Crash during finalization before move (part still in tempDir),33554432,1048576,4,100,32,32,0,0,true,[],SUCCESS,sha256-match,0.302,recovered from mid-finalization crash before move: .part successfully moved to final destination
+E8,1,Crash after move before metadata cleanup (final file in destination),33554432,1048576,4,100,32,32,0,0,true,[],SUCCESS,sha256-match,0.369,"recovered from mid-finalization crash after move: lingering metadata swept, destination intact"
+E8,2,Crash after move before metadata cleanup (final file in destination),33554432,1048576,4,100,32,32,0,0,true,[],SUCCESS,sha256-match,0.304,"recovered from mid-finalization crash after move: lingering metadata swept, destination intact"
+E8,3,Crash after move before metadata cleanup (final file in destination),33554432,1048576,4,100,32,32,0,0,true,[],SUCCESS,sha256-match,0.446,"recovered from mid-finalization crash after move: lingering metadata swept, destination intact"
+E8,4,Crash after move before metadata cleanup (final file in destination),33554432,1048576,4,100,32,32,0,0,true,[],SUCCESS,sha256-match,0.578,"recovered from mid-finalization crash after move: lingering metadata swept, destination intact"
+E8,5,Crash after move before metadata cleanup (final file in destination),33554432,1048576,4,100,32,32,0,0,true,[],SUCCESS,sha256-match,0.416,"recovered from mid-finalization crash after move: lingering metadata swept, destination intact"
+E8,6,Crash after move before metadata cleanup (final file in destination),33554432,1048576,4,100,32,32,0,0,true,[],SUCCESS,sha256-match,0.457,"recovered from mid-finalization crash after move: lingering metadata swept, destination intact"
+E8,7,Crash after move before metadata cleanup (final file in destination),33554432,1048576,4,100,32,32,0,0,true,[],SUCCESS,sha256-match,0.463,"recovered from mid-finalization crash after move: lingering metadata swept, destination intact"
+E8,8,Crash after move before metadata cleanup (final file in destination),33554432,1048576,4,100,32,32,0,0,true,[],SUCCESS,sha256-match,0.528,"recovered from mid-finalization crash after move: lingering metadata swept, destination intact"
+E8,9,Crash after move before metadata cleanup (final file in destination),33554432,1048576,4,100,32,32,0,0,true,[],SUCCESS,sha256-match,0.354,"recovered from mid-finalization crash after move: lingering metadata swept, destination intact"
+E8,10,Crash after move before metadata cleanup (final file in destination),33554432,1048576,4,100,32,32,0,0,true,[],SUCCESS,sha256-match,0.362,"recovered from mid-finalization crash after move: lingering metadata swept, destination intact"
+E9,1,Client retry after final response lost,33554432,1048576,4,0,32,32,0,0,true,[],SUCCESS,sha256-match,0.427,idempotent retry succeeded with HTTP 200 and identical filename
+E9,2,Client retry after final response lost,33554432,1048576,4,0,32,32,0,0,true,[],SUCCESS,sha256-match,0.274,idempotent retry succeeded with HTTP 200 and identical filename
+E9,3,Client retry after final response lost,33554432,1048576,4,0,32,32,0,0,true,[],SUCCESS,sha256-match,0.208,idempotent retry succeeded with HTTP 200 and identical filename
+E9,4,Client retry after final response lost,33554432,1048576,4,0,32,32,0,0,true,[],SUCCESS,sha256-match,0.227,idempotent retry succeeded with HTTP 200 and identical filename
+E9,5,Client retry after final response lost,33554432,1048576,4,0,32,32,0,0,true,[],SUCCESS,sha256-match,0.318,idempotent retry succeeded with HTTP 200 and identical filename
+E9,6,Client retry after final response lost,33554432,1048576,4,0,32,32,0,0,true,[],SUCCESS,sha256-match,0.353,idempotent retry succeeded with HTTP 200 and identical filename
+E9,7,Client retry after final response lost,33554432,1048576,4,0,32,32,0,0,true,[],SUCCESS,sha256-match,0.221,idempotent retry succeeded with HTTP 200 and identical filename
+E9,8,Client retry after final response lost,33554432,1048576,4,0,32,32,0,0,true,[],SUCCESS,sha256-match,0.224,idempotent retry succeeded with HTTP 200 and identical filename
+E9,9,Client retry after final response lost,33554432,1048576,4,0,32,32,0,0,true,[],SUCCESS,sha256-match,0.199,idempotent retry succeeded with HTTP 200 and identical filename
+E9,10,Client retry after final response lost,33554432,1048576,4,0,32,32,0,0,true,[],SUCCESS,sha256-match,0.222,idempotent retry succeeded with HTTP 200 and identical filename
+E10,1,Destination file name conflict resolution,33554432,1048576,4,0,32,32,0,0,true,[],SUCCESS,sha256-match,0.410,clean conflict resolution: preserved original and saved as conflict_test_r1 (1).bin
+E10,2,Destination file name conflict resolution,33554432,1048576,4,0,32,32,0,0,true,[],SUCCESS,sha256-match,0.293,clean conflict resolution: preserved original and saved as conflict_test_r2 (1).bin
+E10,3,Destination file name conflict resolution,33554432,1048576,4,0,32,32,0,0,true,[],SUCCESS,sha256-match,0.224,clean conflict resolution: preserved original and saved as conflict_test_r3 (1).bin
+E10,4,Destination file name conflict resolution,33554432,1048576,4,0,32,32,0,0,true,[],SUCCESS,sha256-match,0.198,clean conflict resolution: preserved original and saved as conflict_test_r4 (1).bin
+E10,5,Destination file name conflict resolution,33554432,1048576,4,0,32,32,0,0,true,[],SUCCESS,sha256-match,0.190,clean conflict resolution: preserved original and saved as conflict_test_r5 (1).bin
+E10,6,Destination file name conflict resolution,33554432,1048576,4,0,32,32,0,0,true,[],SUCCESS,sha256-match,0.209,clean conflict resolution: preserved original and saved as conflict_test_r6 (1).bin
+E10,7,Destination file name conflict resolution,33554432,1048576,4,0,32,32,0,0,true,[],SUCCESS,sha256-match,0.410,clean conflict resolution: preserved original and saved as conflict_test_r7 (1).bin
+E10,8,Destination file name conflict resolution,33554432,1048576,4,0,32,32,0,0,true,[],SUCCESS,sha256-match,0.284,clean conflict resolution: preserved original and saved as conflict_test_r8 (1).bin
+E10,9,Destination file name conflict resolution,33554432,1048576,4,0,32,32,0,0,true,[],SUCCESS,sha256-match,0.252,clean conflict resolution: preserved original and saved as conflict_test_r9 (1).bin
+E10,10,Destination file name conflict resolution,33554432,1048576,4,0,32,32,0,0,true,[],SUCCESS,sha256-match,0.214,clean conflict resolution: preserved original and saved as conflict_test_r10 (1).bin
+R100_NORM,1,Realistic 100 MiB Normal Completion,104857600,1048576,4,0,100,100,0,0,true,[],SUCCESS,sha256-match,0.401,
+R100_ABORT,1,Realistic 100 MiB Abort at 50%,104857600,1048576,4,50,53,53,0,0,true,[],SUCCESS,sha256-match,0.527,
+R100_KILL,1,Realistic 100 MiB Server Kill at 50%,104857600,1048576,4,50,51,51,0,0,true,[],SUCCESS,sha256-match,0.598,
+R1G_NORM,1,Realistic 1 GiB Normal Completion,1073741824,1048576,4,0,1024,1024,0,0,true,[],SUCCESS,sha256-match,5.760,
+R1G_ABORT,1,Realistic 1 GiB Abort at 50%,1073741824,1048576,4,50,515,515,0,0,true,[],SUCCESS,sha256-match,8.084,
+R1G_KILL,1,Realistic 1 GiB Server Kill at 50%,1073741824,1048576,4,50,513,514,0,0,true,[],SUCCESS,sha256-match,9.843,

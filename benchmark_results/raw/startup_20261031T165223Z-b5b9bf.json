@@ -1,0 +1,190 @@
+{
+  "run_id": "20261031T165223Z-b5b9bf",
+  "timestamp_utc": "2026-10-31T16:52:24Z",
+  "scenario": "startup",
+  "label": "Measured: process launch -\u003e HTTP endpoints answer (server readiness). Not UI render time.",
+  "params": {
+    "n": 10,
+    "start_kind": "new process, OS file cache warm"
+  },
+  "environment": {
+    "host": "LAPTOP-VVMI67PG",
+    "os": "Microsoft Windows 11 Home Single Language 10.0.26300",
+    "cpu": "11th Gen Intel(R) Core(TM) i5-1155G7 @ 2.50GHz",
+    "logical_cpus": 8,
+    "ram_bytes": "16952647680",
+    "model": "LENOVO 82H8",
+    "disk": "NVMe INTEL SSDPEKNW512GZL / SSD",
+    "go_version": "go1.27.0",
+    "sut_path": "E:\\personal\\p2p\\p2p.exe",
+    "sut_sha256": "4b5f7bc1076610a30d4894da4a3e320cfa332755782bd5336550773bd51040bb",
+    "sut_mtime": "2026-10-31T21:27:17+05:30",
+    "git_commit": "fdc6376598376e62a6e32274320a84375f3cc83c",
+    "git_dirty_files": "M docs/performance_benchmark.md; ?? apps/cli/bench/; ?? apps/cli/benchmark_suite_test.go; ?? benchmark_results/",
+    "network": {
+      "Authentication": "WPA2-Enterprise",
+      "Band": "5 GHz",
+      "Channel": "116",
+      "Radio type": "802.11ax",
+      "Receive rate (Mbps)": "544",
+      "SSID": "SRMIST",
+      "Signal": "80%",
+      "Transmit rate (Mbps)": "721"
+    }
+  },
+  "trials": [
+    {
+      "index": 1,
+      "group": "startup",
+      "warmup": true,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0.1295618,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "discover_ready_ms": 129.561,
+        "web_ui_200_ms": 130.087
+      }
+    },
+    {
+      "index": 2,
+      "group": "startup",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0.2136798,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "discover_ready_ms": 213.679,
+        "web_ui_200_ms": 214.238
+      }
+    },
+    {
+      "index": 3,
+      "group": "startup",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0.2022234,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "discover_ready_ms": 202.223,
+        "web_ui_200_ms": 203.232
+      }
+    },
+    {
+      "index": 4,
+      "group": "startup",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0.1482929,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "discover_ready_ms": 148.292,
+        "web_ui_200_ms": 148.799
+      }
+    },
+    {
+      "index": 5,
+      "group": "startup",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0.1607073,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "discover_ready_ms": 160.707,
+        "web_ui_200_ms": 161.77
+      }
+    },
+    {
+      "index": 6,
+      "group": "startup",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0.2129379,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "discover_ready_ms": 212.937,
+        "web_ui_200_ms": 214.057
+      }
+    },
+    {
+      "index": 7,
+      "group": "startup",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0.202748,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "discover_ready_ms": 202.748,
+        "web_ui_200_ms": 203.301
+      }
+    },
+    {
+      "index": 8,
+      "group": "startup",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0.1984135,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "discover_ready_ms": 198.413,
+        "web_ui_200_ms": 198.927
+      }
+    },
+    {
+      "index": 9,
+      "group": "startup",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0.1706686,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "discover_ready_ms": 170.668,
+        "web_ui_200_ms": 171.187
+      }
+    },
+    {
+      "index": 10,
+      "group": "startup",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0.1985548,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "discover_ready_ms": 198.554,
+        "web_ui_200_ms": 199.089
+      }
+    }
+  ],
+  "notes": [
+    "Trial 1 is marked warmup (first execution after build may include AV scan / disk cache effects) and is excluded from statistics."
+  ]
+}

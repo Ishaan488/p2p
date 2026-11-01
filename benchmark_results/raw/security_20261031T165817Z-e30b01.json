@@ -1,0 +1,592 @@
+{
+  "run_id": "20261031T165817Z-e30b01",
+  "timestamp_utc": "2026-10-31T16:58:17Z",
+  "scenario": "security",
+  "label": "Measured: black-box security checks against the real p2p.exe. Absence of a failure is NOT proof of security.",
+  "params": {},
+  "environment": {
+    "host": "LAPTOP-VVMI67PG",
+    "os": "Microsoft Windows 11 Home Single Language 10.0.26300",
+    "cpu": "11th Gen Intel(R) Core(TM) i5-1155G7 @ 2.50GHz",
+    "logical_cpus": 8,
+    "ram_bytes": "16952647680",
+    "model": "LENOVO 82H8",
+    "disk": "NVMe INTEL SSDPEKNW512GZL / SSD",
+    "go_version": "go1.27.0",
+    "sut_path": "E:\\personal\\p2p\\p2p.exe",
+    "sut_sha256": "4b5f7bc1076610a30d4894da4a3e320cfa332755782bd5336550773bd51040bb",
+    "sut_mtime": "2026-10-31T21:27:17+05:30",
+    "git_commit": "fdc6376598376e62a6e32274320a84375f3cc83c",
+    "git_dirty_files": "M docs/performance_benchmark.md; ?? apps/cli/bench/; ?? apps/cli/benchmark_suite_test.go; ?? benchmark_results/",
+    "network": {
+      "Authentication": "WPA2-Enterprise",
+      "Band": "5 GHz",
+      "Channel": "116",
+      "Radio type": "802.11ax",
+      "Receive rate (Mbps)": "544",
+      "SSID": "SRMIST",
+      "Signal": "70%",
+      "Transmit rate (Mbps)": "613"
+    }
+  },
+  "trials": [
+    {
+      "index": 1,
+      "group": "unauthenticated requests rejected",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "401 on all 20 (10 endpoints x GET/POST)",
+        "observed": "violations: []"
+      }
+    },
+    {
+      "index": 2,
+      "group": "unknown session id",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "401",
+        "observed": "401"
+      }
+    },
+    {
+      "index": 3,
+      "group": "tampered request MAC",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "401",
+        "observed": "401"
+      }
+    },
+    {
+      "index": 4,
+      "group": "replayed identical request (same nonce)",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "first 200, replay 401",
+        "observed": "first 200, replay 401"
+      }
+    },
+    {
+      "index": 5,
+      "group": "bit-flipped sealed metadata",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "400",
+        "observed": "400"
+      }
+    },
+    {
+      "index": 6,
+      "group": "sealed for a different path (context binding)",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "400",
+        "observed": "400"
+      }
+    },
+    {
+      "index": 7,
+      "group": "bit-flipped chunk ciphertext",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "400",
+        "observed": "400"
+      }
+    },
+    {
+      "index": 8,
+      "group": "chunk sealed for another index",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "400",
+        "observed": "400"
+      }
+    },
+    {
+      "index": 9,
+      "group": "authentic chunk with wrong length",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "400",
+        "observed": "400"
+      }
+    },
+    {
+      "index": 10,
+      "group": "oversized chunk body (2 MiB for a 100 B chunk)",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "400",
+        "observed": "400"
+      }
+    },
+    {
+      "index": 11,
+      "group": "chunk index out of range",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "400",
+        "observed": "400"
+      }
+    },
+    {
+      "index": 12,
+      "group": "complete with missing chunks",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "409",
+        "observed": "409"
+      }
+    },
+    {
+      "index": 13,
+      "group": "chunk for unknown transfer id",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "404",
+        "observed": "404"
+      }
+    },
+    {
+      "index": 14,
+      "group": "invalid layout: chunkSize below minimum",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "400",
+        "observed": "400"
+      }
+    },
+    {
+      "index": 15,
+      "group": "invalid layout: chunkSize above maximum",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "400",
+        "observed": "400"
+      }
+    },
+    {
+      "index": 16,
+      "group": "invalid layout: totalSize above 5 TiB cap",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "400",
+        "observed": "400"
+      }
+    },
+    {
+      "index": 17,
+      "group": "invalid layout: negative totalSize",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "400",
+        "observed": "400"
+      }
+    },
+    {
+      "index": 18,
+      "group": "invalid layout: totalChunks inconsistent with size",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "400",
+        "observed": "400"
+      }
+    },
+    {
+      "index": 19,
+      "group": "invalid layout: empty transfer id",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "400",
+        "observed": "400"
+      }
+    },
+    {
+      "index": 20,
+      "group": "oversized (100 KiB) request body",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "400",
+        "observed": "400"
+      }
+    },
+    {
+      "index": 21,
+      "group": "malicious filenames stay inside received/",
+      "warmup": false,
+      "success": false,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "no file written outside received/",
+        "observed": "escapes=[unexpected file: .local_ipc_token]; mapped=[\"../../evil.txt\"-\u003e\"evil.txt\" \"..\\\\..\\\\evil.txt\"-\u003e\"evil (1).txt\" \"C:\\\\Windows\\\\Temp\\\\evil.txt\"-\u003e\"evil (2).txt\" \"/etc/passwd\"-\u003e\"passwd\" \"con\"-\u003e\"_con\" \"aux.txt\"-\u003e\"_aux.txt\" \"..\"-\u003e\"unnamed\" \".\"-\u003e\"unnamed (1)\" \"a/b/c.txt\"-\u003e\"c.txt\" \"evil.txt:ads\"-\u003e\"evil.txt_ads\" \"   \"-\u003e\"unnamed (2)\" \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"-\u003e\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\" \"nul\\x00byte.txt\"-\u003e\"nul_byte.txt\" \"\\\\\\\\server\\\\share\\\\evil.txt\"-\u003e\"evil (3).txt\"]"
+      }
+    },
+    {
+      "index": 22,
+      "group": "device B cannot write to device A's transfer",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "404",
+        "observed": "chunk 404, complete 404"
+      }
+    },
+    {
+      "index": 23,
+      "group": "device B cancel does not destroy A's transfer",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "A can still upload chunk (200)",
+        "observed": "200"
+      }
+    },
+    {
+      "index": 24,
+      "group": "/pair malformed JSON",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "400",
+        "observed": "400"
+      }
+    },
+    {
+      "index": 25,
+      "group": "/pair invalid device id",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "400",
+        "observed": "400"
+      }
+    },
+    {
+      "index": 26,
+      "group": "/hello short nonce",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "400",
+        "observed": "400"
+      }
+    },
+    {
+      "index": 27,
+      "group": "/hello unpaired device",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "401",
+        "observed": "401"
+      }
+    },
+    {
+      "index": 28,
+      "group": "/local/send without token",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "401 or 403",
+        "observed": "401"
+      }
+    },
+    {
+      "index": 29,
+      "group": "revoked device: unpair accepted",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "200",
+        "observed": "200"
+      }
+    },
+    {
+      "index": 30,
+      "group": "revoked device: old session rejected",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "401",
+        "observed": "401"
+      }
+    },
+    {
+      "index": 31,
+      "group": "revoked device: new /hello rejected",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "401",
+        "observed": "401"
+      }
+    },
+    {
+      "index": 32,
+      "group": "pairing brute-force lockout",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "HTTP 429 within \u003c= 10 bad attempts",
+        "observed": "429 at attempt 4 (0 = never)"
+      }
+    },
+    {
+      "index": 33,
+      "group": "device/session keys absent from process output",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "none found",
+        "observed": "leaks=[] (stdout/stderr 6296 bytes inspected)"
+      }
+    },
+    {
+      "index": 34,
+      "group": "device keys encrypted at rest (DPAPI / OS keystore)",
+      "warmup": false,
+      "success": false,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "keys not recoverable from state.json",
+        "observed": "plaintext (base64) key present in state.json=true; ACL: LAPTOP-VVMI67PG\\CodexSandboxUsers Allow  Modify, Synchronize | S-1-5-21-207199961-238400209-1038731989-2335931195 Allow  Modify, Synchronize | BUILTIN\\Administrators Allow  FullControl | NT AUTHORITY\\SYSTEM Allow  FullControl | NT AUTHORITY\\Authenticated Users Allow  Modify, Synchronize | BUILTIN\\Users Allow  ReadAndExecute, Synchronize"
+      }
+    },
+    {
+      "index": 35,
+      "group": "TLS server start",
+      "warmup": false,
+      "success": false,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "starts",
+        "observed": "server did not become ready within 20s"
+      }
+    },
+    {
+      "index": 36,
+      "group": "default transport",
+      "warmup": false,
+      "success": true,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "documented",
+        "observed": "plain HTTP + application-layer AES-256-GCM (TLS only with -tls flag)"
+      }
+    },
+    {
+      "index": 37,
+      "group": "slow-header (slowloris) connection is closed by server",
+      "warmup": false,
+      "success": false,
+      "bytes": 0,
+      "files": 0,
+      "elapsed_seconds": 0,
+      "throughput_MiB_per_s": 0,
+      "integrity": "n/a",
+      "extra": {
+        "expected": "server closes within 30 s",
+        "observed": "connection with incomplete headers still open after 35s"
+      }
+    }
+  ],
+  "notes": [
+    "33 checks passed, 4 failed/findings. A passing result only means the specific probe was handled correctly."
+  ]
+}

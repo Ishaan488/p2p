@@ -1,0 +1,208 @@
+{
+  "run_id": "20261031T175521Z-a7f645",
+  "timestamp_utc": "2026-10-31T17:55:21Z",
+  "scenario": "single_upload_loopback",
+  "label": "Measured: protocol end-to-end, Go reference client -\u003e real p2p.exe over LOOPBACK TCP (server stack + AES-GCM + disk; NOT Wi-Fi throughput)",
+  "params": {
+    "chunk": "1MiB",
+    "dedup_preflight": false,
+    "sizes": "100MiB",
+    "trials": 3,
+    "warmup": 1,
+    "workers": 1
+  },
+  "environment": {
+    "host": "LAPTOP-VVMI67PG",
+    "os": "Microsoft Windows 11 Home Single Language 10.0.26300",
+    "cpu": "11th Gen Intel(R) Core(TM) i5-1155G7 @ 2.50GHz",
+    "logical_cpus": 8,
+    "ram_bytes": "16952647680",
+    "model": "LENOVO 82H8",
+    "disk": "NVMe INTEL SSDPEKNW512GZL / SSD",
+    "go_version": "go1.27.0",
+    "sut_path": "E:\\personal\\p2p\\p2p.exe",
+    "sut_sha256": "f0f07f777cb97daa72430677f31ca51e0a83e901e7fba5879ec3cad38c93e0d7",
+    "sut_mtime": "2026-10-31T23:21:12+05:30",
+    "git_commit": "fdc6376598376e62a6e32274320a84375f3cc83c",
+    "git_dirty_files": "M apps/cli/features.go;  M apps/cli/file_transfer.go;  M apps/cli/fr_nfr_test.go;  M docs/performance_benchmark.md; ?? P2P_Benchmark_Validation_Report.md; ?? apps/cli/bench/; ?? apps/cli/benchmark_suite_test.go; ?? benchmark_results/; ?? docs/BENCHMARK_CHANGELOG.md; ?? docs/BENCHMARK_METHODOLOGY.md; ?? docs/BENCHMARK_TEST_PLAN.md; ?? docs/P2P_Benchmark_Validation_Report.md; ?? docs/PERFORMANCE_ROADMAP.md; ?? docs/SECURITY_TEST_REPORT.md",
+    "network": {
+      "Authentication": "WPA2-Enterprise",
+      "Band": "5 GHz",
+      "Channel": "116",
+      "Radio type": "802.11ax",
+      "Receive rate (Mbps)": "324",
+      "SSID": "SRMIST",
+      "Signal": "70%",
+      "Transmit rate (Mbps)": "432"
+    }
+  },
+  "trials": [
+    {
+      "index": 1,
+      "group": "size=100MiB,chunk=1MiB,workers=1,dedup=false",
+      "warmup": true,
+      "success": true,
+      "bytes": 104857600,
+      "files": 1,
+      "elapsed_seconds": 1.610984,
+      "throughput_MiB_per_s": 62.073862930978834,
+      "integrity": "sha256-match",
+      "server_process": {
+        "samples": 10,
+        "working_set_avg_MiB": 20.317578125,
+        "working_set_median_MiB": 20.57421875,
+        "working_set_max_sampled_MiB": 22.54296875,
+        "private_bytes_avg_MiB": 54.6125,
+        "private_bytes_max_sampled_MiB": 56.765625,
+        "cpu_seconds": 1.265625,
+        "wall_seconds": 1.610984,
+        "cpu_pct_of_all_cores": 9.82027909650251,
+        "cpu_pct_of_one_core": 78.56223277202008
+      },
+      "extra": {
+        "hello_ms": 1.353,
+        "idle_before_WS_MiB": 15.5859375,
+        "idle_before_priv_MiB": 50.546875,
+        "upload": {
+          "total_chunks": 100,
+          "chunks_already_on_server": 0,
+          "chunks_sent_now": 100,
+          "plain_bytes_sent_now": 104857600,
+          "wire_bytes_sent_now": 104860400,
+          "final_name": "bench_100MiB_0.bin",
+          "init_ms": 8.013,
+          "chunks_ms": 1597.34,
+          "complete_ms": 5.63,
+          "total_ms": 1610.984
+        }
+      }
+    },
+    {
+      "index": 2,
+      "group": "size=100MiB,chunk=1MiB,workers=1,dedup=false",
+      "warmup": false,
+      "success": true,
+      "bytes": 104857600,
+      "files": 1,
+      "elapsed_seconds": 1.5528989999999998,
+      "throughput_MiB_per_s": 64.3956883222927,
+      "integrity": "sha256-match",
+      "server_process": {
+        "samples": 10,
+        "working_set_avg_MiB": 21.3828125,
+        "working_set_median_MiB": 20.80859375,
+        "working_set_max_sampled_MiB": 23.0546875,
+        "private_bytes_avg_MiB": 55.518359375,
+        "private_bytes_max_sampled_MiB": 57.1796875,
+        "cpu_seconds": 1.15625,
+        "wall_seconds": 1.5528994,
+        "cpu_pct_of_all_cores": 9.30718693046053,
+        "cpu_pct_of_one_core": 74.45749544368424
+      },
+      "extra": {
+        "hello_ms": 1.353,
+        "idle_before_WS_MiB": 15.5859375,
+        "idle_before_priv_MiB": 50.546875,
+        "upload": {
+          "total_chunks": 100,
+          "chunks_already_on_server": 0,
+          "chunks_sent_now": 100,
+          "plain_bytes_sent_now": 104857600,
+          "wire_bytes_sent_now": 104860400,
+          "final_name": "bench_100MiB_1.bin",
+          "init_ms": 4.448,
+          "chunks_ms": 1540.578,
+          "complete_ms": 7.175,
+          "total_ms": 1552.899
+        }
+      }
+    },
+    {
+      "index": 3,
+      "group": "size=100MiB,chunk=1MiB,workers=1,dedup=false",
+      "warmup": false,
+      "success": true,
+      "bytes": 104857600,
+      "files": 1,
+      "elapsed_seconds": 1.569337,
+      "throughput_MiB_per_s": 63.721176522314835,
+      "integrity": "sha256-match",
+      "server_process": {
+        "samples": 10,
+        "working_set_avg_MiB": 21.478125,
+        "working_set_median_MiB": 21.05078125,
+        "working_set_max_sampled_MiB": 22.921875,
+        "private_bytes_avg_MiB": 55.5796875,
+        "private_bytes_max_sampled_MiB": 56.96875,
+        "cpu_seconds": 1.578125,
+        "wall_seconds": 1.5693377,
+        "cpu_pct_of_all_cores": 12.569992105586964,
+        "cpu_pct_of_one_core": 100.55993684469571
+      },
+      "extra": {
+        "hello_ms": 1.353,
+        "idle_before_WS_MiB": 15.5859375,
+        "idle_before_priv_MiB": 50.546875,
+        "upload": {
+          "total_chunks": 100,
+          "chunks_already_on_server": 0,
+          "chunks_sent_now": 100,
+          "plain_bytes_sent_now": 104857600,
+          "wire_bytes_sent_now": 104860400,
+          "final_name": "bench_100MiB_2.bin",
+          "init_ms": 5.247,
+          "chunks_ms": 1553.819,
+          "complete_ms": 10.27,
+          "total_ms": 1569.337
+        }
+      }
+    },
+    {
+      "index": 4,
+      "group": "size=100MiB,chunk=1MiB,workers=1,dedup=false",
+      "warmup": false,
+      "success": true,
+      "bytes": 104857600,
+      "files": 1,
+      "elapsed_seconds": 1.48052,
+      "throughput_MiB_per_s": 67.54383594953124,
+      "integrity": "sha256-match",
+      "server_process": {
+        "samples": 9,
+        "working_set_avg_MiB": 21.317274305555557,
+        "working_set_median_MiB": 21.13671875,
+        "working_set_max_sampled_MiB": 22.21875,
+        "private_bytes_avg_MiB": 55.26605902777778,
+        "private_bytes_max_sampled_MiB": 56.171875,
+        "cpu_seconds": 1.28125,
+        "wall_seconds": 1.4805201000000001,
+        "cpu_pct_of_all_cores": 10.81756674563216,
+        "cpu_pct_of_one_core": 86.54053396505728
+      },
+      "extra": {
+        "hello_ms": 1.353,
+        "idle_before_WS_MiB": 15.5859375,
+        "idle_before_priv_MiB": 50.546875,
+        "upload": {
+          "total_chunks": 100,
+          "chunks_already_on_server": 0,
+          "chunks_sent_now": 100,
+          "plain_bytes_sent_now": 104857600,
+          "wire_bytes_sent_now": 104860400,
+          "final_name": "bench_100MiB_3.bin",
+          "init_ms": 5.469,
+          "chunks_ms": 1466.759,
+          "complete_ms": 8.291,
+          "total_ms": 1480.52
+        }
+      }
+    }
+  ],
+  "notes": [
+    "Timer: starts before /upload_init, stops when /upload_complete returns (file moved into received/). Received file is SHA-256 verified OUTSIDE the timer by the harness.",
+    "Files are written to the OS page cache; no fsync is issued by the server, so 'complete' != durable on disk.",
+    "Source file is read from disk by the client (page cache warm for sizes that fit in free RAM).",
+    "After completion the server hashes the received file in a background goroutine; the harness waits 2 s between trials.",
+    "size=100MiB: server idle before=15.6 MiB WS / 50.5 MiB private; post-transfer (2 s after last trial)=22.2 MiB WS / 56.1 MiB private; lifetime PeakWorkingSet=24.0 MiB"
+  ]
+}

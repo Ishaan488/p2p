@@ -1,0 +1,345 @@
+{
+  "run_id": "20261031T165606Z-d68871",
+  "timestamp_utc": "2026-10-31T16:56:06Z",
+  "scenario": "small_files_loopback",
+  "label": "Measured: protocol end-to-end, Go reference client -\u003e real p2p.exe over LOOPBACK TCP, many files",
+  "params": {
+    "dedup_preflight": true,
+    "file_concurrency": 4,
+    "file_size": "100KiB",
+    "files": 100,
+    "mixed": true,
+    "trials": 3,
+    "warmup": 1
+  },
+  "environment": {
+    "host": "LAPTOP-VVMI67PG",
+    "os": "Microsoft Windows 11 Home Single Language 10.0.26300",
+    "cpu": "11th Gen Intel(R) Core(TM) i5-1155G7 @ 2.50GHz",
+    "logical_cpus": 8,
+    "ram_bytes": "16952647680",
+    "model": "LENOVO 82H8",
+    "disk": "NVMe INTEL SSDPEKNW512GZL / SSD",
+    "go_version": "go1.27.0",
+    "sut_path": "E:\\personal\\p2p\\p2p.exe",
+    "sut_sha256": "4b5f7bc1076610a30d4894da4a3e320cfa332755782bd5336550773bd51040bb",
+    "sut_mtime": "2026-10-31T21:27:17+05:30",
+    "git_commit": "fdc6376598376e62a6e32274320a84375f3cc83c",
+    "git_dirty_files": "M docs/performance_benchmark.md; ?? apps/cli/bench/; ?? apps/cli/benchmark_suite_test.go; ?? benchmark_results/",
+    "network": {
+      "Authentication": "WPA2-Enterprise",
+      "Band": "5 GHz",
+      "Channel": "116",
+      "Radio type": "802.11ax",
+      "Receive rate (Mbps)": "544",
+      "SSID": "SRMIST",
+      "Signal": "75%",
+      "Transmit rate (Mbps)": "432"
+    }
+  },
+  "trials": [
+    {
+      "index": 1,
+      "group": "files=100,size=mixed,fconc=4,dedup=true",
+      "warmup": true,
+      "success": true,
+      "bytes": 111493120,
+      "files": 100,
+      "elapsed_seconds": 4.103299,
+      "throughput_MiB_per_s": 25.912838669568075,
+      "files_per_s": 24.370634457786284,
+      "integrity": "100/100 sha256-match, 0 mismatch, 0 failed",
+      "server_process": {
+        "samples": 22,
+        "working_set_avg_MiB": 25.56729403409091,
+        "working_set_median_MiB": 26.138671875,
+        "working_set_max_sampled_MiB": 30.59375,
+        "private_bytes_avg_MiB": 59.44620028409091,
+        "private_bytes_max_sampled_MiB": 65.4765625,
+        "cpu_seconds": 4.296875,
+        "wall_seconds": 4.103299,
+        "cpu_pct_of_all_cores": 13.089696241975055,
+        "cpu_pct_of_one_core": 104.71756993580044
+      },
+      "extra": {
+        "avg_file_bytes": 1114931,
+        "per_file_complete_ms": {
+          "n": 100,
+          "min": 2.693,
+          "max": 60.445,
+          "mean": 16.362670000000005,
+          "median": 14.008,
+          "stdev_sample": 11.801882816792967,
+          "cov_pct": 72.12687670650917,
+          "p95": 43.196249999999985,
+          "ci95_mean_lo": 14.049500967908584,
+          "ci95_mean_hi": 18.675839032091424
+        },
+        "per_file_dedup_preflight_ms": {
+          "n": 100,
+          "min": 2.717,
+          "max": 452.774,
+          "mean": 90.19658000000001,
+          "median": 63.677499999999995,
+          "stdev_sample": 88.8762867402262,
+          "cov_pct": 98.53620474326875,
+          "p95": 292.74760000000003,
+          "ci95_mean_lo": 72.77682779891568,
+          "ci95_mean_hi": 107.61633220108435
+        },
+        "per_file_init_ms": {
+          "n": 100,
+          "min": 1.595,
+          "max": 67.944,
+          "mean": 10.18087,
+          "median": 5.2925,
+          "stdev_sample": 11.936272414985655,
+          "cov_pct": 117.24216510952066,
+          "p95": 28.7623,
+          "ci95_mean_lo": 7.841360606662812,
+          "ci95_mean_hi": 12.520379393337189
+        },
+        "per_file_total_latency_ms": {
+          "n": 100,
+          "min": 40.927,
+          "max": 755.798,
+          "mean": 159.57307,
+          "median": 114.50800000000001,
+          "stdev_sample": 130.5239581841807,
+          "cov_pct": 81.79573043507949,
+          "p95": 415.7627,
+          "ci95_mean_lo": 133.99037419590059,
+          "ci95_mean_hi": 185.15576580409942
+        }
+      }
+    },
+    {
+      "index": 2,
+      "group": "files=100,size=mixed,fconc=4,dedup=true",
+      "warmup": false,
+      "success": true,
+      "bytes": 111493120,
+      "files": 100,
+      "elapsed_seconds": 3.7136895,
+      "throughput_MiB_per_s": 28.63139877472255,
+      "files_per_s": 26.927399288497327,
+      "integrity": "100/100 sha256-match, 0 mismatch, 0 failed",
+      "server_process": {
+        "samples": 20,
+        "working_set_avg_MiB": 25.7412109375,
+        "working_set_median_MiB": 26.322265625,
+        "working_set_max_sampled_MiB": 29.5859375,
+        "private_bytes_avg_MiB": 60.712109375,
+        "private_bytes_max_sampled_MiB": 65.5078125,
+        "cpu_seconds": 4.015625,
+        "wall_seconds": 3.7136895,
+        "cpu_pct_of_all_cores": 13.516292220984012,
+        "cpu_pct_of_one_core": 108.13033776787209
+      },
+      "extra": {
+        "avg_file_bytes": 1114931,
+        "per_file_complete_ms": {
+          "n": 100,
+          "min": 2.383,
+          "max": 64.38,
+          "mean": 15.007470000000003,
+          "median": 11.4235,
+          "stdev_sample": 12.412789254631651,
+          "cov_pct": 82.71073841647959,
+          "p95": 39.582449999999994,
+          "ci95_mean_lo": 12.5745633060922,
+          "ci95_mean_hi": 17.440376693907808
+        },
+        "per_file_dedup_preflight_ms": {
+          "n": 100,
+          "min": 5.966,
+          "max": 389.533,
+          "mean": 76.34687999999997,
+          "median": 51.994,
+          "stdev_sample": 70.71709366946695,
+          "cov_pct": 92.62604270071937,
+          "p95": 223.62304999999998,
+          "ci95_mean_lo": 62.48632964078445,
+          "ci95_mean_hi": 90.2074303592155
+        },
+        "per_file_init_ms": {
+          "n": 100,
+          "min": 0.89,
+          "max": 54.413,
+          "mean": 10.26611,
+          "median": 5.993,
+          "stdev_sample": 10.278705846392661,
+          "cov_pct": 100.12269346804838,
+          "p95": 32.70195,
+          "ci95_mean_lo": 8.251483654107037,
+          "ci95_mean_hi": 12.280736345892961
+        },
+        "per_file_total_latency_ms": {
+          "n": 100,
+          "min": 35.041,
+          "max": 622.586,
+          "mean": 144.12300000000002,
+          "median": 96.91,
+          "stdev_sample": 108.38171043897013,
+          "cov_pct": 75.20084264064036,
+          "p95": 356.45285,
+          "ci95_mean_lo": 122.88018475396187,
+          "ci95_mean_hi": 165.36581524603815
+        }
+      }
+    },
+    {
+      "index": 3,
+      "group": "files=100,size=mixed,fconc=4,dedup=true",
+      "warmup": false,
+      "success": true,
+      "bytes": 111493120,
+      "files": 100,
+      "elapsed_seconds": 2.9595908,
+      "throughput_MiB_per_s": 35.926630465265674,
+      "files_per_s": 33.78845480936081,
+      "integrity": "100/100 sha256-match, 0 mismatch, 0 failed",
+      "server_process": {
+        "samples": 16,
+        "working_set_avg_MiB": 25.865234375,
+        "working_set_median_MiB": 26.599609375,
+        "working_set_max_sampled_MiB": 31.33203125,
+        "private_bytes_avg_MiB": 59.80078125,
+        "private_bytes_max_sampled_MiB": 71.05859375,
+        "cpu_seconds": 3.515625,
+        "wall_seconds": 2.9595908,
+        "cpu_pct_of_all_cores": 14.848442054894887,
+        "cpu_pct_of_one_core": 118.7875364391591
+      },
+      "extra": {
+        "avg_file_bytes": 1114931,
+        "per_file_complete_ms": {
+          "n": 100,
+          "min": 2.265,
+          "max": 29.837,
+          "mean": 11.543529999999999,
+          "median": 9.3535,
+          "stdev_sample": 7.053168343798382,
+          "cov_pct": 61.100619514120744,
+          "p95": 25.89585,
+          "ci95_mean_lo": 10.161109004615517,
+          "ci95_mean_hi": 12.925950995384481
+        },
+        "per_file_dedup_preflight_ms": {
+          "n": 100,
+          "min": 3.028,
+          "max": 249.677,
+          "mean": 63.31283999999999,
+          "median": 43.331,
+          "stdev_sample": 59.545010750415265,
+          "cov_pct": 94.04887026141186,
+          "p95": 219.3568,
+          "ci95_mean_lo": 51.642017892918595,
+          "ci95_mean_hi": 74.98366210708139
+        },
+        "per_file_init_ms": {
+          "n": 100,
+          "min": 1.135,
+          "max": 32.321,
+          "mean": 7.00047,
+          "median": 4.942500000000001,
+          "stdev_sample": 6.377008561309142,
+          "cov_pct": 91.0940059925854,
+          "p95": 18.340199999999992,
+          "ci95_mean_lo": 5.750576321983408,
+          "ci95_mean_hi": 8.250363678016592
+        },
+        "per_file_total_latency_ms": {
+          "n": 100,
+          "min": 28.764,
+          "max": 362.291,
+          "mean": 113.96610000000003,
+          "median": 81.332,
+          "stdev_sample": 82.02317611757144,
+          "cov_pct": 71.97155655723186,
+          "p95": 299.95385000000005,
+          "ci95_mean_lo": 97.88955748095603,
+          "ci95_mean_hi": 130.04264251904402
+        }
+      }
+    },
+    {
+      "index": 4,
+      "group": "files=100,size=mixed,fconc=4,dedup=true",
+      "warmup": false,
+      "success": true,
+      "bytes": 111493120,
+      "files": 100,
+      "elapsed_seconds": 2.9161333000000003,
+      "throughput_MiB_per_s": 36.462024901262225,
+      "files_per_s": 34.29198521206146,
+      "integrity": "100/100 sha256-match, 0 mismatch, 0 failed",
+      "server_process": {
+        "samples": 16,
+        "working_set_avg_MiB": 26.331298828125,
+        "working_set_median_MiB": 25.517578125,
+        "working_set_max_sampled_MiB": 38.10546875,
+        "private_bytes_avg_MiB": 60.507080078125,
+        "private_bytes_max_sampled_MiB": 73.9296875,
+        "cpu_seconds": 4.390625,
+        "wall_seconds": 2.9161333000000003,
+        "cpu_pct_of_all_cores": 18.82040594646342,
+        "cpu_pct_of_one_core": 150.56324757170736
+      },
+      "extra": {
+        "avg_file_bytes": 1114931,
+        "per_file_complete_ms": {
+          "n": 100,
+          "min": 2.016,
+          "max": 33.671,
+          "mean": 12.626750000000001,
+          "median": 11.472000000000001,
+          "stdev_sample": 7.480027267782363,
+          "cov_pct": 59.239529315004745,
+          "p95": 24.851899999999986,
+          "ci95_mean_lo": 11.160664655514658,
+          "ci95_mean_hi": 14.092835344485344
+        },
+        "per_file_dedup_preflight_ms": {
+          "n": 100,
+          "min": 1.724,
+          "max": 254.138,
+          "mean": 61.91027,
+          "median": 44.7435,
+          "stdev_sample": 57.145434225185035,
+          "cov_pct": 92.30364239274846,
+          "p95": 211.65925000000001,
+          "ci95_mean_lo": 50.70976489186373,
+          "ci95_mean_hi": 73.11077510813627
+        },
+        "per_file_init_ms": {
+          "n": 100,
+          "min": 1.115,
+          "max": 32.533,
+          "mean": 7.464700000000001,
+          "median": 5.429,
+          "stdev_sample": 6.119371586704114,
+          "cov_pct": 81.97746174265696,
+          "p95": 20.59265,
+          "ci95_mean_lo": 6.265303169005994,
+          "ci95_mean_hi": 8.664096830994007
+        },
+        "per_file_total_latency_ms": {
+          "n": 100,
+          "min": 26.477,
+          "max": 344.913,
+          "mean": 112.08858000000001,
+          "median": 80.6285,
+          "stdev_sample": 78.6698673553007,
+          "cov_pct": 70.18544382960395,
+          "p95": 288.69569999999993,
+          "ci95_mean_lo": 96.66928599836108,
+          "ci95_mean_hi": 127.50787400163894
+        }
+      }
+    }
+  ],
+  "notes": [
+    "Timer: first request of first file -\u003e last /upload_complete (or dedup reply) returned. File enumeration/generation is OUTSIDE the timer (the app enumerates File handles instantly). Per-file latency = that file's own init-\u003ecomplete (+dedup pre-flight) duration. Every received file is SHA-256 verified OUTSIDE the timer. Fresh server + empty receive dir per trial."
+  ]
+}

@@ -1,0 +1,136 @@
+{
+  "run_id": "20261031T170530Z-b5327c",
+  "timestamp_utc": "2026-10-31T17:05:30Z",
+  "scenario": "wifi_small",
+  "label": "Measured: protocol end-to-end over REAL Wi-Fi, Go reference client on the PHONE (linux/arm64 binary via adb) -\u003e real p2p.exe on PC. Android-\u003eWindows direction only. This is NOT the Android app.",
+  "params": {
+    "chunk": "1MiB",
+    "dedup_preflight": false,
+    "fconc": 2,
+    "fsize": "100KiB",
+    "mixed": false,
+    "mode": "small",
+    "n": 25,
+    "pc_ip": "10.3.232.1",
+    "sizes": "100MiB",
+    "trials": 2,
+    "warmup": 1,
+    "workers": 4
+  },
+  "environment": {
+    "host": "LAPTOP-VVMI67PG",
+    "os": "Microsoft Windows 11 Home Single Language 10.0.26300",
+    "cpu": "11th Gen Intel(R) Core(TM) i5-1155G7 @ 2.50GHz",
+    "logical_cpus": 8,
+    "ram_bytes": "16952647680",
+    "model": "LENOVO 82H8",
+    "disk": "NVMe INTEL SSDPEKNW512GZL / SSD",
+    "go_version": "go1.27.0",
+    "sut_path": "E:\\personal\\p2p\\p2p.exe",
+    "sut_sha256": "4b5f7bc1076610a30d4894da4a3e320cfa332755782bd5336550773bd51040bb",
+    "sut_mtime": "2026-10-31T21:27:17+05:30",
+    "git_commit": "fdc6376598376e62a6e32274320a84375f3cc83c",
+    "git_dirty_files": "M docs/performance_benchmark.md; ?? apps/cli/bench/; ?? apps/cli/benchmark_suite_test.go; ?? benchmark_results/",
+    "network": {
+      "Authentication": "WPA2-Enterprise",
+      "Band": "5 GHz",
+      "Channel": "116",
+      "Radio type": "802.11ax",
+      "Receive rate (Mbps)": "408",
+      "SSID": "SRMIST",
+      "Signal": "62%",
+      "Transmit rate (Mbps)": "576",
+      "phone_props(model;android;manufacturer)": "A059;17;Nothing",
+      "phone_wifi_info": "Wi-Fi is enabled\r\nFailed to write while dumping service wifi: Broken pipe"
+    }
+  },
+  "trials": [
+    {
+      "index": 1,
+      "group": "files=25,size=100KiB,fconc=2,dedup=false",
+      "warmup": true,
+      "success": true,
+      "bytes": 2560000,
+      "files": 25,
+      "elapsed_seconds": 1.149710468,
+      "throughput_MiB_per_s": 2.1234965827935732,
+      "files_per_s": 21.74460500780619,
+      "integrity": "25/25 sha256-match, 0 mismatch, 0 failed",
+      "extra": {
+        "hello_ms": 34.828,
+        "per_file_latency_ms": {
+          "n": 25,
+          "min": 44.65,
+          "max": 302.223,
+          "mean": 90.97692,
+          "median": 68.187,
+          "stdev_sample": 63.708003043129,
+          "cov_pct": 70.02655513412522,
+          "p95": 227.3309999999999,
+          "ci95_mean_lo": 64.67825634379636,
+          "ci95_mean_hi": 117.27558365620365
+        }
+      }
+    },
+    {
+      "index": 2,
+      "group": "files=25,size=100KiB,fconc=2,dedup=false",
+      "warmup": false,
+      "success": true,
+      "bytes": 2560000,
+      "files": 25,
+      "elapsed_seconds": 0.70695724,
+      "throughput_MiB_per_s": 3.4534001660411593,
+      "files_per_s": 35.36281770026147,
+      "integrity": "25/25 sha256-match, 0 mismatch, 0 failed",
+      "extra": {
+        "hello_ms": 8.878,
+        "per_file_latency_ms": {
+          "n": 25,
+          "min": 44.629,
+          "max": 75.777,
+          "mean": 55.763960000000004,
+          "median": 54.962,
+          "stdev_sample": 7.89381801622848,
+          "cov_pct": 14.155770171681636,
+          "p95": 67.84259999999999,
+          "ci95_mean_lo": 52.505391922900884,
+          "ci95_mean_hi": 59.022528077099125
+        }
+      }
+    },
+    {
+      "index": 3,
+      "group": "files=25,size=100KiB,fconc=2,dedup=false",
+      "warmup": false,
+      "success": true,
+      "bytes": 2560000,
+      "files": 25,
+      "elapsed_seconds": 0.726500364,
+      "throughput_MiB_per_s": 3.3605024456670476,
+      "files_per_s": 34.41154504363057,
+      "integrity": "25/25 sha256-match, 0 mismatch, 0 failed",
+      "extra": {
+        "hello_ms": 8.703,
+        "per_file_latency_ms": {
+          "n": 25,
+          "min": 46.15,
+          "max": 72.785,
+          "mean": 57.6208,
+          "median": 58.961,
+          "stdev_sample": 7.705728767179217,
+          "cov_pct": 13.373172130861105,
+          "p95": 66.7822,
+          "ci95_mean_lo": 54.43987516490842,
+          "ci95_mean_hi": 60.80172483509158
+        }
+      }
+    }
+  ],
+  "notes": [
+    "The phone-side client is the Go harness client, not the Capacitor/WebView app: JS crypto, WebView file access and the app's whole-file pre-hash are NOT exercised.",
+    "Phone: client runs from /data/local/tmp (shell uid), screen state/battery saver as recorded in the Android probe, not controlled here.",
+    "Timer runs on the phone: first request -\u003e last /upload_complete reply. Hash verification of the received files is done on the PC after the run.",
+    "small: server process during phone run: WS max=21.9 MiB, private max=55.9 MiB, CPU=20.5% of one core (avg over whole run incl. phone-side generation gaps)"
+  ]
+}
