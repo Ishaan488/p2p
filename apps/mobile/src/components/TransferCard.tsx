@@ -78,7 +78,7 @@ export interface TransferCardProps {
   onOpenMedia: (payload: OpenMediaPayload) => void;
   onAcceptApproval: (id: string, file: NonNullable<TransferItem['file']>) => void;
   onAlwaysTrustApproval: (id: string, file: NonNullable<TransferItem['file']>) => void;
-  onRejectApproval: (id: string) => void;
+  onRejectApproval: (id: string, file?: TransferItem['file']) => void;
   onPauseUpload: (id: string) => void;
   onResumeUpload: (id: string) => void;
   onCancelUpload: (id: string, transferId: string) => void;
@@ -568,7 +568,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
             <button
               type="button"
               className="approval-btn approval-reject"
-              onClick={() => onRejectApproval(item.id)}
+              onClick={() => onRejectApproval(item.id, file)}
               style={{
                 flex: 1,
                 height: '34px',
@@ -1107,52 +1107,59 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                       <RotateCcw size={13} />
                       <span>Resume</span>
                     </button>
-                  ) : file.blobUrl ? (
-                    /* Completed / Saved: Only images & videos retain in-app Preview lightbox */
-                    (isImageFile || isVideoFile) && (
-                      <button
-                        type="button"
-                        className="card-pill-btn"
-                        onClick={() => {
-                          if (isImageFile || isVideoFile) {
-                            onOpenMedia({
-                              type: isVideoFile ? 'video' : 'image',
-                              src: file.blobUrl!,
-                              filename: file.filename,
-                              fileSize: file.totalSize,
-                              onDownload: () => onDownload(item.id, file, true)
-                            });
-                          }
-                        }}
-                        title="Preview media"
-                      >
-                        <Eye size={13} />
-                        <span>Preview</span>
-                      </button>
-                    )
                   ) : (
-                    /* Ready to download: Only images & videos get Preview; all other files get single prominent Save button */
                     <>
-                      {(isImageFile || isVideoFile) && (
+                      {/* 1. Preview / Open button: images & videos open lightbox; other files with blobUrl open in viewer/tab */}
+                      {(isImageFile || isVideoFile) ? (
                         <button
                           type="button"
                           className="card-pill-btn"
-                          onClick={() => onDownload(item.id, file, false)}
+                          onClick={() => {
+                            if (file.blobUrl) {
+                              onOpenMedia({
+                                type: isVideoFile ? 'video' : 'image',
+                                src: file.blobUrl,
+                                filename: file.filename,
+                                fileSize: file.totalSize,
+                                onDownload: () => onDownload(item.id, file, true)
+                              });
+                            } else {
+                              onDownload(item.id, file, false);
+                            }
+                          }}
                           title="Preview media"
                         >
                           <Eye size={13} />
                           <span>Preview</span>
                         </button>
+                      ) : file.blobUrl ? (
+                        <button
+                          type="button"
+                          className="card-pill-btn"
+                          onClick={() => {
+                            if (file.blobUrl) {
+                              window.open(file.blobUrl, '_blank');
+                            }
+                          }}
+                          title="Open / View file"
+                        >
+                          <ExternalLink size={13} />
+                          <span>Open</span>
+                        </button>
+                      ) : null}
+
+                      {/* 2. Prominent Save button: ALWAYS available for incoming files across all formats */}
+                      {!isSent && (
+                        <button
+                          type="button"
+                          className="card-pill-btn card-pill-primary"
+                          onClick={() => onDownload(item.id, file, true)}
+                          title="Save to Downloads"
+                        >
+                          <Download size={13} />
+                          <span>Save</span>
+                        </button>
                       )}
-                      <button
-                        type="button"
-                        className="card-pill-btn card-pill-primary"
-                        onClick={() => onDownload(item.id, file, true)}
-                        title="Save to device"
-                      >
-                        <Download size={13} />
-                        <span>Save</span>
-                      </button>
                     </>
                   )}
                 </>

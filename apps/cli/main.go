@@ -1195,6 +1195,43 @@ func (c *Client) readPump() {
 					}
 				}
 			}
+		} else if msg.Type == "file_reject" || msg.Type == "transfer_reject" {
+			payload, ok := msg.Payload.(map[string]interface{})
+			if ok {
+				if tid, exists := payload["transferId"].(string); exists && tid != "" {
+					transfersMu.Lock()
+					state, existsState := transfers[tid]
+					if existsState {
+						delete(transfers, tid)
+					}
+					transfersMu.Unlock()
+					if existsState && state != nil {
+						if state.IsDownload {
+							state.removeMeta()
+							printAsync(Yellow, "○ Rejected", state.Filename, "rejected by remote device")
+							recordTransfer(TransferRecord{
+								ID:        state.ID,
+								Filename:  state.Filename,
+								Size:      state.TotalSize,
+								Direction: "Sent",
+								Device:    c.device.DisplayName(),
+								Status:    "Rejected",
+							})
+						} else {
+							state.discard()
+							printAsync(Yellow, "○ Rejected", state.Filename, "rejected by remote device")
+							recordTransfer(TransferRecord{
+								ID:        state.ID,
+								Filename:  state.Filename,
+								Size:      state.TotalSize,
+								Direction: "Received",
+								Device:    c.device.DisplayName(),
+								Status:    "Rejected",
+							})
+						}
+					}
+				}
+			}
 		}
 	}
 }

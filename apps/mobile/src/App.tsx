@@ -705,9 +705,10 @@ export default function App() {
               timestamp: msg.timestamp * 1000
             }];
 
-            if (trust && (kind === 'image' && totalSize < 25 * 1024 * 1024 || initialProgress > 0)) {
+            if (trust) {
+              const shouldSaveToDisk = !(kind === 'image' && totalSize < 25 * 1024 * 1024);
               setTimeout(() => {
-                handleDownload(msg.id, fileInfo, false);
+                handleDownload(msg.id, fileInfo, shouldSaveToDisk);
               }, 100);
             }
             return next;
@@ -1765,16 +1766,34 @@ export default function App() {
                     onOpenMedia={(media) => setActiveMedia(media)}
                     onAcceptApproval={(id, file) => {
                       updateFile(id, { isPendingApproval: false });
-                      handleDownload(id, { ...file, isPendingApproval: false }, false);
+                      handleDownload(id, { ...file, isPendingApproval: false }, true);
                     }}
                     onAlwaysTrustApproval={(id, file) => {
                       setIsPcTrusted(true);
                       localStorage.setItem('p2p_trust_pc', 'true');
                       updateFile(id, { isPendingApproval: false });
                       showToast('PC marked as trusted device', 'success');
-                      handleDownload(id, { ...file, isPendingApproval: false }, false);
+                      handleDownload(id, { ...file, isPendingApproval: false }, true);
                     }}
-                    onRejectApproval={(id) => {
+                    onRejectApproval={(id, file) => {
+                      if (file?.transferId) {
+                        api.call('/upload_cancel', { transferId: file.transferId, reason: 'rejected' }).catch(() => {});
+                        if (transport.isConnected()) {
+                          try {
+                            transport.send(JSON.stringify({
+                              version: 1,
+                              type: 'file_reject',
+                              id: 'reject-' + file.transferId,
+                              timestamp: Math.floor(Date.now() / 1000),
+                              payload: {
+                                transferId: file.transferId,
+                                filename: file.filename,
+                                reason: 'rejected'
+                              }
+                            }));
+                          } catch {}
+                        }
+                      }
                       handleDelete(id);
                       showToast('Transfer rejected', 'info');
                     }}

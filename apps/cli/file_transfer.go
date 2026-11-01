@@ -568,6 +568,7 @@ func printProgressBar(filename string, current, total int) {
 
 type transferRef struct {
 	TransferID string `json:"transferId"`
+	Reason     string `json:"reason,omitempty"`
 }
 
 // handleUploadComplete moves a fully received upload into the receive directory.
@@ -655,21 +656,45 @@ func handleUploadCancel(w http.ResponseWriter, r *http.Request, s *Session) {
 		delete(transfers, req.TransferID)
 		transfersMu.Unlock()
 		state.discard()
-		printAsync(Yellow, "○ Cancelled", state.Filename, "")
+		status := "Cancelled"
+		label := "○ Cancelled"
+		detail := ""
+		if req.Reason == "rejected" {
+			status = "Rejected"
+			label = "○ Rejected"
+			detail = "rejected by remote device"
+		}
+		printAsync(Yellow, label, state.Filename, detail)
 		recordTransfer(TransferRecord{
 			ID:        state.ID,
 			Filename:  state.Filename,
 			Size:      state.TotalSize,
 			Direction: "Received",
 			Device:    s.Device.DisplayName(),
-			Status:    "Cancelled",
+			Status:    status,
 		})
 	} else if dlState := lookupTransfer(req.TransferID); dlState != nil && dlState.IsDownload {
 		transfersMu.Lock()
 		delete(transfers, req.TransferID)
 		transfersMu.Unlock()
 		dlState.removeMeta()
-		printAsync(Yellow, "○ Cancelled", dlState.Filename, "")
+		status := "Cancelled"
+		label := "○ Cancelled"
+		detail := ""
+		if req.Reason == "rejected" {
+			status = "Rejected"
+			label = "○ Rejected"
+			detail = "rejected by remote device"
+		}
+		printAsync(Yellow, label, dlState.Filename, detail)
+		recordTransfer(TransferRecord{
+			ID:        dlState.ID,
+			Filename:  dlState.Filename,
+			Size:      dlState.TotalSize,
+			Direction: "Sent",
+			Device:    s.Device.DisplayName(),
+			Status:    status,
+		})
 	}
 	s.writeResponse(w, r, map[string]bool{"ok": true})
 }
