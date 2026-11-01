@@ -206,10 +206,11 @@ export class ServerApi {
     return this.call('/settings', settings);
   }
 
-  uploadChunk(transferId: string, chunkIndex: number, data: Blob, signal?: AbortSignal): Promise<void> {
+  uploadChunk(transferId: string, chunkIndex: number, data: Blob | Uint8Array, signal?: AbortSignal): Promise<void> {
     return this.withSession(async () => {
       const { url, session } = await this.sign('POST', '/upload', { transferId, chunkIndex: String(chunkIndex) });
-      const sealed = await session.cipher.seal(new Uint8Array(await data.arrayBuffer()), chunkContext(transferId, chunkIndex));
+      const rawBytes = data instanceof Uint8Array ? data : new Uint8Array(await data.arrayBuffer());
+      const sealed = await session.cipher.seal(rawBytes, chunkContext(transferId, chunkIndex));
       const res = await fetch(url, { method: 'POST', body: sealed as BodyInit, signal });
       if (!res.ok) throw await failure(res, 'Chunk upload failed');
     });

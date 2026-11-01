@@ -37,6 +37,25 @@ interface FileSaverPlugin {
     mimeType?: string;
     subDir?: string;
   }): Promise<{ success: boolean; path: string }>;
+  startSaveFile(options: {
+    fileId: string;
+    filename: string;
+    mimeType?: string;
+    subDir?: string;
+  }): Promise<{ success: boolean; fileId: string }>;
+  writeChunk(options: {
+    fileId: string;
+    base64Chunk: string;
+    offset?: number;
+  }): Promise<{ success: boolean; bytesWritten?: number }>;
+  finishSaveFile(options: {
+    fileId: string;
+    expectedSize?: number;
+  }): Promise<{ success: boolean; path: string }>;
+  cleanupAbandonedPendingDownloads(): Promise<{ cleaned: number }>;
+  abortSaveFile(options: {
+    fileId: string;
+  }): Promise<{ aborted?: boolean }>;
   downloadWithSystemManager(options: {
     url: string;
     filename: string;
@@ -46,6 +65,17 @@ interface FileSaverPlugin {
 }
 
 export const FileSaver = registerPlugin<FileSaverPlugin>('FileSaver');
+
+export function uint8ArrayToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const len = bytes.byteLength;
+  const CHUNK_SIZE = 0x8000;
+  for (let i = 0; i < len; i += CHUNK_SIZE) {
+    const slice = bytes.subarray(i, Math.min(i + CHUNK_SIZE, len));
+    binary += String.fromCharCode.apply(null, slice as any);
+  }
+  return btoa(binary);
+}
 
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -57,6 +87,23 @@ function blobToBase64(blob: Blob): Promise<string> {
     reader.onerror = reject;
     reader.readAsDataURL(blob);
   });
+}
+
+// Session chunk cache to preserve downloaded chunks across network drops, terminal restarts, and retries
+const downloadChunksCache = new Map<string, (Blob | null)[]>();
+
+export function clearDownloadCache(transferId: string): void {
+  downloadChunksCache.delete(transferId);
+}
+
+export function getCachedDownloadBytes(transferId: string): number {
+  const parts = downloadChunksCache.get(transferId);
+  if (!parts) return 0;
+  let sum = 0;
+  for (const p of parts) {
+    if (p) sum += p.size;
+  }
+  return sum;
 }
 
 // Fetches a file from the PC chunk by chunk, decrypting each one. The result
@@ -72,24 +119,54 @@ export async function downloadEncrypted(
     playTransferSuccessChime();
     return new Blob([]);
   }
-  const parts: Blob[] = new Array(info.totalChunks);
+
+  // Reuse already downloaded chunks if resuming an interrupted session
+  let parts: (Blob | null)[];
+  const cached = downloadChunksCache.get(info.transferId);
+  if (cached && cached.length === info.totalChunks) {
+    parts = cached;
+  } else {
+    parts = new Array(info.totalChunks).fill(null);
+    downloadChunksCache.set(info.transferId, parts);
+  }
+
   let received = 0;
-  let next = 0;
+  for (const p of parts) {
+    if (p) received += p.size;
+  }
+
   const tracker = new SpeedTracker();
+  if (received > 0) {
+    const resumePct = Math.round((received / info.totalSize) * 100);
+    onProgress(received, 0, `Resumed at ${resumePct}%`);
+  }
 
   await startTransferForeground('P2P Link Download', `Downloading file (${formatBytes(info.totalSize)})...`);
 
-  const worker = async () => {
+  let next = 0;
+  const getNextChunkIndex = (): number => {
     while (next < info.totalChunks) {
-      const index = next++;
+      const idx = next++;
+      if (parts[idx] === null) {
+        return idx;
+      }
+    }
+    return -1;
+  };
+
+  const worker = async () => {
+    while (true) {
+      const index = getNextChunkIndex();
+      if (index === -1) break;
+
       let chunk: Uint8Array | null = null;
       for (let attempt = 1; ; attempt++) {
         try {
           chunk = await api.downloadChunk(info.transferId, index, signal);
           break;
         } catch (err) {
-          if (signal?.aborted || attempt >= 8) throw err;
-          await new Promise(r => setTimeout(r, Math.min(3000, 300 * (2 ** attempt))));
+          if (signal?.aborted || attempt >= 15) throw err;
+          await new Promise(r => setTimeout(r, Math.min(3000, 400 * (1.3 ** attempt))));
         }
       }
       if (!chunk) throw new Error('Chunk download failed');
@@ -117,9 +194,16 @@ export async function downloadEncrypted(
     await stopTransferForeground();
   }
 
+  for (let i = 0; i < parts.length; i++) {
+    if (!parts[i]) {
+      throw new Error(`Incomplete download: chunk ${i} missing`);
+    }
+  }
+
   if (received !== info.totalSize) throw new Error('Downloaded size does not match');
+  downloadChunksCache.delete(info.transferId);
   playTransferSuccessChime();
-  return new Blob(parts);
+  return new Blob(parts as Blob[]);
 }
 
 function formatBytes(bytes: number): string {
@@ -146,30 +230,167 @@ export function saveBlob(blob: Blob, filename: string) {
 }
 
 // Saves a file to the device's public Downloads directory (or configured subfolder — FR 24).
+// Streams in 2MB slices to prevent Out Of Memory errors on large files.
 export async function saveToDeviceDownloads(
   blob: Blob,
   filename: string,
   mimeType?: string,
-  customSubDir?: string
+  customSubDir?: string,
+  onProgress?: (writtenBytes: number, totalBytes: number) => void
 ): Promise<{ success: boolean; path?: string }> {
   const subDir = customSubDir !== undefined ? customSubDir : getDownloadSubDir();
   if (Capacitor.isNativePlatform()) {
+    const fileId = Math.random().toString(36).slice(2) + Date.now().toString(36);
     try {
-      const base64Data = await blobToBase64(blob);
-      const res = await FileSaver.saveToDownloads({
+      await FileSaver.startSaveFile({
+        fileId,
         filename,
-        base64Data,
         mimeType: mimeType || blob.type || 'application/octet-stream',
         subDir
       });
+
+      // Stream in 2MB slices — zero memory pressure even for 1GB+ files!
+      const SLICE_SIZE = 2 * 1024 * 1024;
+      const totalSize = blob.size;
+      for (let offset = 0; offset < totalSize; offset += SLICE_SIZE) {
+        const slice = blob.slice(offset, Math.min(totalSize, offset + SLICE_SIZE));
+        const base64Chunk = await blobToBase64(slice);
+        await FileSaver.writeChunk({ fileId, base64Chunk, offset });
+        const currentWritten = Math.min(totalSize, offset + slice.size);
+        if (onProgress) {
+          onProgress(currentWritten, totalSize);
+        }
+      }
+
+      const res = await FileSaver.finishSaveFile({ fileId, expectedSize: totalSize });
       return { success: true, path: res.path };
     } catch (err) {
-      console.warn('Native FileSaver failed, attempting HTML5 fallback:', err);
+      console.warn('Native streaming FileSaver failed:', err);
+      try {
+        await FileSaver.abortSaveFile({ fileId });
+      } catch {}
     }
   }
 
   saveBlob(blob, filename);
+  if (onProgress) {
+    onProgress(blob.size, blob.size);
+  }
   return { success: true, path: filename };
+}
+
+export interface DirectDownloadOptions {
+  filename: string;
+  mimeType?: string;
+  subDir?: string;
+}
+
+/**
+ * Streams chunks directly from the server to native storage via FileSaverPlugin.
+ * Completely eliminates full-file JavaScript memory accumulation (O(1) memory footprint).
+ */
+export async function downloadDirectToDisk(
+  api: ServerApi,
+  info: DownloadInfo,
+  options: DirectDownloadOptions,
+  onProgress: (receivedBytes: number, speed?: number, eta?: string) => void,
+  signal?: AbortSignal
+): Promise<{ success: boolean; path: string }> {
+  if (info.totalChunks === 0 || info.totalSize === 0) {
+    onProgress(0, 0, 'Done');
+    playTransferSuccessChime();
+    return { success: true, path: options.filename };
+  }
+
+  const fileId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  const subDir = options.subDir !== undefined ? options.subDir : getDownloadSubDir();
+
+  await FileSaver.startSaveFile({
+    fileId,
+    filename: options.filename,
+    mimeType: options.mimeType || 'application/octet-stream',
+    subDir
+  });
+
+  const chunkSize = Math.ceil(info.totalSize / info.totalChunks);
+  const completed = new Uint8Array(info.totalChunks);
+  let receivedBytes = 0;
+  const tracker = new SpeedTracker();
+
+  await startTransferForeground('P2P Link Download', `Downloading ${options.filename}...`);
+
+  let next = 0;
+  const getNextChunkIndex = (): number => {
+    while (next < info.totalChunks) {
+      const idx = next++;
+      if (!completed[idx]) {
+        return idx;
+      }
+    }
+    return -1;
+  };
+
+  const worker = async () => {
+    while (true) {
+      const index = getNextChunkIndex();
+      if (index === -1) break;
+
+      let chunk: Uint8Array | null = null;
+      for (let attempt = 1; ; attempt++) {
+        try {
+          chunk = await api.downloadChunk(info.transferId, index, signal);
+          break;
+        } catch (err) {
+          if (signal?.aborted || attempt >= 15) throw err;
+          await new Promise(r => setTimeout(r, Math.min(3000, 400 * (1.3 ** attempt))));
+        }
+      }
+      if (!chunk) throw new Error('Chunk download failed');
+
+      const offset = index * chunkSize;
+      const base64Chunk = uint8ArrayToBase64(chunk);
+      await FileSaver.writeChunk({ fileId, offset, base64Chunk });
+
+      completed[index] = 1;
+      receivedBytes += chunk.length;
+
+      const speed = tracker.update(receivedBytes);
+      const remainingBytes = Math.max(0, info.totalSize - receivedBytes);
+      const eta = calculateEta(remainingBytes, speed);
+
+      const percent = Math.round((receivedBytes / info.totalSize) * 100);
+      updateTransferForeground(`Downloading ${options.filename} (${percent}%)`, percent);
+      onProgress(receivedBytes, speed, eta);
+    }
+  };
+
+  const workers = Array.from({ length: Math.min(PARALLEL_CHUNKS, info.totalChunks) }, worker);
+  try {
+    await Promise.all(workers);
+
+    // Verify complete bitmap coverage before publication
+    for (let i = 0; i < info.totalChunks; i++) {
+      if (!completed[i]) {
+        throw new Error(`Incomplete download: chunk ${i} was not received`);
+      }
+    }
+    if (receivedBytes !== info.totalSize) {
+      throw new Error(`Downloaded byte count mismatch: got ${receivedBytes}, expected ${info.totalSize}`);
+    }
+
+    const res = await FileSaver.finishSaveFile({ fileId, expectedSize: info.totalSize });
+    playTransferSuccessChime();
+    return res;
+  } catch (err) {
+    next = info.totalChunks;
+    await Promise.allSettled(workers);
+    try {
+      await FileSaver.abortSaveFile({ fileId });
+    } catch {}
+    throw err;
+  } finally {
+    await stopTransferForeground();
+  }
 }
 
 // Enqueues a direct download with Android's system DownloadManager.

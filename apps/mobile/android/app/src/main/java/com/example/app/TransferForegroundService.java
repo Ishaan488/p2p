@@ -8,6 +8,7 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
@@ -24,6 +25,8 @@ public class TransferForegroundService extends Service {
     public static final String EXTRA_PROGRESS = "EXTRA_PROGRESS"; // int 0-100 or -1
 
     private PowerManager.WakeLock wakeLock;
+    private WifiManager.WifiLock wifiLock;
+    private boolean isForegroundActive = false;
 
     @Override
     public void onCreate() {
@@ -34,6 +37,23 @@ public class TransferForegroundService extends Service {
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "p2plink:transfer_wake_lock");
             wakeLock.setReferenceCounted(false);
         }
+        try {
+            WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if (wm != null) {
+                // On API 29+ (including API 34+), use WIFI_MODE_FULL_LOW_LATENCY.
+                // Note on Android API 34+ (Android 14+): WIFI_MODE_FULL_HIGH_PERF is deprecated and
+                // automatically re-routed by the OS to WIFI_MODE_FULL_LOW_LATENCY.
+                // Crucial limitation: Android OS disables low latency Wi-Fi power saving locks
+                // when the screen is turned off. A Wi-Fi lock does NOT guarantee screen-off
+                // connectivity. CPU execution is maintained separately by PARTIAL_WAKE_LOCK.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "p2plink:transfer_wifi_lock");
+                } else {
+                    wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "p2plink:transfer_wifi_lock");
+                }
+                wifiLock.setReferenceCounted(false);
+            }
+        } catch (Exception ignored) {}
     }
 
     @Override
@@ -57,24 +77,38 @@ public class TransferForegroundService extends Service {
 
             Notification notification = buildNotification(title, text, progress);
 
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                    startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
-                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
-                } else {
-                    startForeground(NOTIFICATION_ID, notification);
+            if (ACTION_START.equals(action) || !isForegroundActive) {
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                        startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+                    } else {
+                        startForeground(NOTIFICATION_ID, notification);
+                    }
+                    isForegroundActive = true;
+                } catch (Exception e) {
+                    try {
+                        startForeground(NOTIFICATION_ID, notification);
+                        isForegroundActive = true;
+                    } catch (Exception ignored) {}
                 }
-            } catch (Exception e) {
-                try {
-                    startForeground(NOTIFICATION_ID, notification);
-                } catch (Exception ignored) {}
-            }
 
-            if (wakeLock != null && !wakeLock.isHeld()) {
-                try {
-                    wakeLock.acquire(60 * 60 * 1000L); // 1 hour timeout safety
-                } catch (Exception ignored) {}
+                if (wakeLock != null && !wakeLock.isHeld()) {
+                    try {
+                        wakeLock.acquire(60 * 60 * 1000L); // 1 hour timeout safety
+                    } catch (Exception ignored) {}
+                }
+                if (wifiLock != null && !wifiLock.isHeld()) {
+                    try {
+                        wifiLock.acquire();
+                    } catch (Exception ignored) {}
+                }
+            } else if (ACTION_UPDATE.equals(action) && isForegroundActive) {
+                NotificationManager nm = getSystemService(NotificationManager.class);
+                if (nm != null) {
+                    nm.notify(NOTIFICATION_ID, notification);
+                }
             }
         }
         return START_NOT_STICKY;
@@ -121,23 +155,30 @@ public class TransferForegroundService extends Service {
         }
     }
 
-    private void stopTransferService() {
+    private synchronized void releaseLocks() {
         if (wakeLock != null && wakeLock.isHeld()) {
             try {
                 wakeLock.release();
             } catch (Exception ignored) {}
         }
+        if (wifiLock != null && wifiLock.isHeld()) {
+            try {
+                wifiLock.release();
+            } catch (Exception ignored) {}
+        }
+    }
+
+    private void stopTransferService() {
+        releaseLocks();
+        isForegroundActive = false;
         stopForeground(STOP_FOREGROUND_REMOVE);
         stopSelf();
     }
 
     @Override
     public void onDestroy() {
-        if (wakeLock != null && wakeLock.isHeld()) {
-            try {
-                wakeLock.release();
-            } catch (Exception ignored) {}
-        }
+        releaseLocks();
+        isForegroundActive = false;
         super.onDestroy();
     }
 
@@ -145,5 +186,10 @@ public class TransferForegroundService extends Service {
     public IBinder onBind(Intent intent) {
         return null;
     }
-}
 
+    // Android 15 (API 35+) enforces a 6-hour runtime limit for dataSync foreground services.
+    // Handling onTimeout allows the service to stop gracefully and release locks without crashing.
+    public void onTimeout(int startId, int fgsType) {
+        stopTransferService();
+    }
+}

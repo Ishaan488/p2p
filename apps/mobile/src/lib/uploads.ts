@@ -4,6 +4,7 @@ import { playTransferSuccessChime } from './audio';
 import { startTransferForeground, stopTransferForeground, updateTransferForeground } from './foregroundService';
 import { computeFileHash } from './crypto';
 import { removePendingUpload } from './storage';
+import { releaseSharedUri } from './shareTarget';
 
 export const CHUNK_SIZE = 1024 * 1024; // 1 MiB baseline
 const MIN_CHUNK_SIZE = 256 * 1024;     // 256 KiB
@@ -142,11 +143,19 @@ function hashString(text: string): string {
   return (h >>> 0).toString(36);
 }
 
+export interface UploadableFile {
+  readonly name: string;
+  readonly size: number;
+  readonly lastModified?: number;
+  slice(start: number, end: number): Blob | Uint8Array | Promise<Blob | Uint8Array>;
+}
+
 // The same file sent from the same device always maps to the same id, which is
 // what lets a transfer resume after a reload: pick the file again and the
 // server reports the chunks it already has.
-export function transferIdFor(clientId: string, file: File): string {
-  return `up-${clientId}-${file.size.toString(36)}-${file.lastModified.toString(36)}-${hashString(file.name)}`;
+export function transferIdFor(clientId: string, file: File | UploadableFile): string {
+  const mod = 'lastModified' in file && typeof file.lastModified === 'number' ? file.lastModified : 0;
+  return `up-${clientId}-${file.size.toString(36)}-${mod.toString(36)}-${hashString(file.name)}`;
 }
 
 const sleep = (ms: number, signal: AbortSignal) =>
@@ -178,7 +187,7 @@ export class Upload {
 
   constructor(
     private api: ServerApi,
-    readonly file: File,
+    readonly file: File | UploadableFile,
     readonly transferId: string,
     private onProgress: (progress: UploadProgress) => void,
     initialPriority: UploadPriority = 'normal'
@@ -227,21 +236,27 @@ export class Upload {
     try {
       // Pre-flight content deduplication check: skip upload if PC already has this exact file
       try {
-        const hash = await computeFileHash(this.file, abort.signal);
-        const check = await this.api.call<{ exists: boolean; filename?: string }>('/upload_check_hash', {
-          hash,
-          filename: this.file.name,
+        const probe = await this.api.call<{ hasCandidate: boolean }>('/upload_check_hash', {
           totalSize: this.file.size
         }, abort.signal);
 
-        if (check.exists) {
-          this.sentBytes = this.file.size;
-          this.speed = 0;
-          this.eta = 'Instant (Dedup)';
-          this.setStatus('done');
-          await removePendingUpload(this.transferId);
-          playTransferSuccessChime();
-          return;
+        if (probe.hasCandidate) {
+          const hash = await computeFileHash(this.file, abort.signal);
+          const check = await this.api.call<{ exists: boolean; filename?: string }>('/upload_check_hash', {
+            hash,
+            filename: this.file.name,
+            totalSize: this.file.size
+          }, abort.signal);
+
+          if (check.exists) {
+            this.sentBytes = this.file.size;
+            this.speed = 0;
+            this.eta = 'Instant (Dedup)';
+            this.setStatus('done');
+            await removePendingUpload(this.transferId);
+            playTransferSuccessChime();
+            return;
+          }
         }
       } catch (e) {
         // If dedup check fails (e.g. older server version or timeout), proceed with standard chunk upload
@@ -263,6 +278,9 @@ export class Upload {
       }
       this.sentBytes = this.file.size;
       this.setStatus('done');
+      if ('uri' in this.file && typeof (this.file as any).uri === 'string') {
+        releaseSharedUri((this.file as any).uri);
+      }
       await removePendingUpload(this.transferId);
       try {
         localStorage.removeItem(`p2p_chunk_${this.transferId}`);
@@ -293,6 +311,9 @@ export class Upload {
     if (this.status === 'done' || this.status === 'canceled') return;
     this.abort?.abort();
     this.setStatus('canceled');
+    if ('uri' in this.file && typeof (this.file as any).uri === 'string') {
+      releaseSharedUri((this.file as any).uri);
+    }
     removePendingUpload(this.transferId).catch(() => {});
     try {
       localStorage.removeItem(`p2p_chunk_${this.transferId}`);
@@ -366,7 +387,8 @@ export class Upload {
 
   private async sendChunk(index: number, signal: AbortSignal): Promise<void> {
     const start = index * this.chunkSize;
-    const chunk = this.file.slice(start, start + this.chunkLength(index));
+    const rawChunk = this.file.slice(start, start + this.chunkLength(index));
+    const chunk = rawChunk instanceof Promise ? await rawChunk : rawChunk;
     for (let attempt = 1; ; attempt++) {
       try {
         await this.api.uploadChunk(this.transferId, index, chunk, signal);

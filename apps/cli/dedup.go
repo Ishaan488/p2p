@@ -22,7 +22,37 @@ type HashIndexEntry struct {
 var (
 	hashIndexMu sync.RWMutex
 	hashIndex   = make(map[string]HashIndexEntry) // SHA256 hex -> HashIndexEntry
+	sizeIndex   = make(map[int64]int)             // file size -> count of files
+	sizeIndexed bool
 )
+
+// resetDedupIndexForTesting clears both indexes for isolated test runs.
+func resetDedupIndexForTesting() {
+	hashIndexMu.Lock()
+	defer hashIndexMu.Unlock()
+	hashIndex = make(map[string]HashIndexEntry)
+	sizeIndex = make(map[int64]int)
+	sizeIndexed = false
+}
+
+func ensureSizeIndexLoadedLocked() {
+	if sizeIndexed {
+		return
+	}
+	sizeIndexed = true
+	entries, err := os.ReadDir(receiveDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if info, err := e.Info(); err == nil && info.Size() > 0 {
+			sizeIndex[info.Size()]++
+		}
+	}
+}
 
 type uploadCheckHashRequest struct {
 	Hash      string `json:"hash"`
@@ -31,8 +61,9 @@ type uploadCheckHashRequest struct {
 }
 
 type uploadCheckHashResponse struct {
-	Exists   bool   `json:"exists"`
-	Filename string `json:"filename,omitempty"`
+	Exists       bool   `json:"exists"`
+	HasCandidate bool   `json:"hasCandidate,omitempty"`
+	Filename     string `json:"filename,omitempty"`
 }
 
 // computeFileSHA256 streams the file in bounded 1MB buffers with strictly O(1) memory.
@@ -58,12 +89,29 @@ func recordFileHash(hash string, filePath string, size int64, filename string) {
 	}
 	hashIndexMu.Lock()
 	defer hashIndexMu.Unlock()
+	ensureSizeIndexLoadedLocked()
 	hashIndex[hash] = HashIndexEntry{
 		FilePath:  filePath,
 		Size:      size,
 		Filename:  filename,
 		UpdatedAt: time.Now().Unix(),
 	}
+	if size > 0 {
+		sizeIndex[size]++
+	}
+}
+
+// hasCandidateBySize checks whether any existing file on the PC matches totalSize in O(1) time
+// using the in-memory size index, eliminating O(N) directory scans on every client probe.
+func hasCandidateBySize(totalSize int64) bool {
+	if totalSize <= 0 {
+		return false
+	}
+	hashIndexMu.Lock()
+	ensureSizeIndexLoadedLocked()
+	count := sizeIndex[totalSize]
+	hashIndexMu.Unlock()
+	return count > 0
 }
 
 // lookupFileByHash checks if an identical file already exists on the PC.
@@ -81,12 +129,13 @@ func lookupFileByHash(hash string, totalSize int64) (string, bool) {
 		}
 	}
 
-	// Also check receive directory for existing files
-	transfersMu.Lock()
-	dir := receiveDir
-	transfersMu.Unlock()
+	// If no file of this size exists in sizeIndex, bypass disk scan completely
+	if !hasCandidateBySize(totalSize) {
+		return "", false
+	}
 
-	entries, err := os.ReadDir(dir)
+	// Cold scan of receiveDir for candidate files matching totalSize if not yet computed in hashIndex
+	entries, err := os.ReadDir(receiveDir)
 	if err != nil {
 		return "", false
 	}
@@ -99,9 +148,9 @@ func lookupFileByHash(hash string, totalSize int64) (string, bool) {
 		if err != nil || info.Size() != totalSize {
 			continue
 		}
-		p := filepath.Join(dir, e.Name())
-		computed, err := computeFileSHA256(p)
-		if err == nil {
+
+		p := filepath.Join(receiveDir, e.Name())
+		if computed, err := computeFileSHA256(p); err == nil {
 			recordFileHash(computed, p, info.Size(), e.Name())
 			if computed == hash {
 				return e.Name(), true
@@ -114,12 +163,28 @@ func lookupFileByHash(hash string, totalSize int64) (string, bool) {
 
 func handleUploadCheckHash(w http.ResponseWriter, r *http.Request, s *Session) {
 	var req uploadCheckHashRequest
-	if err := s.readRequest(r, &req); err != nil || req.Hash == "" {
+	if err := s.readRequest(r, &req); err != nil {
 		httpError(w, http.StatusBadRequest, "Invalid request")
 		return
 	}
 
 	cleanName := sanitizeFilename(req.Filename)
+
+	// Probe mode: Client is asking if any file with this TotalSize exists on PC
+	// before spending CPU computing full SHA-256 on multi-gigabyte files.
+	if req.Hash == "" {
+		if req.TotalSize <= 0 {
+			s.writeResponse(w, r, uploadCheckHashResponse{Exists: false, HasCandidate: false})
+			return
+		}
+		hasCand := hasCandidateBySize(req.TotalSize)
+		s.writeResponse(w, r, uploadCheckHashResponse{
+			Exists:       false,
+			HasCandidate: hasCand,
+		})
+		return
+	}
+
 	existingFilename, exists := lookupFileByHash(req.Hash, req.TotalSize)
 	if exists {
 		// Log deduplication skip
@@ -133,14 +198,15 @@ func handleUploadCheckHash(w http.ResponseWriter, r *http.Request, s *Session) {
 			Status:    "Deduplicated (Skipped)",
 		})
 		s.writeResponse(w, r, uploadCheckHashResponse{
-			Exists:   true,
-			Filename: existingFilename,
+			Exists:       true,
+			HasCandidate: true,
+			Filename:     existingFilename,
 		})
 		return
 	}
 
 	s.writeResponse(w, r, uploadCheckHashResponse{
-		Exists: false,
+		Exists:       false,
+		HasCandidate: false,
 	})
 }
-

@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"net"
 	"net/http"
 	"os"
@@ -240,8 +242,65 @@ func getMetaPath(partPath string) string {
 	return strings.TrimSuffix(partPath, ".part") + ".meta.json"
 }
 
+func getJournalPath(partPath string) string {
+	return strings.TrimSuffix(partPath, ".part") + ".meta.journal"
+}
+
+func getDownloadMetaPath(id string) string {
+	transfersMu.Lock()
+	dir := tempDir
+	transfersMu.Unlock()
+	sum := sha256.Sum256([]byte(id))
+	return filepath.Join(dir, hex.EncodeToString(sum[:16])+".dlmeta.json")
+}
+
+func getDownloadJournalPath(id string) string {
+	transfersMu.Lock()
+	dir := tempDir
+	transfersMu.Unlock()
+	sum := sha256.Sum256([]byte(id))
+	return filepath.Join(dir, hex.EncodeToString(sum[:16])+".dlmeta.journal")
+}
+
+func (s *TransferState) appendChunkJournal(chunkIndex int, cHash string) error {
+	if s == nil || s.FilePath == "" {
+		return nil
+	}
+	s.metaMu.Lock()
+	defer s.metaMu.Unlock()
+
+	var jPath string
+	if s.IsDownload {
+		jPath = getDownloadJournalPath(s.ID)
+	} else {
+		jPath = getJournalPath(s.FilePath)
+	}
+
+	var rawHash [16]byte
+	if b, err := hex.DecodeString(cHash); err == nil && len(b) == 16 {
+		copy(rawHash[:], b)
+	}
+
+	var buf [24]byte
+	binary.BigEndian.PutUint32(buf[0:4], uint32(chunkIndex))
+	copy(buf[4:20], rawHash[:])
+	crc := crc32.ChecksumIEEE(buf[0:20])
+	binary.BigEndian.PutUint32(buf[20:24], crc)
+
+	f, err := os.OpenFile(jPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	if _, err := f.Write(buf[:]); err != nil {
+		return err
+	}
+	return f.Sync()
+}
+
 func (s *TransferState) saveMeta() error {
-	if s == nil || s.IsDownload || s.FilePath == "" {
+	if s == nil || s.FilePath == "" {
 		return nil
 	}
 	s.metaMu.Lock()
@@ -282,7 +341,12 @@ func (s *TransferState) saveMeta() error {
 		return fmt.Errorf("marshal metadata: %w", err)
 	}
 
-	metaPath := getMetaPath(s.FilePath)
+	var metaPath string
+	if s.IsDownload {
+		metaPath = getDownloadMetaPath(s.ID)
+	} else {
+		metaPath = getMetaPath(s.FilePath)
+	}
 	tmpPath := fmt.Sprintf("%s.tmp.%d.%d", metaPath, os.Getpid(), time.Now().UnixNano())
 	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
 		return fmt.Errorf("write metadata tmp: %w", err)
@@ -292,21 +356,70 @@ func (s *TransferState) saveMeta() error {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("rename metadata to %s: %w", metaPath, err)
 	}
+
+	// Truncate/remove append-only journal now that full .meta.json checkpoint is safely committed
+	var jPath string
+	if s.IsDownload {
+		jPath = getDownloadJournalPath(s.ID)
+	} else {
+		jPath = getJournalPath(s.FilePath)
+	}
+	_ = os.Remove(jPath)
+
 	return nil
 }
 
 func (s *TransferState) removeMeta() {
-	if s == nil || s.FilePath == "" {
+	if s == nil {
 		return
 	}
 	s.metaMu.Lock()
 	defer s.metaMu.Unlock()
 
-	metaPath := getMetaPath(s.FilePath)
+	var metaPath string
+	var jPath string
+	if s.IsDownload {
+		if s.ID == "" {
+			return
+		}
+		metaPath = getDownloadMetaPath(s.ID)
+		jPath = getDownloadJournalPath(s.ID)
+	} else {
+		if s.FilePath == "" {
+			return
+		}
+		metaPath = getMetaPath(s.FilePath)
+		jPath = getJournalPath(s.FilePath)
+	}
+
 	_ = os.Remove(metaPath)
+	_ = os.Remove(jPath)
 	tmps, _ := filepath.Glob(metaPath + ".tmp*")
 	for _, tp := range tmps {
 		_ = os.Remove(tp)
+	}
+}
+
+func replayJournal(jPath string, meta *persistedTransferMeta) {
+	data, err := os.ReadFile(jPath)
+	if err != nil || len(data) < 24 {
+		return
+	}
+	if len(meta.ChunkHashes) != meta.TotalChunks {
+		meta.ChunkHashes = make([]string, meta.TotalChunks)
+	}
+	for offset := 0; offset+24 <= len(data); offset += 24 {
+		record := data[offset : offset+24]
+		expectedCrc := binary.BigEndian.Uint32(record[20:24])
+		actualCrc := crc32.ChecksumIEEE(record[0:20])
+		if expectedCrc != actualCrc {
+			continue // skip corrupted journal entry
+		}
+		idx := int(binary.BigEndian.Uint32(record[0:4]))
+		if idx >= 0 && idx < meta.TotalChunks {
+			meta.Received[idx] = true
+			meta.ChunkHashes[idx] = hex.EncodeToString(record[4:20])
+		}
 	}
 }
 
@@ -497,6 +610,10 @@ func recoverOrSweepTempDir() int {
 			}
 		}
 
+		// Replay append-only write-ahead chunk journal onto candidate metadata
+		jPath := getJournalPath(partPath)
+		replayJournal(jPath, &best.meta)
+
 		// Adversarial Content Integrity Validation:
 		// Verify that physical .part file bytes on disk match the cryptographic chunk hashes.
 		// If unwritten sparse blocks, interrupted writes, or corruptions occurred, strip phantom chunks.
@@ -542,6 +659,7 @@ func recoverOrSweepTempDir() int {
 		}
 
 		// Clean up all other temporary files for this transfer so they don't linger
+		_ = os.Remove(jPath)
 		for _, cand := range validCandidates {
 			if cand.path != metaPath && cand.path != best.path {
 				_ = os.Remove(cand.path)
@@ -647,6 +765,76 @@ func recoverOrSweepTempDir() int {
 				}
 				_ = os.Remove(mp)
 			}
+		}
+	}
+
+	// Also clean up any orphaned .meta.journal files that have no matching .part file
+	jFiles, _ := filepath.Glob(filepath.Join(dir, "*.meta.journal*"))
+	for _, jp := range jFiles {
+		idx := strings.Index(jp, ".meta.journal")
+		if idx > 0 {
+			basePart := jp[:idx] + ".part"
+			if _, err := os.Stat(basePart); os.IsNotExist(err) {
+				_ = os.Remove(jp)
+			}
+		}
+	}
+
+	// Recover active download transfers (PC sending to mobile)
+	dlMetaFiles, _ := filepath.Glob(filepath.Join(dir, "*.dlmeta.json"))
+	for _, dmp := range dlMetaFiles {
+		data, err := os.ReadFile(dmp)
+		if err != nil {
+			_ = os.Remove(dmp)
+			continue
+		}
+		var meta persistedTransferMeta
+		if err := json.Unmarshal(data, &meta); err != nil {
+			_ = os.Remove(dmp)
+			continue
+		}
+		// Sweep if older than 24h
+		if meta.LastActive > 0 && (now-meta.LastActive) > 86400 {
+			_ = os.Remove(dmp)
+			continue
+		}
+		// Check that the source file still exists and matches expected size
+		fi, err := os.Stat(meta.FilePath)
+		if err != nil || fi.IsDir() || fi.Size() != meta.TotalSize {
+			_ = os.Remove(dmp)
+			continue
+		}
+
+		st := &TransferState{
+			ID:          meta.ID,
+			Filename:    meta.Filename,
+			TotalChunks: meta.TotalChunks,
+			ChunkSize:   meta.ChunkSize,
+			TotalSize:   meta.TotalSize,
+			FilePath:    meta.FilePath,
+			FinalPath:   meta.FinalPath,
+			State:       meta.State,
+			generation:  meta.Generation,
+			IsDownload:  true,
+			IsFolder:    meta.IsFolder,
+			FolderName:  meta.FolderName,
+			LastActive:  meta.LastActive,
+			Owner:       meta.Owner,
+			received:    meta.Received,
+			chunkHashes: meta.ChunkHashes,
+		}
+
+		transfersMu.Lock()
+		transfers[st.ID] = st
+		transfersMu.Unlock()
+		recoveredCount++
+	}
+
+	// Clean up any stale *.dlmeta.json.tmp* files older than 10 minutes
+	tmpDlFiles, _ := filepath.Glob(filepath.Join(dir, "*.dlmeta.json.tmp*"))
+	for _, tmpP := range tmpDlFiles {
+		if fi, err := os.Stat(tmpP); err == nil && now-fi.ModTime().Unix() > 600 {
+			_ = os.Remove(tmpP)
 		}
 	}
 

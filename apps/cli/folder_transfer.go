@@ -215,8 +215,7 @@ func startSendFolderTransferTargeted(folderPath string, targetDevice *Device) er
 		ownerID = targetDevice.ID
 	}
 
-	transfersMu.Lock()
-	transfers[transferID] = &TransferState{
+	state := &TransferState{
 		ID:          transferID,
 		Filename:    folderName + ".zip",
 		TotalChunks: totalChunks,
@@ -229,7 +228,14 @@ func startSendFolderTransferTargeted(folderPath string, targetDevice *Device) er
 		Owner:       ownerID,
 		LastActive:  time.Now().Unix(),
 	}
+
+	transfersMu.Lock()
+	transfers[transferID] = state
 	transfersMu.Unlock()
+
+	if err := state.saveMeta(); err != nil {
+		fmt.Printf("Warning: failed to persist folder download state: %v\n", err)
+	}
 
 	targetLabel := "all devices"
 	if targetDevice != nil {

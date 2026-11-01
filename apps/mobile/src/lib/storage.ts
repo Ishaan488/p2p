@@ -99,12 +99,12 @@ export async function deleteBlobFromCache(key: string): Promise<void> {
 export async function savePendingUpload(
   transferId: string,
   messageId: string,
-  file: File,
+  file: { name: string; size: number; lastModified?: number; type?: string },
   priority: 'high' | 'normal' | 'low' = 'normal'
 ): Promise<void> {
   try {
-    // Only cache files up to 250 MB in IndexedDB to avoid exhausting mobile webview quota
-    if (file.size <= 250 * 1024 * 1024) {
+    // Only cache files up to 250 MB in IndexedDB if they are native Blobs, to avoid exhausting mobile webview quota
+    if (file instanceof Blob && file.size <= 250 * 1024 * 1024) {
       await saveBlobToCache(`pending-${transferId}`, file);
     }
     const raw = localStorage.getItem(PENDING_UPLOADS_META_KEY);

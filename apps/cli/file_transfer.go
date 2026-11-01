@@ -481,10 +481,23 @@ func handleUploadChunk(w http.ResponseWriter, r *http.Request, s *Session) {
 	count := state.receivedCount
 	state.mu.Unlock()
 
-	if err := state.saveMeta(); err != nil {
-		printAsync(Red, "! Meta Error", state.Filename, fmt.Sprintf("metadata persistence failed: %v", err))
-		httpError(w, http.StatusInternalServerError, "Failed to persist transfer metadata")
+	// Persist chunk receipt to fast append-only write-ahead journal before acknowledging HTTP 200
+	if err := state.appendChunkJournal(chunkIndex, cHash); err != nil {
+		printAsync(Red, "! Journal Error", state.Filename, fmt.Sprintf("chunk journal write failed: %v", err))
+		httpError(w, http.StatusInternalServerError, "Failed to persist transfer chunk receipt")
 		return
+	}
+
+	// Periodic full metadata checkpoint every 64 chunks or on transfer completion
+	if count%64 == 0 || count == state.TotalChunks {
+		state.fileMu.RLock()
+		if state.File != nil {
+			_ = state.File.Sync()
+		}
+		state.fileMu.RUnlock()
+		if err := state.saveMeta(); err != nil {
+			printAsync(Red, "! Meta Error", state.Filename, fmt.Sprintf("metadata checkpoint failed: %v", err))
+		}
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -668,6 +681,13 @@ func finalizeUpload(state *TransferState, dir string) (string, error) {
 	state.FinalPath = finalPath
 	state.mu.Unlock()
 
+	// Ensure all chunk data blocks are flushed and durable on disk before finalization
+	state.fileMu.RLock()
+	if state.File != nil {
+		_ = state.File.Sync()
+	}
+	state.fileMu.RUnlock()
+
 	if err := state.saveMeta(); err != nil {
 		return "", fmt.Errorf("persist finalization metadata: %w", err)
 	}
@@ -795,6 +815,10 @@ func handleDownloadChunk(w http.ResponseWriter, r *http.Request, s *Session) {
 		httpError(w, http.StatusNotFound, "Unknown transfer")
 		return
 	}
+	state.mu.Lock()
+	state.LastActive = time.Now().Unix()
+	state.mu.Unlock()
+
 	chunkIndex, err := strconv.Atoi(r.URL.Query().Get("chunkIndex"))
 	if err != nil || chunkIndex < 0 || chunkIndex >= state.TotalChunks {
 		httpError(w, http.StatusBadRequest, "Invalid chunk index")
@@ -883,8 +907,7 @@ func startSendTransferTargeted(filePath string, targetDevice *Device) error {
 		ownerID = targetDevice.ID
 	}
 
-	transfersMu.Lock()
-	transfers[transferId] = &TransferState{
+	state := &TransferState{
 		ID:          transferId,
 		Filename:    filename,
 		TotalChunks: totalChunks,
@@ -895,7 +918,15 @@ func startSendTransferTargeted(filePath string, targetDevice *Device) error {
 		Owner:       ownerID,
 		LastActive:  time.Now().Unix(),
 	}
+
+	transfersMu.Lock()
+	transfers[transferId] = state
 	transfersMu.Unlock()
+
+	// Persist download state so desktop terminal restarts don't cause 404 for mobile
+	if err := state.saveMeta(); err != nil {
+		fmt.Printf("Warning: failed to persist download state: %v\n", err)
+	}
 
 	// Notify phone to start download
 	msg := Message{

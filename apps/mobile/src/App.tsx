@@ -5,15 +5,18 @@ import { HttpError, Pairing, ServerApi, ServerSettings, isNetworkError, pairWith
 import { randomHex } from './lib/crypto';
 import {
   downloadEncrypted,
+  downloadDirectToDisk,
   saveToDeviceDownloads,
-  downloadWithSystemManager,
   getDownloadSubDir,
-  setDownloadSubDir
+  setDownloadSubDir,
+  clearDownloadCache,
+  FileSaver
 } from './lib/downloads';
 import {
   Upload,
   UploadQueue,
   UploadPriority,
+  UploadableFile,
   transferIdFor,
   BatchStats,
   getClientBandwidthLimitBps,
@@ -26,7 +29,7 @@ import {
   Sun, Moon, Monitor, Sliders
 } from 'lucide-react';
 import { BrandLogo } from './components/BrandLogo';
-import { checkPendingShare, onSharedData } from './lib/shareTarget';
+import { checkPendingShare, onSharedData, NativeSharedFile } from './lib/shareTarget';
 import { Capacitor } from '@capacitor/core';
 import { Html5Qrcode } from 'html5-qrcode';
 import { Clipboard } from '@capacitor/clipboard';
@@ -63,6 +66,7 @@ const transport = new WebSocketTransport();
 const api = new ServerApi();
 const uploadQueue = new UploadQueue();
 const uploads = new Map<string, Upload>(); // live uploads by message id
+const activeDownloads = new Map<string, AbortController>(); // live downloads by message id
 
 const defaultAddress = () => {
   if (Capacitor.isNativePlatform() || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
@@ -132,10 +136,6 @@ const describeFailure = (err: unknown, host: string) => {
   return `${timedOut ? 'No answer from' : 'Could not reach'} the desktop at ${host}. Check that the address is correct, P2P Link is running on your PC, ` +
     'and both devices are connected to the same Wi-Fi (campus/public Wi-Fi often isolates devices; use a mobile hotspot if needed).';
 };
-
-const DIRECT_DOWNLOAD_ABOVE = 100 * 1024 * 1024;
-const usesDirectDownload = (file: { totalSize: number }) =>
-  file.totalSize > DIRECT_DOWNLOAD_ABOVE;
 
 const ACTIVE_UPLOAD: string[] = ['queued', 'uploading', 'paused', 'error'];
 
@@ -314,9 +314,12 @@ export default function App() {
     return stop;
   }, [status]);
 
-  // Back button init
+  // Back button and lifecycle cleanup init
   useEffect(() => {
     backButtonManager.init(showToast);
+    if (Capacitor.isNativePlatform()) {
+      FileSaver.cleanupAbandonedPendingDownloads().catch(() => {});
+    }
   }, []);
 
   // Batch progress listener
@@ -375,6 +378,27 @@ export default function App() {
   useEffect(() => {
     if (status === 'connected' && transport.isConnected()) {
       uploadQueue.resumeInterrupted(uploads.values());
+
+      // Auto-resume interrupted downloads on connect
+      setMessages(prev => {
+        const interrupted = prev.filter(m =>
+          m.sender === 'other' &&
+          m.file &&
+          !m.file.isDownloading &&
+          (m.file.status === 'interrupted' || m.file.status === 'error' || (m.file.error && m.file.progress && m.file.progress > 0 && m.file.progress < 100))
+        );
+        if (interrupted.length > 0) {
+          setTimeout(() => {
+            for (const item of interrupted) {
+              if (item.file) {
+                handleDownload(item.id, item.file, item.file.saveToDisk ?? true);
+              }
+            }
+          }, 600);
+        }
+        return prev;
+      });
+
       api.getSettings().then(s => {
         setServerSettings(s);
         if (s.pcAlias && pairing && s.pcAlias !== pairing.serverName) {
@@ -392,6 +416,27 @@ export default function App() {
       }
     }
   }, [status, pendingOutbox]);
+
+  // Auto-reconnect when connection drops (e.g. desktop closed / restarted)
+  useEffect(() => {
+    if (status !== 'disconnected' && status !== 'error') return;
+    if (!api.pairing || localStorage.getItem('p2p_auto_connect') === 'false') return;
+
+    let active = true;
+    const timer = setTimeout(async () => {
+      if (!active || transport.isConnected()) return;
+      try {
+        await connectTo(savedAddress());
+      } catch {
+        // Will retry on next tick
+      }
+    }, 2500);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [status]);
 
   // Auto-reconnect when Wi-Fi recovers
   useEffect(() => {
@@ -417,11 +462,10 @@ export default function App() {
         showToast(`Receiving ${data.files.length} shared file(s)`, 'info');
         for (const f of data.files) {
           try {
-            const fileUrl = Capacitor.convertFileSrc(f.path);
-            const resp = await fetch(fileUrl);
-            const blob = await resp.blob();
-            const file = new File([blob], f.name, { type: f.mimeType });
-            sendFile(file);
+            if (f.uri || f.path) {
+              const nativeFile = new NativeSharedFile(f);
+              sendFile(nativeFile);
+            }
           } catch (e) {
             console.error('Failed to import shared file', e);
           }
@@ -443,13 +487,20 @@ export default function App() {
   }, []);
 
   const cancelUpload = (id: string, transferId: string) => {
+    const dlCtrl = activeDownloads.get(id);
+    if (dlCtrl) {
+      dlCtrl.abort();
+      activeDownloads.delete(id);
+    }
+    clearDownloadCache(transferId);
+
     const upload = uploads.get(id);
     if (upload) {
       uploadQueue.cancel(upload);
     } else {
       removePendingUpload(transferId).catch(() => {});
       api.call('/upload_cancel', { transferId }).catch(() => { });
-      updateFile(id, { status: 'canceled' });
+      updateFile(id, { status: 'canceled', isDownloading: false });
     }
   };
 
@@ -670,31 +721,79 @@ export default function App() {
   }, []);
 
   const handleDownload = async (id: string, file: NonNullable<TransferItem['file']>, saveToDisk = true) => {
-    updateFile(id, { isDownloading: true, progress: 0, error: undefined });
-
-    if (saveToDisk && usesDirectDownload(file)) {
+    // 1. Fast path: if saving to disk and file was already downloaded (e.g. from Preview)
+    if (saveToDisk && file.blobUrl) {
       try {
-        const url = await api.directDownloadUrl(file.transferId);
-        const enqueued = await downloadWithSystemManager(url, file.filename, undefined, downloadSubDir);
-        if (enqueued) {
-          updateFile(id, { isDownloading: false, progress: 100 });
-          showToast(`Direct download queued in system manager: ${file.filename}`, 'success');
-          return;
+        const res = await fetch(file.blobUrl);
+        if (res.ok) {
+          const existingBlob = await res.blob();
+          const targetLabel = downloadSubDir ? `Downloads/${downloadSubDir}` : 'Downloads';
+          updateFile(id, { isDownloading: true, status: 'saving', progress: 0, savedBytes: 0, error: undefined });
+          const saveRes = await saveToDeviceDownloads(
+            existingBlob,
+            file.filename,
+            undefined,
+            downloadSubDir,
+            (written, total) => {
+              const pct = total > 0 ? (written / total) * 100 : 100;
+              updateFile(id, { progress: pct, savedBytes: written, status: 'saving' });
+            }
+          );
+          if (saveRes.success) {
+            showToast(`Saved ${file.filename} to ${targetLabel}`, 'success');
+            updateFile(id, { isDownloading: false, status: 'done', progress: 100, savedBytes: undefined });
+            return;
+          }
         }
       } catch (err) {
-        console.warn('System download manager failed, falling back to encrypted chunk download', err);
+        console.warn('Fast path save failed, falling back to fresh download:', err);
       }
     }
 
+    const existingCtrl = activeDownloads.get(id);
+    if (existingCtrl) {
+      existingCtrl.abort();
+    }
+    const abortCtrl = new AbortController();
+    activeDownloads.set(id, abortCtrl);
+
+    updateFile(id, { isDownloading: true, status: 'downloading', error: undefined, saveToDisk });
+
     try {
+      if (saveToDisk && Capacitor.isNativePlatform()) {
+        const targetLabel = downloadSubDir ? `Downloads/${downloadSubDir}` : 'Downloads';
+        const res = await downloadDirectToDisk(api, {
+          transferId: file.transferId,
+          totalChunks: file.totalChunks,
+          totalSize: file.totalSize
+        }, {
+          filename: file.filename,
+          subDir: downloadSubDir
+        }, (received, speed, eta) => {
+          const pct = file.totalSize > 0 ? (received / file.totalSize) * 100 : 100;
+          updateFile(id, { progress: pct, speed, eta, status: 'downloading' });
+        }, abortCtrl.signal);
+
+        activeDownloads.delete(id);
+        if (res.success) {
+          showToast(`Saved ${file.filename} to ${targetLabel}`, 'success');
+        } else {
+          showToast(`Downloaded ${file.filename}`, 'success');
+        }
+        updateFile(id, { isDownloading: false, status: 'done', progress: 100, savedBytes: undefined });
+        return;
+      }
+
       const blob = await downloadEncrypted(api, {
         transferId: file.transferId,
         totalChunks: file.totalChunks,
         totalSize: file.totalSize
       }, (received, speed, eta) => {
         const pct = file.totalSize > 0 ? (received / file.totalSize) * 100 : 100;
-        updateFile(id, { progress: pct, speed, eta });
-      });
+        updateFile(id, { progress: pct, speed, eta, status: 'downloading' });
+      }, abortCtrl.signal);
+
+      activeDownloads.delete(id);
 
       const url = URL.createObjectURL(blob);
       const isImg = file.mediaKind === 'image' || isImageFilename(file.filename);
@@ -706,19 +805,42 @@ export default function App() {
         thumb = await generateVideoThumbnailDataUrl(blob);
       }
       await saveBlobToCache(file.transferId, blob);
-      updateFile(id, { isDownloading: false, progress: 100, blobUrl: url, thumbnailUrl: thumb });
 
       if (saveToDisk) {
-        await saveToDeviceDownloads(blob, file.filename, undefined, downloadSubDir);
         const targetLabel = downloadSubDir ? `Downloads/${downloadSubDir}` : 'Downloads';
-        showToast(`Saved ${file.filename} to ${targetLabel}`, 'success');
+        updateFile(id, { isDownloading: true, status: 'saving', progress: 0, savedBytes: 0, blobUrl: url, thumbnailUrl: thumb });
+        const saveRes = await saveToDeviceDownloads(
+          blob,
+          file.filename,
+          undefined,
+          downloadSubDir,
+          (written, total) => {
+            const pct = total > 0 ? (written / total) * 100 : 100;
+            updateFile(id, { progress: pct, savedBytes: written, status: 'saving' });
+          }
+        );
+        if (saveRes.success) {
+          showToast(`Saved ${file.filename} to ${targetLabel}`, 'success');
+        } else {
+          showToast(`Downloaded ${file.filename}`, 'success');
+        }
+        updateFile(id, { isDownloading: false, status: 'done', progress: 100, savedBytes: undefined });
+      } else {
+        updateFile(id, { isDownloading: false, progress: 100, status: 'done', blobUrl: url, thumbnailUrl: thumb });
       }
     } catch (err) {
+      activeDownloads.delete(id);
+      if (abortCtrl.signal.aborted) {
+        return;
+      }
+      const rawMsg = err instanceof Error ? err.message : 'Download failed';
+      const isInterrupted = !transport.isConnected() || rawMsg.includes('Failed to fetch') || rawMsg.includes('Network') || rawMsg.includes('Connection') || rawMsg.includes('timed out');
       updateFile(id, {
         isDownloading: false,
-        error: err instanceof Error ? err.message : 'Download failed'
+        status: isInterrupted ? 'interrupted' : 'error',
+        error: isInterrupted ? 'Interrupted — will resume when reconnected' : rawMsg
       });
-      showToast(`Failed to download ${file.filename}`, 'warning');
+      showToast(isInterrupted ? `Download paused: ${file.filename}` : `Failed to download ${file.filename}`, 'warning');
     }
   };
 
@@ -915,7 +1037,7 @@ export default function App() {
     }
   };
 
-  const sendFile = async (file: File, priority: UploadPriority = 'normal') => {
+  const sendFile = async (file: File | UploadableFile, priority: UploadPriority = 'normal') => {
     const transferId = transferIdFor(getDeviceId(), file);
     const msgId = `msg-${transferId}`;
 
@@ -935,21 +1057,23 @@ export default function App() {
     let fullContent: string | undefined = undefined;
     let totalLines: number | undefined = undefined;
 
-    if (kind === 'image' && file.size < 50 * 1024 * 1024) {
-      blobUrl = URL.createObjectURL(file);
-      thumbnailUrl = await generateThumbnailDataUrl(file);
-      saveBlobToCache(transferId, file);
-    } else if ((kind === 'audio' || kind === 'video' || kind === 'pdf') && file.size < 120 * 1024 * 1024) {
-      blobUrl = URL.createObjectURL(file);
-      if (kind === 'video') {
-        thumbnailUrl = await generateVideoThumbnailDataUrl(file);
+    if (file instanceof Blob) {
+      if (kind === 'image' && file.size < 50 * 1024 * 1024) {
+        blobUrl = URL.createObjectURL(file);
+        thumbnailUrl = await generateThumbnailDataUrl(file);
+        saveBlobToCache(transferId, file);
+      } else if ((kind === 'audio' || kind === 'video' || kind === 'pdf') && file.size < 120 * 1024 * 1024) {
+        blobUrl = URL.createObjectURL(file);
+        if (kind === 'video') {
+          thumbnailUrl = await generateVideoThumbnailDataUrl(file);
+        }
+        saveBlobToCache(transferId, file);
+      } else if (kind === 'code') {
+        const extracted = await extractTextSnippet(file);
+        snippet = extracted.snippet;
+        fullContent = extracted.fullContent;
+        totalLines = extracted.totalLines;
       }
-      saveBlobToCache(transferId, file);
-    } else if (kind === 'code') {
-      const extracted = await extractTextSnippet(file);
-      snippet = extracted.snippet;
-      fullContent = extracted.fullContent;
-      totalLines = extracted.totalLines;
     }
 
     const upload = new Upload(api, file, transferId, p => {
@@ -1567,10 +1691,23 @@ export default function App() {
                       showToast('Transfer rejected', 'info');
                     }}
                     onPauseUpload={(id) => {
+                      const dlCtrl = activeDownloads.get(id);
+                      if (dlCtrl) {
+                        dlCtrl.abort();
+                        activeDownloads.delete(id);
+                        updateFile(id, { isDownloading: false, status: 'paused' });
+                        showToast('Download paused', 'info');
+                        return;
+                      }
                       const u = uploads.get(id);
                       if (u) uploadQueue.pause(u);
                     }}
                     onResumeUpload={(id) => {
+                      const item = messages.find(m => m.id === id);
+                      if (item?.sender === 'other' && item?.file) {
+                        handleDownload(id, item.file, item.file.saveToDisk ?? true);
+                        return;
+                      }
                       const u = uploads.get(id);
                       if (u) uploadQueue.enqueue(u);
                     }}

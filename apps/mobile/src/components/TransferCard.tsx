@@ -60,6 +60,8 @@ export interface TransferItem {
     fullContent?: string;
     totalLines?: number;
     isPendingApproval?: boolean;
+    saveToDisk?: boolean;
+    savedBytes?: number;
   };
   sender: 'me' | 'other';
   timestamp: number;
@@ -149,6 +151,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [justCopied, setJustCopied] = useState(false);
+  const [imageFailed, setImageFailed] = useState(false);
 
   const isSent = item.sender === 'me';
   const file = item.file;
@@ -162,9 +165,9 @@ export const TransferCard: React.FC<TransferCardProps> = ({
     /\.(mp4|mkv|mov|webm|avi|m4v|3gp)$/i.test(file.filename)
   );
 
-  const hasVisualMedia = (isImageFile || isVideoFile) && !!(file?.blobUrl || file?.thumbnailUrl);
+  const hasVisualMedia = !imageFailed && (isImageFile || isVideoFile) && !!(file?.blobUrl || file?.thumbnailUrl);
   const hasRichEmbed =
-    (!!file?.blobUrl && (file.mediaKind === 'audio' || file.mediaKind === 'pdf')) ||
+    (!!file?.blobUrl && file.mediaKind === 'audio') ||
     !!file?.snippet;
 
   const isTextLong = !!item.text && item.text.length > 240;
@@ -183,19 +186,19 @@ export const TransferCard: React.FC<TransferCardProps> = ({
     setTimeout(() => setJustCopied(false), 1800);
   };
 
-  // Inline direction metadata pill + info row with strict non-wrapping ellipsis truncation
+  // Inline direction metadata pill + info row with responsive wrapping and protected text
   const renderDirectionMeta = (extraText?: string) => (
     <div
       className="meta-inline-row"
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: '0.35rem',
-        fontSize: '0.71rem',
+        gap: '0.32rem',
+        fontSize: '0.72rem',
         minWidth: 0,
-        flexWrap: 'nowrap',
-        overflow: 'hidden',
-        whiteSpace: 'nowrap',
+        flexWrap: 'wrap',
+        rowGap: '2px',
+        lineHeight: 1.35,
       }}
     >
       <span
@@ -223,34 +226,47 @@ export const TransferCard: React.FC<TransferCardProps> = ({
         <span>{isSent ? 'Sent' : 'Received'}</span>
       </span>
 
+      {extraText && (
+        <span
+          style={{
+            flexShrink: 0,
+            color: 'var(--text-secondary)',
+            fontFamily: 'var(--font-mono)',
+            fontSize: '0.70rem',
+            whiteSpace: 'nowrap'
+          }}
+        >
+          <span style={{ color: 'var(--text-tertiary)', marginRight: '0.28rem' }}>·</span>
+          {extraText}
+        </span>
+      )}
+
       <span
         style={{
-          minWidth: 0,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-          color: 'var(--text-secondary)',
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: '0.28rem',
-          fontSize: '0.71rem',
+          flexShrink: 0,
+          color: 'var(--text-tertiary)',
+          fontSize: '0.70rem',
+          whiteSpace: 'nowrap'
         }}
       >
-        {extraText && (
-          <>
-            <span style={{ color: 'var(--text-tertiary)' }}>·</span>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.69rem' }}>{extraText}</span>
-          </>
-        )}
-        <span style={{ color: 'var(--text-tertiary)' }}>·</span>
-        <span style={{ color: 'var(--text-tertiary)' }}>{timeStr}</span>
-        {item.isPending && (
-          <>
-            <span style={{ color: 'var(--text-tertiary)' }}>·</span>
-            <span style={{ color: 'var(--warning)', fontWeight: 600 }}>Queued</span>
-          </>
-        )}
+        <span style={{ marginRight: '0.28rem' }}>·</span>
+        {timeStr}
       </span>
+
+      {item.isPending && (
+        <span
+          style={{
+            flexShrink: 0,
+            color: 'var(--warning)',
+            fontWeight: 600,
+            fontSize: '0.70rem',
+            whiteSpace: 'nowrap'
+          }}
+        >
+          <span style={{ color: 'var(--text-tertiary)', marginRight: '0.28rem' }}>·</span>
+          Queued
+        </span>
+      )}
     </div>
   );
 
@@ -662,6 +678,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                 src={file.blobUrl || file.thumbnailUrl}
                 alt={file.filename}
                 loading="lazy"
+                onError={() => setImageFailed(true)}
                 style={{
                   width: '100%',
                   height: '100%',
@@ -729,6 +746,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                   src={file.thumbnailUrl}
                   alt={file.filename}
                   className="video-thumbnail-img"
+                  onError={() => setImageFailed(true)}
                   style={{
                     width: '100%',
                     height: '100%',
@@ -797,21 +815,19 @@ export const TransferCard: React.FC<TransferCardProps> = ({
             className="media-unified-footer"
             style={{
               display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '0.5rem',
-              minWidth: 0
+              flexDirection: 'column',
+              gap: '0.35rem',
+              minWidth: 0,
+              width: '100%'
             }}
           >
             <div
-              className="media-footer-info"
               style={{
                 display: 'flex',
-                flexDirection: 'column',
-                gap: '0.18rem',
-                minWidth: 0,
-                flex: 1,
-                overflow: 'hidden'
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '0.5rem',
+                minWidth: 0
               }}
             >
               <span
@@ -825,68 +841,78 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                   whiteSpace: 'nowrap',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
-                  display: 'block'
+                  minWidth: 0,
+                  flex: 1
                 }}
               >
                 {file.filename}
               </span>
-              {renderDirectionMeta(`${formatBytes(file.totalSize)} · ${fileExt}`)}
-            </div>
 
-            <div className="card-actions-group" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}>
-              <button
-                type="button"
-                className="card-pill-btn"
-                onClick={() => {
-                  if (isImageFile) {
-                    const src = file.blobUrl || file.thumbnailUrl!;
-                    onOpenMedia({
-                      type: 'image',
-                      src,
-                      filename: file.filename,
-                      fileSize: file.totalSize,
-                      onDownload: () => onDownload(item.id, file, true)
-                    });
-                  } else if (isVideoFile) {
-                    if (file.blobUrl) {
+              <div className="card-actions-group" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}>
+                <button
+                  type="button"
+                  className="card-pill-btn"
+                  onClick={() => {
+                    if (isImageFile) {
+                      const src = file.blobUrl || file.thumbnailUrl!;
                       onOpenMedia({
-                        type: 'video',
-                        src: file.blobUrl,
+                        type: 'image',
+                        src,
                         filename: file.filename,
                         fileSize: file.totalSize,
                         onDownload: () => onDownload(item.id, file, true)
                       });
-                    } else {
-                      onDownload(item.id, file, false);
+                    } else if (isVideoFile) {
+                      if (file.blobUrl) {
+                        onOpenMedia({
+                          type: 'video',
+                          src: file.blobUrl,
+                          filename: file.filename,
+                          fileSize: file.totalSize,
+                          onDownload: () => onDownload(item.id, file, true)
+                        });
+                      } else {
+                        onDownload(item.id, file, false);
+                      }
                     }
-                  }
-                }}
-                title="Preview media"
-              >
-                <Eye size={13} />
-                <span>Preview</span>
-              </button>
+                  }}
+                  title="Preview media"
+                >
+                  <Eye size={13} />
+                  <span>Preview</span>
+                </button>
 
-              <button
-                type="button"
-                className="card-pill-btn card-pill-primary"
-                onClick={() => onDownload(item.id, file, true)}
-                disabled={file.isDownloading}
-                title="Save file"
-              >
-                <Download size={13} />
-                <span>{file.isDownloading ? `${Math.round(file.progress || 0)}%` : 'Save'}</span>
-              </button>
+                <button
+                  type="button"
+                  className="card-pill-btn card-pill-primary"
+                  onClick={() => onDownload(item.id, file, true)}
+                  disabled={file.isDownloading || file.status === 'saving'}
+                  title="Save file"
+                >
+                  <Download size={13} />
+                  <span>
+                    {file.status === 'saving'
+                      ? `Saving ${Math.round(file.progress || 0)}%`
+                      : file.isDownloading
+                      ? `${Math.round(file.progress || 0)}%`
+                      : 'Save'}
+                  </span>
+                </button>
 
-              <button
-                type="button"
-                className="card-icon-only-btn"
-                onClick={() => onDelete(item.id)}
-                title="Remove"
-                aria-label="Remove"
-              >
-                <Trash2 size={13} />
-              </button>
+                <button
+                  type="button"
+                  className="card-icon-only-btn"
+                  onClick={() => onDelete(item.id)}
+                  title="Remove"
+                  aria-label="Remove"
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            </div>
+
+            <div style={{ width: '100%', minWidth: 0 }}>
+              {renderDirectionMeta(`${formatBytes(file.totalSize)} · ${fileExt}`)}
             </div>
           </div>
         </div>
@@ -988,134 +1014,173 @@ export const TransferCard: React.FC<TransferCardProps> = ({
       )}
 
       {/* =========================================================
-          5. SINGLE-ROW FILE CARD (Apple Files / Clean Spatial Style)
-          No nested boxes! Clean squircle icon + title/meta + action pills
+          5. FILE CARD (Two-Row Apple Files Layout: Full-Width Meta)
           ========================================================= */}
       {file && !file.isPendingApproval && !hasVisualMedia && !hasRichEmbed && (
         <div
-          className="file-single-row-layout"
+          className="file-card-layout"
           style={{
             display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '0.65rem',
+            flexDirection: 'column',
+            gap: '0.45rem',
+            width: '100%',
             minWidth: 0
           }}
         >
+          {/* Top row: Squircle Icon + Filename on left, Action buttons on right */}
           <div
-            className="file-row-main"
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: '0.75rem',
-              minWidth: 0,
-              flex: 1,
-              overflow: 'hidden'
+              justifyContent: 'space-between',
+              gap: '0.65rem',
+              width: '100%',
+              minWidth: 0
             }}
           >
             <div
-              className="file-squircle-icon"
               style={{
-                width: '40px',
-                height: '40px',
-                borderRadius: '10px',
-                background: 'var(--surface-secondary)',
-                border: '1px solid var(--border-subtle)',
-                color: 'var(--accent)',
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0
-              }}
-            >
-              {getFileIcon(file.filename, file.mediaKind)}
-            </div>
-            <div
-              className="file-row-text"
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '0.2rem',
+                gap: '0.75rem',
                 minWidth: 0,
                 flex: 1,
                 overflow: 'hidden'
               }}
             >
+              <div
+                className="file-squircle-icon"
+                style={{
+                  width: '38px',
+                  height: '38px',
+                  borderRadius: '10px',
+                  background: 'var(--surface-secondary)',
+                  border: '1px solid var(--border-subtle)',
+                  color: 'var(--accent)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0
+                }}
+              >
+                {getFileIcon(file.filename, file.mediaKind)}
+              </div>
               <span
                 className="file-row-title"
                 title={file.filename}
                 style={{
-                  fontSize: '0.86rem',
+                  fontSize: '0.88rem',
                   fontWeight: 600,
                   letterSpacing: '-0.01em',
                   color: 'var(--text-primary)',
                   whiteSpace: 'nowrap',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
-                  display: 'block'
+                  minWidth: 0,
+                  flex: 1
                 }}
               >
                 {file.filename}
               </span>
-              {renderDirectionMeta(`${formatBytes(file.totalSize)} · ${fileExt}`)}
+            </div>
+
+            <div
+              className="card-actions-group"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                flexShrink: 0
+              }}
+            >
+              {/* If actively downloading or saving to disk, don't show preview or duplicate save pills */}
+              {!file.isDownloading && file.status !== 'saving' && (
+                <>
+                  {/* Interrupted or Error: show Resume pill */}
+                  {(!isSent && (file.status === 'interrupted' || file.status === 'paused' || !!file.error)) ? (
+                    <button
+                      type="button"
+                      className="card-pill-btn card-pill-primary"
+                      onClick={() => onResumeUpload(item.id)}
+                      title="Resume download"
+                    >
+                      <RotateCcw size={13} />
+                      <span>Resume</span>
+                    </button>
+                  ) : file.blobUrl ? (
+                    /* Completed / Saved: Only images & videos retain in-app Preview lightbox */
+                    (isImageFile || isVideoFile) && (
+                      <button
+                        type="button"
+                        className="card-pill-btn"
+                        onClick={() => {
+                          if (isImageFile || isVideoFile) {
+                            onOpenMedia({
+                              type: isVideoFile ? 'video' : 'image',
+                              src: file.blobUrl!,
+                              filename: file.filename,
+                              fileSize: file.totalSize,
+                              onDownload: () => onDownload(item.id, file, true)
+                            });
+                          }
+                        }}
+                        title="Preview media"
+                      >
+                        <Eye size={13} />
+                        <span>Preview</span>
+                      </button>
+                    )
+                  ) : (
+                    /* Ready to download: Only images & videos get Preview; all other files get single prominent Save button */
+                    <>
+                      {(isImageFile || isVideoFile) && (
+                        <button
+                          type="button"
+                          className="card-pill-btn"
+                          onClick={() => onDownload(item.id, file, false)}
+                          title="Preview media"
+                        >
+                          <Eye size={13} />
+                          <span>Preview</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="card-pill-btn card-pill-primary"
+                        onClick={() => onDownload(item.id, file, true)}
+                        title="Save to device"
+                      >
+                        <Download size={13} />
+                        <span>Save</span>
+                      </button>
+                    </>
+                  )}
+                </>
+              )}
+
+              <button
+                type="button"
+                className="card-icon-only-btn"
+                onClick={() => onDelete(item.id)}
+                title="Remove"
+                aria-label="Remove"
+              >
+                <Trash2 size={13} />
+              </button>
             </div>
           </div>
 
-          <div
-            className="card-actions-group"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.35rem',
-              flexShrink: 0
-            }}
-          >
-            {(isImageFile ||
-              isVideoFile ||
-              file.mediaKind === 'audio' ||
-              file.mediaKind === 'code' ||
-              file.mediaKind === 'pdf') &&
-              !file.blobUrl && (
-                <button
-                  type="button"
-                  className="card-pill-btn"
-                  onClick={() => onDownload(item.id, file, false)}
-                  disabled={file.isDownloading}
-                  title="Preview file"
-                >
-                  <Eye size={13} />
-                  <span>Preview</span>
-                </button>
-              )}
-
-            <button
-              type="button"
-              className="card-pill-btn card-pill-primary"
-              onClick={() => onDownload(item.id, file, true)}
-              disabled={file.isDownloading}
-              title="Save to device"
-            >
-              <Download size={13} />
-              <span>{file.isDownloading ? `${Math.round(file.progress || 0)}%` : 'Save'}</span>
-            </button>
-
-            <button
-              type="button"
-              className="card-icon-only-btn"
-              onClick={() => onDelete(item.id)}
-              title="Remove"
-              aria-label="Remove"
-            >
-              <Trash2 size={13} />
-            </button>
+          {/* Full-width metadata row: gives the entire width of the card to details! */}
+          <div style={{ width: '100%', minWidth: 0, paddingLeft: '2px' }}>
+            {renderDirectionMeta(`${formatBytes(file.totalSize)} · ${fileExt}`)}
           </div>
         </div>
       )}
 
       {/* =========================================================
-          6. LIVE PROGRESS BAR (Active Upload or Download)
+          6. LIVE PROGRESS BAR (Active / Interrupted / Error Downloads)
           ========================================================= */}
-      {file && !file.isPendingApproval && !isSent && file.isDownloading && (
+      {file && !file.isPendingApproval && !isSent && (file.isDownloading || file.status === 'saving' || file.status === 'interrupted' || file.status === 'paused' || (!!file.error && (file.progress || 0) > 0)) && (
         <div className="progress-container" style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', paddingTop: '0.25rem' }}>
           <div
             className="progress-bar-track"
@@ -1130,7 +1195,13 @@ export const TransferCard: React.FC<TransferCardProps> = ({
               className="progress-bar-indicator"
               style={{
                 height: '100%',
-                background: 'var(--accent)',
+                background: file.status === 'saving'
+                  ? 'var(--success)'
+                  : file.isDownloading
+                  ? 'var(--accent)'
+                  : (file.status === 'interrupted' || file.status === 'paused')
+                  ? 'var(--warning)'
+                  : 'var(--error)',
                 borderRadius: 'var(--radius-full, 9999px)',
                 transition: 'width 140ms linear',
                 width: `${Math.min(100, file.progress || 0)}%`
@@ -1145,7 +1216,13 @@ export const TransferCard: React.FC<TransferCardProps> = ({
               alignItems: 'center',
               fontSize: '0.7rem',
               fontVariantNumeric: 'tabular-nums',
-              color: 'var(--text-secondary)'
+              color: file.status === 'saving'
+                ? 'var(--success)'
+                : file.isDownloading
+                ? 'var(--text-secondary)'
+                : (file.status === 'interrupted' || file.status === 'paused')
+                ? 'var(--warning)'
+                : 'var(--error)'
             }}
           >
             <span
@@ -1158,33 +1235,73 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                 flex: 1
               }}
             >
-              Receiving · {Math.round(file.progress || 0)}%
-              {file.speed ? ` · ${formatSpeed(file.speed)}` : ''}
-              {file.eta ? ` · ${file.eta}` : ''}
+              {file.status === 'saving' ? (
+                <>
+                  Saving to Downloads · {Math.round(file.progress || 0)}%
+                  {file.savedBytes ? ` (${formatBytes(file.savedBytes)} / ${formatBytes(file.totalSize)})` : ''}
+                </>
+              ) : file.isDownloading ? (
+                <>
+                  Receiving · {Math.round(file.progress || 0)}%
+                  {file.speed ? ` · ${formatSpeed(file.speed)}` : ''}
+                  {file.eta ? ` · ${file.eta}` : ''}
+                </>
+              ) : file.status === 'interrupted' ? (
+                `Paused at ${Math.round(file.progress || 0)}% · Resumes on reconnect`
+              ) : file.status === 'paused' ? (
+                `Paused at ${Math.round(file.progress || 0)}%`
+              ) : (
+                `Failed at ${Math.round(file.progress || 0)}% · Tap Resume to retry`
+              )}
             </span>
 
             <div className="progress-controls" style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexShrink: 0 }}>
-              <button
-                type="button"
-                className="progress-ctrl-btn progress-cancel"
-                onClick={() => onCancelUpload(item.id, file.transferId)}
-                title="Cancel download"
-                aria-label="Cancel download"
-                style={{
-                  background: 'var(--surface-secondary)',
-                  border: '1px solid var(--border-subtle)',
-                  color: 'var(--text-secondary)',
-                  width: '22px',
-                  height: '22px',
-                  borderRadius: '50%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  cursor: 'pointer'
-                }}
-              >
-                <X size={11} />
-              </button>
+              {!file.isDownloading && file.status !== 'saving' && (
+                <button
+                  type="button"
+                  className="progress-ctrl-btn"
+                  onClick={() => onResumeUpload(item.id)}
+                  title="Resume download"
+                  aria-label="Resume download"
+                  style={{
+                    background: 'var(--surface-secondary)',
+                    border: '1px solid var(--border-subtle)',
+                    color: 'var(--accent)',
+                    width: '22px',
+                    height: '22px',
+                    borderRadius: '50%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <RotateCcw size={11} />
+                </button>
+              )}
+              {file.status !== 'saving' && (
+                <button
+                  type="button"
+                  className="progress-ctrl-btn progress-cancel"
+                  onClick={() => onCancelUpload(item.id, file.transferId)}
+                  title="Cancel download"
+                  aria-label="Cancel download"
+                  style={{
+                    background: 'var(--surface-secondary)',
+                    border: '1px solid var(--border-subtle)',
+                    color: 'var(--text-secondary)',
+                    width: '22px',
+                    height: '22px',
+                    borderRadius: '50%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <X size={11} />
+                </button>
+              )}
             </div>
           </div>
         </div>

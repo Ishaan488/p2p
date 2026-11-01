@@ -11,6 +11,10 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 @CapacitorPlugin(name = "ForegroundService")
 public class ForegroundServicePlugin extends Plugin {
 
+    private static volatile boolean isServiceRunning = false;
+    private static volatile long lastUpdateTimestamp = 0;
+    private static final long UPDATE_THROTTLE_MS = 500;
+
     @PluginMethod
     public void start(PluginCall call) {
         Context context = getContext();
@@ -26,6 +30,8 @@ public class ForegroundServicePlugin extends Plugin {
 
         try {
             ContextCompat.startForegroundService(context, intent);
+            isServiceRunning = true;
+            lastUpdateTimestamp = System.currentTimeMillis();
             call.resolve();
         } catch (Exception e) {
             call.reject("Failed to start foreground service: " + e.getMessage());
@@ -34,10 +40,25 @@ public class ForegroundServicePlugin extends Plugin {
 
     @PluginMethod
     public void update(PluginCall call) {
+        if (!isServiceRunning) {
+            call.resolve();
+            return;
+        }
+
+        int progress = call.getInt("progress", -1);
+        long now = System.currentTimeMillis();
+        boolean isCrucial = (progress == 0 || progress >= 100 || progress == -2);
+
+        if (!isCrucial && (now - lastUpdateTimestamp < UPDATE_THROTTLE_MS)) {
+            // Throttled: drop redundant intermediate progress IPC to system NotificationManager
+            call.resolve();
+            return;
+        }
+        lastUpdateTimestamp = now;
+
         Context context = getContext();
         String title = call.getString("title", "P2P Link Transfer");
         String text = call.getString("text", "Transfer in progress");
-        int progress = call.getInt("progress", -1);
 
         Intent intent = new Intent(context, TransferForegroundService.class);
         intent.setAction(TransferForegroundService.ACTION_UPDATE);
@@ -46,7 +67,8 @@ public class ForegroundServicePlugin extends Plugin {
         intent.putExtra(TransferForegroundService.EXTRA_PROGRESS, progress);
 
         try {
-            ContextCompat.startForegroundService(context, intent);
+            // Send update intent to existing running service without invoking startForegroundService() contract
+            context.startService(intent);
             call.resolve();
         } catch (Exception e) {
             call.reject("Failed to update foreground service: " + e.getMessage());
@@ -60,10 +82,11 @@ public class ForegroundServicePlugin extends Plugin {
         intent.setAction(TransferForegroundService.ACTION_STOP);
         try {
             context.startService(intent);
+            isServiceRunning = false;
+            lastUpdateTimestamp = 0;
             call.resolve();
         } catch (Exception e) {
             call.reject("Failed to stop foreground service: " + e.getMessage());
         }
     }
 }
-
