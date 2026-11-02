@@ -300,9 +300,9 @@ export default function App() {
     return () => { mounted = false; };
   }, []);
 
-  // Auto-discovery
+  // Auto-discovery (active in standby, disconnected, or connection error states)
   useEffect(() => {
-    if (status !== 'disconnected') return;
+    if (status === 'connected') return;
     const stop = startAutoDiscovery(
       device => {
         setDiscoveredDevices(prev => {

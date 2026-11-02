@@ -19,10 +19,17 @@ import org.json.JSONObject;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
+import java.net.InterfaceAddress;
+import java.net.NetworkInterface;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Enumeration;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @CapacitorPlugin(name = "Discovery")
 public class DiscoveryPlugin extends Plugin {
@@ -39,11 +46,91 @@ public class DiscoveryPlugin extends Plugin {
     private boolean isDiscovering = false;
     private ExecutorService udpExecutor;
     private volatile boolean stopUdp = false;
+    private final AtomicBoolean isResolvingNsd = new AtomicBoolean(false);
 
     @Override
     public void load() {
         super.load();
         nsdManager = (NsdManager) getContext().getSystemService(Context.NSD_SERVICE);
+    }
+
+    /**
+     * getNetworkInfo provides the device's local Wi-Fi / LAN IP, subnet prefix,
+     * and broadcast address to the TypeScript discovery client for fast subnet HTTP scanning.
+     */
+    @PluginMethod
+    public void getNetworkInfo(PluginCall call) {
+        JSObject ret = new JSObject();
+        try {
+            String localIp = null;
+            String subnetPrefix = null;
+            String broadcastIp = null;
+            int prefixLength = 24;
+
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            if (interfaces != null) {
+                while (interfaces.hasMoreElements()) {
+                    NetworkInterface iface = interfaces.nextElement();
+                    if (iface.isLoopback() || !iface.isUp() || iface.isVirtual()) {
+                        continue;
+                    }
+                    String ifaceName = iface.getName().toLowerCase();
+                    for (InterfaceAddress addr : iface.getInterfaceAddresses()) {
+                        InetAddress inet = addr.getAddress();
+                        if (inet instanceof java.net.Inet4Address && !inet.isLoopbackAddress()) {
+                            String ipStr = inet.getHostAddress();
+                            if (ipStr.startsWith("192.168.") || ipStr.startsWith("10.") || ipStr.startsWith("172.")) {
+                                localIp = ipStr;
+                                short pLen = addr.getNetworkPrefixLength();
+                                if (pLen > 0 && pLen <= 32) {
+                                    prefixLength = pLen;
+                                }
+                                InetAddress bcast = addr.getBroadcast();
+                                if (bcast != null) {
+                                    broadcastIp = bcast.getHostAddress();
+                                }
+                                if (ifaceName.contains("wlan") || ifaceName.contains("wifi") || ifaceName.contains("p2p")) {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (localIp != null && (ifaceName.contains("wlan") || ifaceName.contains("wifi"))) {
+                        break;
+                    }
+                }
+            }
+
+            if (localIp == null) {
+                WifiManager wifi = (WifiManager) getContext().getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+                if (wifi != null && wifi.getConnectionInfo() != null) {
+                    int ipInt = wifi.getConnectionInfo().getIpAddress();
+                    if (ipInt != 0) {
+                        localIp = String.format("%d.%d.%d.%d",
+                            (ipInt & 0xff),
+                            (ipInt >> 8 & 0xff),
+                            (ipInt >> 16 & 0xff),
+                            (ipInt >> 24 & 0xff));
+                    }
+                }
+            }
+
+            if (localIp != null) {
+                ret.put("ip", localIp);
+                int lastDot = localIp.lastIndexOf('.');
+                if (lastDot > 0) {
+                    subnetPrefix = localIp.substring(0, lastDot + 1);
+                }
+                ret.put("subnet", subnetPrefix);
+                ret.put("prefixLength", prefixLength);
+                if (broadcastIp != null) {
+                    ret.put("broadcast", broadcastIp);
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Error obtaining network info: " + e.getMessage());
+        }
+        call.resolve(ret);
     }
 
     @PluginMethod
@@ -70,7 +157,7 @@ public class DiscoveryPlugin extends Plugin {
         // 2. Start Android Native mDNS Discovery
         startNsdDiscovery();
 
-        // 3. Start Fast UDP Broadcast Ping (works across VLANs and routers that drop multicast)
+        // 3. Start Continuous Fast UDP Broadcast Ping (works across VLANs and routers that drop multicast)
         startUdpBroadcastDiscovery();
 
         call.resolve();
@@ -104,15 +191,21 @@ public class DiscoveryPlugin extends Plugin {
             public void onServiceFound(NsdServiceInfo serviceInfo) {
                 Log.d(TAG, "Found mDNS service: " + serviceInfo.getServiceName());
                 if (serviceInfo.getServiceType() != null && serviceInfo.getServiceType().contains("_p2plink._tcp")) {
+                    if (!isResolvingNsd.compareAndSet(false, true)) {
+                        // Skip if a resolve is currently in-flight to prevent FAILURE_ALREADY_ACTIVE
+                        return;
+                    }
                     try {
                         nsdManager.resolveService(serviceInfo, new NsdManager.ResolveListener() {
                             @Override
                             public void onResolveFailed(NsdServiceInfo serviceInfo, int errorCode) {
+                                isResolvingNsd.set(false);
                                 Log.w(TAG, "Resolve failed for " + serviceInfo.getServiceName() + ": " + errorCode);
                             }
 
                             @Override
                             public void onServiceResolved(NsdServiceInfo resolved) {
+                                isResolvingNsd.set(false);
                                 InetAddress host = resolved.getHost();
                                 if (host == null) return;
 
@@ -148,6 +241,7 @@ public class DiscoveryPlugin extends Plugin {
                             }
                         });
                     } catch (Exception e) {
+                        isResolvingNsd.set(false);
                         Log.w(TAG, "Error invoking resolveService: " + e.getMessage());
                     }
                 }
@@ -169,6 +263,34 @@ public class DiscoveryPlugin extends Plugin {
         }
     }
 
+    private List<InetAddress> getAllBroadcastAddresses() {
+        List<InetAddress> list = new ArrayList<>();
+        try {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            if (interfaces != null) {
+                while (interfaces.hasMoreElements()) {
+                    NetworkInterface iface = interfaces.nextElement();
+                    if (iface.isLoopback() || !iface.isUp()) continue;
+                    for (InterfaceAddress ifaceAddr : iface.getInterfaceAddresses()) {
+                        InetAddress bcast = ifaceAddr.getBroadcast();
+                        if (bcast != null && !list.contains(bcast)) {
+                            list.add(bcast);
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Error enumerating broadcast addresses: " + e.getMessage());
+        }
+        try {
+            InetAddress generic = InetAddress.getByName("255.255.255.255");
+            if (!list.contains(generic)) {
+                list.add(generic);
+            }
+        } catch (Exception ignored) {}
+        return list;
+    }
+
     private void startUdpBroadcastDiscovery() {
         udpExecutor = Executors.newSingleThreadExecutor();
         udpExecutor.execute(() -> {
@@ -176,25 +298,35 @@ public class DiscoveryPlugin extends Plugin {
             try {
                 socket = new DatagramSocket();
                 socket.setBroadcast(true);
-                socket.setSoTimeout(1200);
+                socket.setSoTimeout(1000);
 
                 byte[] reqBytes = DISCOVER_REQ_MSG.getBytes(StandardCharsets.UTF_8);
-                InetAddress broadcastAddr = InetAddress.getByName("255.255.255.255");
-                DatagramPacket sendPacket = new DatagramPacket(reqBytes, reqBytes.length, broadcastAddr, UDP_DISCOVER_PORT);
 
-                // Broadcast 3 times with interval
-                for (int attempt = 0; attempt < 3 && !stopUdp; attempt++) {
+                // Run continuous ping loop while discovery is active (not just 3 attempts)
+                while (!stopUdp) {
+                    List<InetAddress> broadcastAddrs = getAllBroadcastAddresses();
+                    for (InetAddress bcast : broadcastAddrs) {
+                        try {
+                            DatagramPacket sendPacket = new DatagramPacket(reqBytes, reqBytes.length, bcast, UDP_DISCOVER_PORT);
+                            socket.send(sendPacket);
+                        } catch (Exception ignored) {}
+                    }
+
+                    // Also ping multicast group 224.0.0.167
                     try {
-                        socket.send(sendPacket);
+                        InetAddress mcast = InetAddress.getByName("224.0.0.167");
+                        DatagramPacket mcastPacket = new DatagramPacket(reqBytes, reqBytes.length, mcast, UDP_DISCOVER_PORT);
+                        socket.send(mcastPacket);
                     } catch (Exception ignored) {}
 
-                    long deadline = System.currentTimeMillis() + 1000;
+                    long deadline = System.currentTimeMillis() + 1200;
                     byte[] recvBuf = new byte[2048];
                     while (System.currentTimeMillis() < deadline && !stopUdp) {
                         DatagramPacket recvPacket = new DatagramPacket(recvBuf, recvBuf.length);
                         try {
                             socket.receive(recvPacket);
-                            String jsonStr = new String(recvPacket.getData(), 0, recvPacket.getLength(), StandardCharsets.UTF_8);
+                            String jsonStr = new String(recvPacket.getData(), 0, recvPacket.getLength(), StandardCharsets.UTF_8).trim();
+                            if (!jsonStr.startsWith("{")) continue;
                             JSONObject obj = new JSONObject(jsonStr);
 
                             JSObject ret = new JSObject();
@@ -204,14 +336,20 @@ public class DiscoveryPlugin extends Plugin {
                             ret.put("scheme", obj.optString("scheme", "http"));
                             ret.put("cert", obj.optString("cert", ""));
                             ret.put("serverName", obj.optString("name", "Desktop"));
+                            if (obj.has("id")) {
+                                ret.put("id", obj.optString("id"));
+                            }
 
                             notifyListeners("onDeviceDiscovered", ret);
-                        } catch (Exception timeout) {
+                        } catch (SocketTimeoutException timeout) {
                             break;
+                        } catch (Exception e) {
+                            Log.d(TAG, "UDP parse error: " + e.getMessage());
                         }
                     }
+
                     try {
-                        Thread.sleep(500);
+                        Thread.sleep(1500);
                     } catch (InterruptedException e) {
                         break;
                     }
@@ -249,6 +387,7 @@ public class DiscoveryPlugin extends Plugin {
         }
 
         isDiscovering = false;
+        isResolvingNsd.set(false);
         call.resolve();
     }
 }

@@ -71,13 +71,23 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
     d => !pairing || `${d.host}:${d.port}` !== address
   );
 
+  const isPairedPcOnline = Boolean(
+    pairing && discoveredDevices.some(d =>
+      (`${d.host}:${d.port}` === address) || (Boolean(d.id) && d.id === pairing.serverId)
+    )
+  );
+
   const handleConnectDiscovered = (d: DiscoveredDevice) => {
     const targetHost = `${d.host}:${d.port}`;
     setAddress(targetHost);
     try {
       localStorage.setItem('p2p_address', targetHost);
     } catch {}
-    onPairAndConnect(targetHost, undefined, d.scheme, d.cert);
+    if (pairing && (!d.id || pairing.serverId === d.id)) {
+      onQuickConnect();
+    } else {
+      onPairAndConnect(targetHost, undefined, d.scheme, d.cert);
+    }
   };
 
   const getStatusLabel = () => {
@@ -502,6 +512,26 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
           flex-shrink: 0;
           margin-top: 1px;
         }
+
+        .discovery-searching-pill {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 0.45rem;
+          padding: 0.35rem 0.8rem;
+          background: var(--surface);
+          border: 1px solid var(--border-subtle);
+          border-radius: var(--radius-full);
+          font-size: 0.72rem;
+          color: var(--text-secondary);
+          width: fit-content;
+          margin: 0 auto 0.25rem auto;
+          box-shadow: var(--shadow-sm);
+        }
+
+        .discovery-spinner {
+          color: var(--accent);
+        }
       `}</style>
 
       <div className="connection-stage-compact">
@@ -535,8 +565,8 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
           </div>
         ) : (
           <>
-            {/* Discovered LAN Devices Section (Prominently placed above or before manual steps) */}
-            {availableDevices.length > 0 && (
+            {/* Discovered LAN Devices Section */}
+            {availableDevices.length > 0 ? (
               <section className="discovered-banner-section" aria-label="Available on local Wi-Fi">
                 <div className="discovered-header-bar">
                   <div className="discovered-label-text">
@@ -570,6 +600,11 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
                   ))}
                 </div>
               </section>
+            ) : status !== 'connecting' && !pairing && (
+              <div className="discovery-searching-pill" role="status">
+                <Loader2 size={12} className="animate-spin discovery-spinner" />
+                <span>Searching local Wi-Fi...</span>
+              </div>
             )}
 
             {/* Main Continuity Card (Paired or Unpaired) */}
@@ -599,6 +634,12 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
                   <span className="mono-text">{address || 'Local Wi-Fi'}</span>
                   <span className="meta-dot">·</span>
                   <span>{pairing.deviceName || 'Mobile Device'}</span>
+                  {isPairedPcOnline && (
+                    <>
+                      <span className="meta-dot">·</span>
+                      <span style={{ color: 'var(--success, #10b981)', fontWeight: 600 }}>Active on Wi-Fi</span>
+                    </>
+                  )}
                 </div>
 
                 {/* Alerts / Connection Errors */}
@@ -787,8 +828,8 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
             )}
 
             {/* Discovery Hint when no devices found */}
-            {!pairing && discoveryTip && availableDevices.length === 0 && isEditingIp && (
-              <p className="discovery-caption">{discoveryTip}</p>
+            {!pairing && discoveryTip && availableDevices.length === 0 && (
+              <p className="discovery-caption" style={{ textAlign: 'center', marginTop: '0.5rem', fontSize: '0.74rem' }}>{discoveryTip}</p>
             )}
           </>
         )}
