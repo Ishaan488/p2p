@@ -50,6 +50,7 @@ fmt-check:
 # Everything that should pass before a release
 check: fmt-check vet test
 	npm --prefix apps/mobile exec -- tsc --noEmit
+	npm --prefix apps/mobile test
 
 # Assemble Android APK without Android Studio
 apk:

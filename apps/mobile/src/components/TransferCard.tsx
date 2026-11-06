@@ -156,6 +156,13 @@ export const TransferCard: React.FC<TransferCardProps> = ({
   const isSent = item.sender === 'me';
   const file = item.file;
 
+  // Preview for a file this phone is sending must come from a local blob: the
+  // PC has no "download" record for an upload, so asking it to serve one back
+  // just hangs and then fails. That local blob is missing only for a sent file
+  // too large to keep a preview copy of (see materializeToBlob's size caps).
+  const previewUnavailable = () =>
+    onToast('Preview unavailable for this file (too large to keep a local copy).', 'warning');
+
   const isImageFile = !!file && (
     file.mediaKind === 'image' ||
     /\.(jpg|jpeg|png|gif|webp|svg|bmp|heic|avif)$/i.test(file.filename)
@@ -736,6 +743,8 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                     fileSize: file.totalSize,
                     onDownload: () => onDownload(item.id, file, true)
                   });
+                } else if (isSent) {
+                  previewUnavailable();
                 } else {
                   onDownload(item.id, file, false);
                 }
@@ -871,6 +880,8 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                           fileSize: file.totalSize,
                           onDownload: () => onDownload(item.id, file, true)
                         });
+                      } else if (isSent) {
+                        previewUnavailable();
                       } else {
                         onDownload(item.id, file, false);
                       }
@@ -1123,6 +1134,8 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                                 fileSize: file.totalSize,
                                 onDownload: () => onDownload(item.id, file, true)
                               });
+                            } else if (isSent) {
+                              previewUnavailable();
                             } else {
                               onDownload(item.id, file, false);
                             }

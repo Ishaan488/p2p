@@ -1,15 +1,8 @@
 import { registerPlugin, Capacitor, PluginListenerHandle } from '@capacitor/core';
+import { DeviceRegistry, deviceKey, type DiscoveredDevice, type LostInfo } from './discoveryRegistry';
 
-export interface DiscoveredDevice {
-  name: string;
-  host: string;
-  port: number;
-  scheme: 'http' | 'https';
-  cert?: string;
-  serverName?: string;
-  id?: string;
-  ips?: string[];
-}
+export { deviceKey };
+export type { DiscoveredDevice, DeviceState, LostInfo } from './discoveryRegistry';
 
 interface NetworkInfo {
   ip?: string;
@@ -18,59 +11,58 @@ interface NetworkInfo {
   prefixLength?: number;
 }
 
-interface LostInfo {
-  id?: string;
-  host?: string;
-  name?: string;
-}
-
 interface DiscoveryNativePlugin {
   startDiscovery(): Promise<void>;
   stopDiscovery(): Promise<void>;
+  /** Rebinds the sockets (after a Wi-Fi change) without forgetting that discovery is wanted. */
+  restartDiscovery(): Promise<void>;
   getNetworkInfo(): Promise<NetworkInfo>;
   addListener(eventName: 'onDeviceDiscovered', listenerFunc: (device: DiscoveredDevice) => void): Promise<PluginListenerHandle>;
   addListener(eventName: 'onDeviceLost', listenerFunc: (info: LostInfo) => void): Promise<PluginListenerHandle>;
+  addListener(eventName: 'onDevicesAlive', listenerFunc: (info: { keys: string[] }) => void): Promise<PluginListenerHandle>;
 }
 
 export const DiscoveryNative = registerPlugin<DiscoveryNativePlugin>('Discovery');
 
-/** Identity of a PC: its server id when known, otherwise its address. */
-export function deviceKey(d: Pick<DiscoveredDevice, 'id' | 'host' | 'port'>): string {
-  return d.id ? `id:${d.id}` : `addr:${d.host}:${d.port}`;
-}
-
-// A PC announces itself every ~4s and says goodbye when it exits cleanly. If
-// neither is heard for this long (crash, Wi-Fi drop, power loss) it is removed.
-const DEVICE_TTL_MS = 15_000;
-const SWEEP_INTERVAL_MS = 2_000;
-// Known PCs not heard from over UDP/mDNS recently are probed directly over HTTP,
-// which keeps them alive on networks that filter broadcast and multicast.
-const PROBE_STALE_AFTER_MS = 6_000;
-const PROBE_INTERVAL_MS = 5_000;
+// A PC announces every 1-2 s. Three missed announces (about 5 s) mean it is gone;
+// a clean exit's goodbye only makes that instant. This timeout is the reliable path.
+const DEVICE_TTL_MS = 5_000;
+const SWEEP_INTERVAL_MS = 1_000;
+// PCs that go quiet on UDP/mDNS (broadcast filtered) are re-checked over HTTP, a few at a time.
+const QUIET_AFTER_MS = 3_000;
+const REFRESH_INTERVAL_MS = 1_500;
+const REFRESH_MAX_PER_TICK = 8;
 // Do not re-run the (relatively expensive) /24 sweep more often than this.
 const MIN_SUBNET_SCAN_GAP_MS = 15_000;
-// After a failed verification, ignore that address for a while.
-const VERIFY_BACKOFF_MS = 10_000;
 const SUBNET_SCAN_CONCURRENCY = 28;
+const MAX_DEVICES = 200;
 
-interface Entry {
-  device: DiscoveredDevice;
-  lastSeen: number;
+interface Controls {
+  forget(key: string): void;
+  reprobe(device: DiscoveredDevice): Promise<boolean>;
+}
+let controls: Controls | null = null;
+
+/** Removes a PC from the live list now and keeps it away for a short, growing backoff. */
+export function forgetDiscoveredDevice(key: string): void {
+  controls?.forget(key);
+}
+
+/** One HTTP check of a PC (used right after a failed connect). Resolves true if it answered. */
+export function reprobeDiscoveredDevice(device: DiscoveredDevice): Promise<boolean> {
+  return controls ? controls.reprobe(device) : Promise.resolve(false);
 }
 
 /**
  * Keeps a live list of the PCs reachable on the current Wi-Fi.
  *
- * Sources (all feed one registry, so a PC found by several is listed once):
- *  - saved address probe (answers in milliseconds)
+ * Sources feed one {@link DeviceRegistry}, so a PC found by several is listed once:
+ *  - the saved address (answers in milliseconds)
  *  - native Android: mDNS (NsdManager) + UDP announcements/goodbyes
- *  - a one-off /24 HTTP sweep (also re-run when the app resumes or the network changes)
+ *  - a /24 HTTP sweep, re-run when the app returns to the foreground
  *
- * The registry is event driven: `onDevice` fires only when a PC appears or its
- * details change, `onLost` when it leaves. Heartbeats just refresh a timestamp, so
- * a network with hundreds of PCs does not make the UI re-render.
- *
- * Returns a teardown function.
+ * `onDevice` fires when a PC appears (state `appearing`, before it is verified),
+ * is confirmed, or changes; `onLost` when it leaves. Returns a teardown function.
  */
 export function startAutoDiscovery(
   onDevice: (device: DiscoveredDevice) => void,
@@ -79,42 +71,13 @@ export function startAutoDiscovery(
 ): () => void {
   let active = true;
   const native = Capacitor.isNativePlatform();
-  const known = new Map<string, Entry>();
-  const verifying = new Set<string>();
-  const failedUntil = new Map<string, number>();
   const handles: PluginListenerHandle[] = [];
   let lastSubnetScan = 0;
+  let everSeen = false;
 
-  const emitLost = (key: string) => {
-    if (known.delete(key) && active) onLost?.(key);
-  };
-
-  /** Adds or refreshes a PC that is known to be reachable. */
-  const accept = (device: DiscoveredDevice) => {
-    if (!active) return;
-    const key = deviceKey(device);
-    const now = Date.now();
-    const existing = known.get(key);
-    if (existing) {
-      existing.lastSeen = now;
-      const d = existing.device;
-      if (d.host === device.host && d.port === device.port && d.scheme === device.scheme &&
-          d.name === device.name && d.cert === device.cert) {
-        return; // nothing changed: heartbeat only
-      }
-    }
-    // The same PC may reappear at another address (DHCP, Wi-Fi switch): keep one entry.
-    if (device.id) {
-      const stale = `addr:${device.host}:${device.port}`;
-      if (stale !== key && known.has(stale)) emitLost(stale);
-    }
-    known.set(key, { device, lastSeen: now });
-    onDevice(device);
-  };
-
-  /** HTTP probe of one address. Resolves true when a P2P Link PC answered. */
-  const probe = async (host: string, port = 8080, scheme: 'http' | 'https' = 'http', timeoutMs = 450): Promise<boolean> => {
-    if (!active) return false;
+  /** One HTTP request to /discover. Resolves with the PC's details, or null. */
+  const probeOnce = async (host: string, port = 8080, scheme: 'http' | 'https' = 'http', timeoutMs = 450): Promise<DiscoveredDevice | null> => {
+    if (!active) return null;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -123,10 +86,10 @@ export function startAutoDiscovery(
         headers: { Accept: 'application/json' },
         signal: controller.signal
       });
-      if (!resp.ok) return false;
+      if (!resp.ok) return null;
       const data = await resp.json();
-      if (!data || typeof data !== 'object') return false;
-      accept({
+      if (!data || typeof data !== 'object') return null;
+      return {
         name: data.name || host,
         host,
         port: Number(data.port) || port,
@@ -134,62 +97,53 @@ export function startAutoDiscovery(
         cert: data.cert,
         serverName: data.name,
         id: data.id
-      });
-      return true;
+      };
     } catch {
-      return false; // unreachable, timed out, or not a P2P Link PC
+      return null; // unreachable, timed out, or not a P2P Link PC
     } finally {
       clearTimeout(timer);
     }
   };
 
   /**
-   * A UDP/mDNS sighting is only a claim ("a PC lives at host:port"); it may name a
-   * virtual adapter we cannot reach, or be forged. New sightings are therefore
-   * verified once with a direct request, trying the PC's other addresses too.
-   * HTTPS PCs cannot be probed from a page (self-signed certificate) and are trusted
-   * as announced; pairing authenticates them anyway.
+   * Confirms a sighting. A sighting only claims "a PC lives at host:port": the source
+   * address may be a virtual adapter we cannot reach, so the PC's other addresses
+   * are tried too.
    */
-  const sighting = (device: DiscoveredDevice) => {
-    if (!active || !device.host) return;
-    const key = deviceKey(device);
-    const entry = known.get(key);
-    if (entry) {
-      entry.lastSeen = Date.now();
-      const d = entry.device;
-      if (d.host === device.host && d.port === device.port && d.name === device.name && d.scheme === device.scheme) return;
+  const verify = async (device: DiscoveredDevice): Promise<DiscoveredDevice | null> => {
+    const candidates = [device.host, ...(device.ips ?? []).filter(ip => ip !== device.host)];
+    for (const host of candidates) {
+      if (!active) return null;
+      const found = await probeOnce(host, device.port || 8080, 'http', 700);
+      if (found) return { ...device, ...found, state: undefined };
     }
-    if (device.scheme === 'https') {
-      accept(device);
-      return;
-    }
-    if (verifying.has(key)) return;
-    const blockedUntil = failedUntil.get(key) ?? 0;
-    if (Date.now() < blockedUntil) return;
-
-    verifying.add(key);
-    (async () => {
-      const candidates = [device.host, ...(device.ips ?? []).filter(ip => ip !== device.host)];
-      for (const host of candidates) {
-        if (!active) return;
-        if (await probe(host, device.port || 8080, 'http', 700)) return;
-      }
-      failedUntil.set(key, Date.now() + VERIFY_BACKOFF_MS);
-    })().finally(() => verifying.delete(key));
+    return null;
   };
 
-  const remove = (info: LostInfo) => {
-    for (const [key, entry] of [...known]) {
-      const d = entry.device;
-      if ((info.id && d.id === info.id) || (info.host && d.host === info.host && !info.id) || (info.name && !info.id && d.name === info.name)) {
-        emitLost(key);
-      }
-    }
+  const registry = new DeviceRegistry({
+    verify,
+    onDevice: d => {
+      if (!active) return;
+      everSeen = true;
+      onDevice(d);
+    },
+    onLost: key => { if (active) onLost?.(key); },
+    ttlMs: DEVICE_TTL_MS,
+    maxDevices: MAX_DEVICES
+  });
+
+  controls = {
+    forget: key => registry.forget(key),
+    reprobe: device => registry.reprobe(device)
   };
 
-  // High-speed concurrent subnet HTTP sweep.
+  /** Probes an address and, if a PC answers, records it as confirmed. */
+  const probeAndConfirm = async (host: string, port: number, timeoutMs: number) => {
+    const found = await probeOnce(host, port, 'http', timeoutMs);
+    if (found && active) registry.confirmed(found);
+  };
+
   const scanSubnet = async (subnetPrefix: string, ports: number[]) => {
-    if (!active) return;
     const queue: { ip: string; port: number }[] = [];
     for (const port of ports) {
       for (let i = 1; i <= 254; i++) queue.push({ ip: `${subnetPrefix}${i}`, port });
@@ -198,7 +152,7 @@ export function startAutoDiscovery(
     const worker = async () => {
       while (active && next < queue.length) {
         const item = queue[next++];
-        await probe(item.ip, item.port, 'http', 420);
+        await probeAndConfirm(item.ip, item.port, 420);
       }
     };
     await Promise.all(Array.from({ length: SUBNET_SCAN_CONCURRENCY }, worker));
@@ -233,72 +187,59 @@ export function startAutoDiscovery(
     if (subnet) await scanSubnet(subnet, ports);
   };
 
-  const startNative = () =>
-    DiscoveryNative.startDiscovery().catch(err => console.debug('Native discovery start failed:', err));
-
-  // The phone may have changed network or been asleep: rebind native sockets,
-  // re-probe, and give everything a fresh grace period before expiring it.
-  const rescan = () => {
-    if (!active) return;
-    const now = Date.now();
-    known.forEach(entry => { entry.lastSeen = now; });
-    if (savedHost) void probe(savedHost, savedPort, 'http', 600);
-    if (native) {
-      DiscoveryNative.stopDiscovery().catch(() => {}).then(() => {
-        if (active) void startNative();
-      });
-    }
-    void sweepSubnet();
-  };
-
   // 1. Saved address: answers in milliseconds.
-  if (savedHost) void probe(savedHost, savedPort, 'http', 600);
+  if (savedHost) void probeAndConfirm(savedHost, savedPort, 600);
 
-  // 2. Native listeners first, then start, so no early event is missed.
+  // 2. Native listeners first, then start, so no early event is missed. The
+  // native side pauses itself when the app is backgrounded and resumes with it.
   if (native) {
     void (async () => {
       try {
-        handles.push(await DiscoveryNative.addListener('onDeviceDiscovered', sighting));
-        handles.push(await DiscoveryNative.addListener('onDeviceLost', remove));
+        handles.push(await DiscoveryNative.addListener('onDeviceDiscovered', d => registry.sighting(d)));
+        handles.push(await DiscoveryNative.addListener('onDeviceLost', info => registry.remove(info)));
+        handles.push(await DiscoveryNative.addListener('onDevicesAlive', info => registry.alive(info?.keys ?? [])));
       } catch (err) {
         console.debug('Native discovery listeners failed:', err);
       }
-      if (active) await startNative();
+      if (active) await DiscoveryNative.startDiscovery().catch(err => console.debug('Native discovery start failed:', err));
       else handles.splice(0).forEach(h => h.remove());
     })();
   } else if (typeof window !== 'undefined' && window.location.hostname && window.location.hostname !== 'localhost') {
     // Served by the PC itself (browser/PWA): the page's own origin is the PC.
-    void probe(window.location.hostname, parseInt(window.location.port, 10) || 8080);
+    void probeAndConfirm(window.location.hostname, parseInt(window.location.port, 10) || 8080, 450);
   }
 
   // 3. Subnet sweep.
   void sweepSubnet();
 
-  // Expire PCs that stopped announcing; probe those that are only quiet on UDP.
-  const sweepTimer = setInterval(() => {
-    if (!active || (typeof document !== 'undefined' && document.hidden)) return;
-    const now = Date.now();
-    known.forEach((entry, key) => {
-      if (now - entry.lastSeen > DEVICE_TTL_MS) emitLost(key);
-    });
-  }, SWEEP_INTERVAL_MS);
+  const isHidden = () => typeof document !== 'undefined' && document.hidden;
+  const sweepTimer = setInterval(() => { if (active && !isHidden()) registry.sweep(); }, SWEEP_INTERVAL_MS);
+  const refreshTimer = setInterval(() => {
+    if (!active || isHidden()) return;
+    registry.refreshQuiet(QUIET_AFTER_MS, REFRESH_MAX_PER_TICK);
+    if (savedHost && registry.size === 0) void probeAndConfirm(savedHost, savedPort, 500);
+  }, REFRESH_INTERVAL_MS);
 
-  const probeTimer = setInterval(() => {
-    if (!active || (typeof document !== 'undefined' && document.hidden)) return;
-    const now = Date.now();
-    known.forEach(entry => {
-      const d = entry.device;
-      if (d.scheme === 'http' && now - entry.lastSeen > PROBE_STALE_AFTER_MS) void probe(d.host, d.port, 'http', 500);
-    });
-    if (savedHost && !known.size) void probe(savedHost, savedPort, 'http', 500);
-  }, PROBE_INTERVAL_MS);
-
-  const onVisible = () => { if (!document.hidden) rescan(); };
+  // Back in the foreground: nothing may be judged stale before it had a chance to be heard again.
+  const onVisible = () => {
+    if (!active || isHidden()) return;
+    registry.touchAll();
+    if (savedHost) void probeAndConfirm(savedHost, savedPort, 600);
+    void sweepSubnet();
+    if (native) DiscoveryNative.startDiscovery().catch(() => {}); // idempotent; resumes if native did not
+  };
+  // The network changed: multicast membership and broadcast addresses are tied to the old one.
+  const onOnline = () => {
+    if (!active) return;
+    registry.touchAll();
+    if (native) DiscoveryNative.restartDiscovery().catch(() => {});
+    void sweepSubnet();
+  };
   document.addEventListener('visibilitychange', onVisible);
-  window.addEventListener('online', rescan);
+  window.addEventListener('online', onOnline);
 
   const diagTimeout = setTimeout(() => {
-    if (active && known.size === 0 && onDiagnostics) {
+    if (active && !everSeen && onDiagnostics) {
       onDiagnostics('No PC auto-detected. Ensure your PC and phone are on the same Wi-Fi network, or scan the desktop QR code.');
     }
   }, 7000);
@@ -306,12 +247,13 @@ export function startAutoDiscovery(
   return () => {
     active = false;
     clearInterval(sweepTimer);
-    clearInterval(probeTimer);
+    clearInterval(refreshTimer);
     clearTimeout(diagTimeout);
     document.removeEventListener('visibilitychange', onVisible);
-    window.removeEventListener('online', rescan);
+    window.removeEventListener('online', onOnline);
     handles.splice(0).forEach(h => h.remove());
-    known.clear();
+    registry.dispose();
+    controls = null;
     if (native) DiscoveryNative.stopDiscovery().catch(() => {});
   };
 }

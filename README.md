@@ -284,7 +284,9 @@ go test -v ./...
 - **Fuzzing Suite:** Continuous fuzz testing on filename sanitizers, chunk AAD bindings, and request signatures.
 - **Hardening Regressions:** `robustness_test.go` pins fixes for download ownership, UDP discovery lifetime, pprof exposure, bounded queues and more.
 
-Static checks used before every release: `make check` (gofmt, `go vet`, tests, TypeScript compile).
+- **Client logic (vitest):** `npm --prefix apps/mobile test` covers the live device list (appearing/confirmed, timeout, goodbye ordering, probe limits) and the "device just went offline" connect race.
+
+Static checks used before every release: `make check` (gofmt, `go vet`, Go tests, TypeScript compile, client tests).
 
 ### Mobile Build & TypeScript Verification
 ```bash

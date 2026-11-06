@@ -32,7 +32,7 @@ export interface ConnectionScreenProps {
   discoveryTip: string;
   onQuickConnect: () => void;
   onManualConnect: (e: React.FormEvent) => void;
-  onPairAndConnect: (host: string, code?: string, scheme?: 'http' | 'https', cert?: string) => void;
+  onConnectDiscovered: (device: DiscoveredDevice) => void;
   onOpenPreferences: () => void;
   onUnpairPrompt: () => void;
 }
@@ -64,7 +64,7 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
   discoveryTip,
   onQuickConnect,
   onManualConnect,
-  onPairAndConnect,
+  onConnectDiscovered,
   onOpenPreferences,
   onUnpairPrompt
 }) => {
@@ -89,11 +89,7 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
     try {
       localStorage.setItem('p2p_address', targetHost);
     } catch {}
-    if (pairing && (!d.id || pairing.serverId === d.id)) {
-      onQuickConnect();
-    } else {
-      onPairAndConnect(targetHost, undefined, d.scheme, d.cert);
-    }
+    onConnectDiscovered(d);
   };
 
   const getStatusLabel = () => {
@@ -598,9 +594,17 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
                         type="button"
                         className="btn btn-primary btn-compact"
                         onClick={() => handleConnectDiscovered(d)}
-                        title={`Connect to ${d.serverName || d.name}`}
+                        disabled={d.state === 'appearing'}
+                        aria-busy={d.state === 'appearing'}
+                        title={d.state === 'appearing' ? 'Checking that this PC is reachable…' : `Connect to ${d.serverName || d.name}`}
                       >
-                        Connect
+                        {d.state === 'appearing' ? (
+                          <>
+                            <Loader2 size={12} className="animate-spin" /> Checking…
+                          </>
+                        ) : (
+                          'Connect'
+                        )}
                       </button>
                     </div>
                   ))}

@@ -413,15 +413,33 @@ func TestUDPDiscovery_AnnouncesOnStartAndSaysGoodbyeOnStop(t *testing.T) {
 		t.Fatalf("expected an immediate announce, got %+v (ok=%v)", info, ok)
 	}
 
+	if info.Boot == 0 || info.Seq == 0 {
+		t.Fatalf("announce must carry boot and seq, got boot=%d seq=%d", info.Boot, info.Seq)
+	}
+	lastSeq := info.Seq
+
 	stop()
+	var bye DiscoveryInfo
 	sawBye := false
 	for i := 0; i < 8 && !sawBye; i++ { // queued announces may precede the bye
-		if m, ok := read(500 * time.Millisecond); ok && m.Type == "bye" && m.DeviceID == "server-xyz" {
-			sawBye = true
+		m, ok := read(500 * time.Millisecond)
+		if !ok {
+			continue
+		}
+		if m.Type == "announce" && m.Boot == info.Boot && m.Seq > lastSeq {
+			lastSeq = m.Seq
+		}
+		if m.Type == "bye" && m.DeviceID == "server-xyz" {
+			bye, sawBye = m, true
 		}
 	}
 	if !sawBye {
 		t.Fatal("no goodbye was sent on stop")
+	}
+	// The goodbye outranks every announce sent before it, so a receiver can
+	// ignore a late announce that overtakes it on the network.
+	if bye.Boot != info.Boot || bye.Seq <= lastSeq {
+		t.Fatalf("bye must be in the same boot with a higher seq than any announce (bye=%+v lastAnnounceSeq=%d)", bye, lastSeq)
 	}
 	// Nothing may follow the goodbye, or the phone would list the PC again.
 	for {
@@ -432,5 +450,41 @@ func TestUDPDiscovery_AnnouncesOnStartAndSaysGoodbyeOnStop(t *testing.T) {
 		if m.Type == "announce" {
 			t.Fatal("an announce arrived after the goodbye")
 		}
+	}
+}
+
+func TestAnnounceSeq_StrictlyIncreasesAcrossAnnouncesAndReplies(t *testing.T) {
+	phone, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Skipf("cannot open loopback socket: %v", err)
+	}
+	defer phone.Close()
+	saved := announceTargets
+	announceTargets = func() []*net.UDPAddr { return []*net.UDPAddr{phone.LocalAddr().(*net.UDPAddr)} }
+	defer func() { announceTargets = saved }()
+
+	stop, err := startUDPDiscovery(8080, "PC", "seq-test", "http", "")
+	if err != nil {
+		t.Skipf("discovery port busy: %v", err)
+	}
+	defer stop()
+
+	var last uint64
+	var boot int64
+	for i := 0; i < 3; i++ { // the start-up burst sends three announces within about a second
+		_ = phone.SetReadDeadline(time.Now().Add(2 * time.Second))
+		buf := make([]byte, 2048)
+		n, _, err := phone.ReadFromUDP(buf)
+		if err != nil {
+			t.Fatalf("announce %d not received: %v", i, err)
+		}
+		var m DiscoveryInfo
+		if json.Unmarshal(buf[:n], &m) != nil {
+			t.Fatal("not JSON")
+		}
+		if i > 0 && (m.Seq <= last || m.Boot != boot) {
+			t.Fatalf("seq must increase within one boot: %d then %d (boot %d vs %d)", last, m.Seq, boot, m.Boot)
+		}
+		last, boot = m.Seq, m.Boot
 	}
 }

@@ -8,6 +8,7 @@ import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.util.Log;
 
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -27,11 +28,16 @@ import java.net.NetworkInterface;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @CapacitorPlugin(name = "Discovery")
@@ -45,7 +51,11 @@ public class DiscoveryPlugin extends Plugin {
     private static final String MULTICAST_GROUP = "224.0.0.167";
     private static final int REQUEST_BURSTS = 4;
     private static final long REQUEST_BURST_GAP_MS = 2000;
-    private static final long NOTIFY_REFRESH_MS = 3000;
+    // A PC that is unchanged is re-sent to JS this often, so any lost JS-side state heals itself.
+    private static final long NOTIFY_REFRESH_MS = 8000;
+    private static final long ALIVE_FLUSH_MS = 500;
+    private static final long STATE_RETAIN_MS = 60_000;
+    private static final int MAX_STATES = 512;
 
     private NsdManager nsdManager;
     private NsdManager.DiscoveryListener discoveryListener;
@@ -53,7 +63,12 @@ public class DiscoveryPlugin extends Plugin {
     private boolean isDiscovering = false;
     private ExecutorService udpExecutor;
     private volatile DatagramSocket udpSocket;
-    private final Map<String, Notified> notified = new ConcurrentHashMap<>();
+    private final Object stateLock = new Object();
+    private final Map<String, Seen> states = new HashMap<>(); // guarded by stateLock
+    private final Set<String> aliveBatch = ConcurrentHashMap.newKeySet();
+    private ScheduledExecutorService ticker;
+    // Discovery was asked for by the app; it is paused (not forgotten) while backgrounded.
+    private volatile boolean wantDiscovery = false;
     private volatile boolean stopUdp = false;
     private final AtomicBoolean isResolvingNsd = new AtomicBoolean(false);
 
@@ -144,10 +159,21 @@ public class DiscoveryPlugin extends Plugin {
 
     @PluginMethod
     public void startDiscovery(PluginCall call) {
-        if (isDiscovering) {
-            call.resolve();
-            return;
-        }
+        wantDiscovery = true;
+        startDiscoveryInternal();
+        call.resolve();
+    }
+
+    /** Rebinds the sockets (e.g. after a Wi-Fi change) without losing track of whether discovery is wanted. */
+    @PluginMethod
+    public void restartDiscovery(PluginCall call) {
+        stopAllDiscovery();
+        if (wantDiscovery) startDiscoveryInternal();
+        call.resolve();
+    }
+
+    private synchronized void startDiscoveryInternal() {
+        if (isDiscovering) return;
         isDiscovering = true;
         stopUdp = false;
 
@@ -166,10 +192,8 @@ public class DiscoveryPlugin extends Plugin {
         // 2. Start Android Native mDNS Discovery
         startNsdDiscovery();
 
-        // 3. Start Continuous Fast UDP Broadcast Ping (works across VLANs and routers that drop multicast)
+        // 3. UDP announcements/goodbyes (works where multicast is dropped by the router)
         startUdpBroadcastDiscovery();
-
-        call.resolve();
     }
 
     private void startNsdDiscovery() {
@@ -219,13 +243,13 @@ public class DiscoveryPlugin extends Plugin {
                                 if (host == null) return;
 
                                 JSObject ret = new JSObject();
-                                ret.put("name", resolved.getServiceName());
                                 ret.put("host", host.getHostAddress());
                                 ret.put("port", resolved.getPort());
 
                                 String scheme = "http";
                                 String certFP = "";
                                 String pcName = resolved.getServiceName();
+                                String pcId = "";
 
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                     Map<String, byte[]> attributes = resolved.getAttributes();
@@ -239,12 +263,18 @@ public class DiscoveryPlugin extends Plugin {
                                         if (attributes.containsKey("name")) {
                                             pcName = new String(attributes.get("name"), StandardCharsets.UTF_8);
                                         }
+                                        if (attributes.containsKey("id")) {
+                                            pcId = new String(attributes.get("id"), StandardCharsets.UTF_8);
+                                        }
                                     }
                                 }
 
                                 ret.put("scheme", scheme);
                                 ret.put("cert", certFP);
+                                ret.put("name", pcName);
                                 ret.put("serverName", pcName);
+                                ret.put("nsdName", resolved.getServiceName());
+                                if (!pcId.isEmpty()) ret.put("id", pcId);
 
                                 notifyListeners("onDeviceDiscovered", ret);
                             }
@@ -260,7 +290,7 @@ public class DiscoveryPlugin extends Plugin {
             public void onServiceLost(NsdServiceInfo serviceInfo) {
                 Log.d(TAG, "mDNS Service lost: " + serviceInfo.getServiceName());
                 JSObject ret = new JSObject();
-                ret.put("name", serviceInfo.getServiceName());
+                ret.put("nsdName", serviceInfo.getServiceName());
                 notifyListeners("onDeviceLost", ret);
             }
         };
@@ -300,19 +330,46 @@ public class DiscoveryPlugin extends Plugin {
         return list;
     }
 
+    /** What is remembered about a PC heard over UDP, for ordering and de-duplication. */
+    private static final class Seen {
+        long boot;
+        long seq;
+        boolean alive;
+        String fingerprint;
+        long notifiedAt;
+        long lastMs;
+    }
+
+    /**
+     * True when a datagram is older than what was already seen from that PC: it was
+     * sent before a newer one (reordered), or by an earlier run of the PC. A goodbye
+     * is stored with the highest seq, so an announce sent before it is "older" too and
+     * cannot resurrect the PC. Packets without boot/seq (older PCs) are never older.
+     */
+    private static boolean isOlder(Seen seen, long boot, long seq) {
+        if (seen.boot == 0 || boot == 0) return false;
+        if (boot < seen.boot) return true;
+        return boot == seen.boot && seq != 0 && seq < seen.seq;
+    }
+
     /**
      * UDP presence channel. One socket bound to the discovery port receives the PC's
-     * unsolicited announcements (sent on start, then every few seconds) and goodbyes
-     * ("bye" on a clean exit), so the list updates the moment a PC appears or leaves.
-     * Because announcements scale linearly with the number of PCs, requests are only
-     * sent as a short burst at the start to find PCs that announced before we listened.
+     * unsolicited announcements (every 1-2 s) and goodbyes, so the list updates the moment
+     * a PC appears or leaves. Requests are only sent as a short burst at the start, to
+     * find PCs that announced before we listened.
+     *
+     * Only changes cross the WebView bridge (appeared / changed / left). Liveness is sent
+     * as ONE batched event every 500 ms listing the keys heard from, so the bridge cost
+     * does not grow with the number of PCs on the network.
      */
     private void startUdpBroadcastDiscovery() {
         final DatagramSocket socket = openDiscoverySocket();
         if (socket == null) return;
         udpSocket = socket;
-        notified.clear();
+        aliveBatch.clear();
         udpExecutor = Executors.newFixedThreadPool(2);
+        ticker = Executors.newSingleThreadScheduledExecutor();
+        ticker.scheduleWithFixedDelay(this::flushAlive, ALIVE_FLUSH_MS, ALIVE_FLUSH_MS, TimeUnit.MILLISECONDS);
 
         // Receiver: blocks until stopAllDiscovery() closes the socket.
         udpExecutor.execute(() -> {
@@ -388,33 +445,69 @@ public class DiscoveryPlugin extends Plugin {
             JSONObject obj = new JSONObject(json);
             String host = packet.getAddress().getHostAddress();
             String id = obj.optString("id", "");
+            long boot = obj.optLong("boot", 0);
+            long seq = obj.optLong("seq", 0);
+            int port = obj.optInt("port", 0);
+            String key = keyFor(id, host, port);
+            long now = System.currentTimeMillis();
 
             if ("bye".equals(obj.optString("type"))) {
-                notified.remove(keyFor(id, host, obj.optInt("port", 0)));
+                synchronized (stateLock) {
+                    Seen seen = states.get(key);
+                    if (seen == null) {
+                        seen = new Seen();
+                        states.put(key, seen);
+                    } else if (isOlder(seen, boot, seq)) {
+                        return; // a goodbye that a newer announce already overtook
+                    }
+                    seen.boot = boot;
+                    seen.seq = seq;
+                    seen.alive = false;
+                    seen.fingerprint = null;
+                    seen.lastMs = now;
+                }
+                aliveBatch.remove(key);
                 JSObject lost = new JSObject();
                 lost.put("id", id);
                 lost.put("host", host);
                 lost.put("name", obj.optString("name", ""));
+                lost.put("boot", boot);
+                lost.put("seq", seq);
                 notifyListeners("onDeviceLost", lost);
                 return;
             }
             if (!obj.has("port")) return;
 
-            int port = obj.optInt("port", 8080);
             String name = obj.optString("name", "Desktop");
             String scheme = obj.optString("scheme", "http");
             String cert = obj.optString("cert", "");
-
-            // Heartbeats arrive every few seconds from every PC; only cross the JS
-            // bridge when something changed or the JS side needs a liveness refresh.
-            String key = keyFor(id, host, port);
             String fingerprint = host + "|" + port + "|" + name + "|" + scheme + "|" + cert;
-            long now = System.currentTimeMillis();
-            Notified previous = notified.get(key);
-            if (previous != null && previous.fingerprint.equals(fingerprint) && now - previous.at < NOTIFY_REFRESH_MS) {
-                return;
+
+            boolean emit;
+            synchronized (stateLock) {
+                Seen seen = states.get(key);
+                boolean first = seen == null;
+                if (first) {
+                    seen = new Seen();
+                    states.put(key, seen);
+                } else if (isOlder(seen, boot, seq)) {
+                    return; // reordered, or sent before a goodbye / by an earlier run of the PC
+                }
+                boolean wasAlive = seen.alive;
+                if (boot != 0) seen.boot = boot;
+                if (seq > seen.seq || boot > seen.boot) seen.seq = seq;
+                seen.alive = true;
+                seen.lastMs = now;
+                // The same announce arrives once per broadcast address: only a new PC, a changed
+                // one, one back from a goodbye, or a slow self-healing refresh is forwarded.
+                emit = first || !wasAlive || !fingerprint.equals(seen.fingerprint) || now - seen.notifiedAt >= NOTIFY_REFRESH_MS;
+                if (emit) {
+                    seen.fingerprint = fingerprint;
+                    seen.notifiedAt = now;
+                }
             }
-            notified.put(key, new Notified(fingerprint, now));
+            aliveBatch.add(key);
+            if (!emit) return;
 
             JSObject ret = new JSObject();
             ret.put("name", name);
@@ -424,6 +517,8 @@ public class DiscoveryPlugin extends Plugin {
             ret.put("cert", cert);
             ret.put("serverName", name);
             if (!id.isEmpty()) ret.put("id", id);
+            if (boot != 0) ret.put("boot", boot);
+            if (seq != 0) ret.put("seq", seq);
             JSONArray ips = obj.optJSONArray("ips");
             if (ips != null) ret.put("ips", ips);
             notifyListeners("onDeviceDiscovered", ret);
@@ -432,29 +527,75 @@ public class DiscoveryPlugin extends Plugin {
         }
     }
 
-    private static String keyFor(String id, String host, int port) {
-        return id != null && !id.isEmpty() ? id : host + ":" + port;
+    /** Sends the keys heard from since the last tick as one event, and trims old state. */
+    private void flushAlive() {
+        try {
+            long now = System.currentTimeMillis();
+            synchronized (stateLock) {
+                Iterator<Map.Entry<String, Seen>> it = states.entrySet().iterator();
+                while (it.hasNext()) {
+                    if (now - it.next().getValue().lastMs > STATE_RETAIN_MS) it.remove();
+                }
+                while (states.size() > MAX_STATES) {
+                    String oldest = null;
+                    long oldestMs = Long.MAX_VALUE;
+                    for (Map.Entry<String, Seen> e : states.entrySet()) {
+                        if (e.getValue().lastMs < oldestMs) {
+                            oldestMs = e.getValue().lastMs;
+                            oldest = e.getKey();
+                        }
+                    }
+                    if (oldest == null) break;
+                    states.remove(oldest);
+                }
+            }
+            if (aliveBatch.isEmpty()) return;
+            JSArray keys = new JSArray();
+            Iterator<String> it = aliveBatch.iterator();
+            while (it.hasNext()) {
+                keys.put(it.next());
+                it.remove();
+            }
+            JSObject ret = new JSObject();
+            ret.put("keys", keys);
+            notifyListeners("onDevicesAlive", ret);
+        } catch (Exception e) {
+            Log.d(TAG, "flushAlive error: " + e.getMessage());
+        }
     }
 
-    private static final class Notified {
-        final String fingerprint;
-        final long at;
-
-        Notified(String fingerprint, long at) {
-            this.fingerprint = fingerprint;
-            this.at = at;
-        }
+    // Same format as deviceKey() in discoveryRegistry.ts.
+    private static String keyFor(String id, String host, int port) {
+        return id != null && !id.isEmpty() ? "id:" + id : "addr:" + host + ":" + port;
     }
 
     @PluginMethod
     public void stopDiscovery(PluginCall call) {
+        wantDiscovery = false;
         stopAllDiscovery();
+        synchronized (stateLock) {
+            states.clear();
+        }
         call.resolve();
+    }
+
+    /** Backgrounded: release the sockets, threads and multicast lock (battery) but remember we want discovery. */
+    @Override
+    protected void handleOnPause() {
+        stopAllDiscovery();
+        super.handleOnPause();
+    }
+
+    @Override
+    protected void handleOnResume() {
+        super.handleOnResume();
+        if (wantDiscovery) startDiscoveryInternal();
     }
 
     /** Release the UDP thread, NSD listener and multicast lock if the WebView/activity goes away. */
     @Override
     protected void handleOnDestroy() {
+        wantDiscovery = false;
         stopAllDiscovery();
         super.handleOnDestroy();
     }
@@ -470,6 +611,11 @@ public class DiscoveryPlugin extends Plugin {
             udpExecutor.shutdownNow();
             udpExecutor = null;
         }
+        if (ticker != null) {
+            ticker.shutdownNow();
+            ticker = null;
+        }
+        aliveBatch.clear();
 
         if (nsdManager != null && discoveryListener != null) {
             try {

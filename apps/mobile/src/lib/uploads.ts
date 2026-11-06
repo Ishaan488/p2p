@@ -150,6 +150,35 @@ export interface UploadableFile {
   slice(start: number, end: number): Blob | Uint8Array | Promise<Blob | Uint8Array>;
 }
 
+/**
+ * Reads a whole `File`/`UploadableFile` into a `Blob`, for the local previews
+ * (thumbnail, inline player, code snippet) generated right after picking a file.
+ *
+ * A real `File` is already a `Blob`, so it is returned as-is at no cost. Other
+ * sources (notably `NativeSharedFile`, used for Android's share sheet, which
+ * streams from a `content://` URI with no `Blob` of its own) are read through
+ * `slice()` in bounded steps and concatenated. This is only used below the same
+ * size ceilings already applied to a picked `File`, so it adds no new ceiling —
+ * only to a kind of file that previously had no preview at all. Returns null
+ * if the read fails or the file is too large.
+ */
+export async function materializeToBlob(file: File | UploadableFile, maxBytes: number): Promise<Blob | null> {
+  if (file instanceof Blob) return file;
+  if (file.size > maxBytes) return null;
+  try {
+    const step = 1 << 20; // 1 MiB per bridge round-trip
+    const parts: BlobPart[] = [];
+    for (let offset = 0; offset < file.size; offset += step) {
+      const chunk = await file.slice(offset, Math.min(offset + step, file.size));
+      parts.push(chunk instanceof Uint8Array ? (chunk as BlobPart) : chunk);
+    }
+    return new Blob(parts);
+  } catch (err) {
+    console.debug('materializeToBlob failed:', err);
+    return null;
+  }
+}
+
 // The same file sent from the same device always maps to the same id, which is
 // what lets a transfer resume after a reload: pick the file again and the
 // server reports the chunks it already has.

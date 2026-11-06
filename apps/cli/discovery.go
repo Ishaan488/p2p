@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/grandcat/zeroconf"
@@ -26,9 +27,16 @@ import (
 //
 // Presence protocol on UDP port 8089 (JSON, one datagram each):
 //
-//	{"type":"announce", ...DiscoveryInfo}   on start, then every ~4s with jitter
-//	{"type":"bye", "id": "<server id>"}     on a clean shutdown
+//	{"type":"announce", ...DiscoveryInfo}   on start, then every 1-2s with jitter
+//	{"type":"bye", "id": "<server id>"}     on a clean shutdown (a fast path only)
 //	reply to "P2P_DISCOVER_REQ"             unicast DiscoveryInfo
+//
+// Every datagram carries "boot" (when this process started, unix ms) and "seq"
+// (strictly increasing within a boot). Receivers use them to drop duplicates
+// (the same announce arrives once per broadcast address), ignore reordered
+// packets, and refuse an announce that was sent before a goodbye. A crash or a
+// lost "bye" is covered by the receiver's timeout (about three missed
+// announces), so the goodbye only makes the common case instant.
 //
 // Announcements scale linearly with the number of PCs on a network (N packets
 // per interval, received by everyone) whereas request/response polling would
@@ -41,8 +49,10 @@ const (
 	UDPDiscoverPort = 8089
 	DiscoverReqMsg  = "P2P_DISCOVER_REQ"
 
-	announceInterval = 4 * time.Second
-	announceJitter   = time.Second // each interval is announceInterval ± announceJitter/2
+	// Phones drop a PC after ~3 missed announces, so this interval bounds how
+	// long a vanished PC stays listed. 400 PCs at ~1.5s is ~270 packets/s network-wide.
+	announceInterval = 1500 * time.Millisecond
+	announceJitter   = time.Second // each interval is announceInterval ± announceJitter/2 (1-2s)
 	requestMinGap    = time.Second // per-source limit on request replies
 	byeRepeats       = 2           // datagrams are unreliable: say goodbye twice
 
@@ -51,6 +61,8 @@ const (
 
 type DiscoveryInfo struct {
 	Type        string   `json:"type,omitempty"` // "announce" or "bye"; empty in replies and /discover
+	Boot        int64    `json:"boot,omitempty"` // process start, unix ms: a larger boot supersedes a smaller one
+	Seq         uint64   `json:"seq,omitempty"`  // increases with every datagram sent within one boot
 	Name        string   `json:"name"`
 	DeviceID    string   `json:"id"`
 	Port        int      `json:"port"`
@@ -218,6 +230,9 @@ func startUDPDiscovery(port int, pcName string, deviceID string, scheme string, 
 	stopCh := make(chan struct{})
 	var responderWG, announcerWG sync.WaitGroup
 
+	boot := time.Now().UnixMilli()
+	var seq atomic.Uint64
+
 	displayName := func() string {
 		if alias := getServerAlias(); alias != "" {
 			return alias
@@ -230,6 +245,8 @@ func startUDPDiscovery(port int, pcName string, deviceID string, scheme string, 
 	build := func(kind string) []byte {
 		info := DiscoveryInfo{
 			Type:        kind,
+			Boot:        boot,
+			Seq:         seq.Add(1),
 			Name:        displayName(),
 			DeviceID:    deviceID,
 			Port:        port,
@@ -323,7 +340,7 @@ func startUDPDiscovery(port int, pcName string, deviceID string, scheme string, 
 		stopOnce.Do(func() {
 			close(stopCh)
 			announcerWG.Wait() // no "announce" may follow the "bye"
-			bye, _ := json.Marshal(DiscoveryInfo{Type: "bye", DeviceID: deviceID, Port: port, Name: displayName()})
+			bye, _ := json.Marshal(DiscoveryInfo{Type: "bye", Boot: boot, Seq: seq.Add(1), DeviceID: deviceID, Port: port, Name: displayName()})
 			for i := 0; i < byeRepeats; i++ {
 				broadcast(bye)
 				time.Sleep(20 * time.Millisecond)

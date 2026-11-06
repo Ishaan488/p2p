@@ -19,6 +19,7 @@ import {
   UploadPriority,
   UploadableFile,
   transferIdFor,
+  materializeToBlob,
   BatchStats,
   getClientBandwidthLimitBps,
   setClientBandwidthLimitBps
@@ -48,7 +49,8 @@ import {
   removePendingUpload,
   isSensitiveClipboardText
 } from './lib/storage';
-import { startAutoDiscovery, deviceKey, DiscoveredDevice } from './lib/discovery';
+import { startAutoDiscovery, deviceKey, forgetDiscoveredDevice, reprobeDiscoveredDevice, DiscoveredDevice } from './lib/discovery';
+import { handleDiscoveredConnectFailure } from './lib/connectRace';
 import { ToastContainer, ToastMessage } from './components/Toast';
 import { MediaViewer, MediaViewerProps } from './components/MediaViewer';
 import { BatchProgress } from './components/BatchProgress';
@@ -595,7 +597,9 @@ export default function App() {
     return transport.connect(socket.url, socket.cipher);
   };
 
-  const pairAndConnect = async (host: string, secret?: string, scheme = 'http', cert?: string) => {
+  // Resolves with the failure (if any) so callers can react to it; the usual error
+  // state has already been set for it.
+  const pairAndConnect = async (host: string, secret?: string, scheme = 'http', cert?: string): Promise<unknown> => {
     setConnectError('');
     setStatus('connecting');
     setAddress(host);
@@ -609,11 +613,49 @@ export default function App() {
     } catch (err) {
       setStatus('disconnected');
       setConnectError(describeFailure(err, host));
-      return;
+      return err;
     }
     localStorage.setItem('p2p_address', host);
     localStorage.setItem('p2p_auto_connect', 'true');
-    await connectTo(host).catch(console.error);
+    try {
+      await connectTo(host);
+    } catch (err) {
+      console.error(err);
+      return err;
+    }
+    return undefined;
+  };
+
+  // Tap on a PC in the "Available on Wi-Fi" list. If it went offline a moment before
+  // the list caught up, say so plainly instead of showing a raw network error.
+  const connectDiscovered = async (d: DiscoveredDevice) => {
+    const target = `${d.host}:${d.port}`;
+    const alreadyPaired = Boolean(api.pairing) && (!d.id || api.pairing?.serverId === d.id);
+    let failure: unknown;
+    if (alreadyPaired) {
+      setConnectError('');
+      try {
+        await connectTo(target);
+      } catch (err) {
+        console.error(err);
+        failure = err;
+      }
+    } else {
+      failure = await pairAndConnect(target, undefined, d.scheme, d.cert);
+    }
+    if (failure === undefined) return;
+
+    // Decide first (synchronously) whether this is the "just went offline" race, so the
+    // generic error set above is replaced rather than flashed.
+    const outcome = await handleDiscoveredConnectFailure(d, failure, {
+      forget: forgetDiscoveredDevice,
+      reprobe: reprobeDiscoveredDevice,
+      showMessage: text => {
+        setStatus('disconnected');
+        setConnectError(text);
+      }
+    });
+    if (outcome === 'back-online') setStatus('disconnected');
   };
 
   const handleCopy = async (text: string) => {
@@ -1160,19 +1202,29 @@ export default function App() {
     let fullContent: string | undefined = undefined;
     let totalLines: number | undefined = undefined;
 
-    if (file instanceof Blob) {
-      if (kind === 'image' && file.size < 50 * 1024 * 1024) {
-        blobUrl = URL.createObjectURL(file);
-        thumbnailUrl = await generateThumbnailDataUrl(file);
-        saveBlobToCache(transferId, file);
-      } else if ((kind === 'audio' || kind === 'video' || kind === 'pdf') && file.size < 120 * 1024 * 1024) {
-        blobUrl = URL.createObjectURL(file);
+    // Builds a local preview (thumbnail, inline player, code snippet) for a file
+    // just handed to sendFile — including one shared in from Android's share
+    // sheet, which arrives as a NativeSharedFile rather than a real Blob/File.
+    if (kind === 'image' && file.size < 50 * 1024 * 1024) {
+      const blob = await materializeToBlob(file, 50 * 1024 * 1024);
+      if (blob) {
+        blobUrl = URL.createObjectURL(blob);
+        thumbnailUrl = await generateThumbnailDataUrl(blob);
+        saveBlobToCache(transferId, blob);
+      }
+    } else if ((kind === 'audio' || kind === 'video' || kind === 'pdf') && file.size < 120 * 1024 * 1024) {
+      const blob = await materializeToBlob(file, 120 * 1024 * 1024);
+      if (blob) {
+        blobUrl = URL.createObjectURL(blob);
         if (kind === 'video') {
-          thumbnailUrl = await generateVideoThumbnailDataUrl(file);
+          thumbnailUrl = await generateVideoThumbnailDataUrl(blob);
         }
-        saveBlobToCache(transferId, file);
-      } else if (kind === 'code') {
-        const extracted = await extractTextSnippet(file);
+        saveBlobToCache(transferId, blob);
+      }
+    } else if (kind === 'code' && file.size < 1024 * 1024) {
+      const blob = await materializeToBlob(file, 1024 * 1024);
+      if (blob) {
+        const extracted = await extractTextSnippet(blob);
         snippet = extracted.snippet;
         fullContent = extracted.fullContent;
         totalLines = extracted.totalLines;
@@ -1413,7 +1465,7 @@ export default function App() {
           discoveryTip={discoveryTip}
           onQuickConnect={handleQuickConnect}
           onManualConnect={handleConnect}
-          onPairAndConnect={pairAndConnect}
+          onConnectDiscovered={connectDiscovered}
           onOpenPreferences={() => setIsPrefsOpen(true)}
           onUnpairPrompt={() => {
             setConfirmDialog({
