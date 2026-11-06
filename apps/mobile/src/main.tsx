@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.tsx'
 import './index.css'
+import './devices.css'
 
 // Ensure any stale ServiceWorker caches in WebView are purged immediately
 if ('serviceWorker' in navigator) {

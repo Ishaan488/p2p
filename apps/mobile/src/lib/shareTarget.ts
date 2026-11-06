@@ -1,4 +1,5 @@
 import { registerPlugin, Capacitor, PluginListenerHandle } from '@capacitor/core';
+import { sharedUriRefs } from './sharedUriRefs';
 
 export interface SharedFileItem {
   name: string;
@@ -24,8 +25,14 @@ interface ShareTargetPlugin {
 
 const ShareTarget = registerPlugin<ShareTargetPlugin>('ShareTarget');
 
+/** Declares that `count` uploads will each release this URI once (one shared file sent to several PCs). */
+export function retainSharedUri(uri: string, count: number): void {
+  sharedUriRefs.retain(uri, count);
+}
+
 export async function releaseSharedUri(uri: string): Promise<void> {
   if (!Capacitor.isNativePlatform() || !uri) return;
+  if (!sharedUriRefs.release(uri)) return; // another upload is still reading it
   try {
     await ShareTarget.releaseSharedUri({ uri });
   } catch (e) {

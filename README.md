@@ -209,7 +209,8 @@ apps/
     os_integration_*.go OS shell/tray/autostart (Windows) and desktop entries (Linux)
     bench/              benchmark harness (not part of the app)
   mobile/               React + Capacitor client (PWA and Android app)
-    src/lib/            protocol client: api, transport, uploads, downloads, discovery
+    src/lib/            protocol client: api, transport, uploads, downloads, discovery;
+                        multi-device: peers, peerConnection, peerManager, sendPlan (see docs/multi-device.md)
     src/components/     UI
     android/            Capacitor Android project and native plugins
 docs/                   protocol, security, requirements, architecture, audit reports
@@ -248,7 +249,9 @@ apps/mobile/src/
     ├── crypto.ts               # WebCrypto + pure-JS noble-ciphers HKDF/AES-GCM
     ├── uploads.ts              # Adaptive chunk streaming & worker queue
     ├── downloads.ts            # Streamed download saver & filesystem bridge
-    ├── discovery.ts            # mDNS & UDP LAN device discovery
+    ├── discovery.ts            # mDNS & UDP LAN device discovery (live list, goodbyes, timeouts)
+    ├── peerManager.ts          # Several paired PCs at once: connections, limits, send targets
+    ├── peerConnection.ts       # One PC's session, socket and reconnect loop
     ├── shareTarget.ts          # Android native intent receiver
     └── backButton.ts           # Hardware back-button stack manager
 ```
@@ -284,7 +287,7 @@ go test -v ./...
 - **Fuzzing Suite:** Continuous fuzz testing on filename sanitizers, chunk AAD bindings, and request signatures.
 - **Hardening Regressions:** `robustness_test.go` pins fixes for download ownership, UDP discovery lifetime, pprof exposure, bounded queues and more.
 
-- **Client logic (vitest):** `npm --prefix apps/mobile test` covers the live device list (appearing/confirmed, timeout, goodbye ordering, probe limits) and the "device just went offline" connect race.
+- **Client logic (vitest):** `npm --prefix apps/mobile test` covers the live device list (appearing/confirmed, timeout, goodbye ordering, probe limits), the "device just went offline" connect race, and multi-device (connections, limits, send targets, migration, share routing).
 
 Static checks used before every release: `make check` (gofmt, `go vet`, Go tests, TypeScript compile, client tests).
 

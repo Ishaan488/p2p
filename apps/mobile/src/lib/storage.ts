@@ -15,6 +15,10 @@ export interface PendingUploadMeta {
   lastModified: number;
   priority: 'high' | 'normal' | 'low';
   createdAt: number;
+  /** The PC this upload is for (several PCs can be sent the same file). */
+  peerId?: string;
+  /** Key of the stored copy of the file; shared by the uploads of one file to several PCs. */
+  blobKey?: string;
 }
 
 function openDB(): Promise<IDBDatabase> {
@@ -100,15 +104,19 @@ export async function savePendingUpload(
   transferId: string,
   messageId: string,
   file: { name: string; size: number; lastModified?: number; type?: string },
-  priority: 'high' | 'normal' | 'low' = 'normal'
+  priority: 'high' | 'normal' | 'low' = 'normal',
+  options: { peerId?: string; blobKey?: string } = {}
 ): Promise<void> {
   try {
-    // Only cache files up to 250 MB in IndexedDB if they are native Blobs, to avoid exhausting mobile webview quota
-    if (file instanceof Blob && file.size <= 250 * 1024 * 1024) {
-      await saveBlobToCache(`pending-${transferId}`, file);
-    }
+    const blobKey = options.blobKey ?? transferId;
     const raw = localStorage.getItem(PENDING_UPLOADS_META_KEY);
     const list: PendingUploadMeta[] = raw ? JSON.parse(raw) : [];
+    // Only cache files up to 250 MB in IndexedDB if they are native Blobs, to avoid exhausting mobile webview quota.
+    // Uploads of one file to several PCs share a single stored copy.
+    const alreadyStored = list.some(item => (item.blobKey ?? item.transferId) === blobKey);
+    if (file instanceof Blob && file.size <= 250 * 1024 * 1024 && !alreadyStored) {
+      await saveBlobToCache(`pending-${blobKey}`, file);
+    }
     const filtered = list.filter((item) => item.transferId !== transferId);
     filtered.push({
       transferId,
@@ -118,7 +126,9 @@ export async function savePendingUpload(
       size: file.size,
       lastModified: file.lastModified || Date.now(),
       priority,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      peerId: options.peerId,
+      blobKey: options.blobKey
     });
     localStorage.setItem(PENDING_UPLOADS_META_KEY, JSON.stringify(filtered));
   } catch (err) {
@@ -131,11 +141,16 @@ export async function savePendingUpload(
  */
 export async function removePendingUpload(transferId: string): Promise<void> {
   try {
-    await deleteBlobFromCache(`pending-${transferId}`);
     const raw = localStorage.getItem(PENDING_UPLOADS_META_KEY);
-    if (!raw) return;
-    const list: PendingUploadMeta[] = JSON.parse(raw);
+    const list: PendingUploadMeta[] = raw ? JSON.parse(raw) : [];
+    const removed = list.find(item => item.transferId === transferId);
     const next = list.filter((item) => item.transferId !== transferId);
+    // The stored file may still be needed by the same file's uploads to other PCs.
+    const blobKey = removed?.blobKey ?? transferId;
+    if (!next.some(item => (item.blobKey ?? item.transferId) === blobKey)) {
+      await deleteBlobFromCache(`pending-${blobKey}`);
+    }
+    if (!raw) return;
     localStorage.setItem(PENDING_UPLOADS_META_KEY, JSON.stringify(next));
   } catch (err) {
     console.debug('Could not remove pending upload:', err);
@@ -155,12 +170,14 @@ export async function loadPendingUploads(): Promise<Array<{ meta: PendingUploadM
     const validMeta: PendingUploadMeta[] = [];
     const restored: Array<{ meta: PendingUploadMeta; file: File }> = [];
 
+    const expiredKeys = new Set<string>();
     for (const meta of list) {
+      const blobKey = meta.blobKey ?? meta.transferId;
       if (now - meta.createdAt > maxAgeMs) {
-        await deleteBlobFromCache(`pending-${meta.transferId}`);
+        expiredKeys.add(blobKey);
         continue;
       }
-      const blob = await getBlobFromCache(`pending-${meta.transferId}`);
+      const blob = await getBlobFromCache(`pending-${blobKey}`);
       if (blob && blob.size === meta.size) {
         const file = new File([blob], meta.filename, {
           type: meta.mimeType,
@@ -171,6 +188,10 @@ export async function loadPendingUploads(): Promise<Array<{ meta: PendingUploadM
       }
     }
     localStorage.setItem(PENDING_UPLOADS_META_KEY, JSON.stringify(validMeta));
+    const stillUsed = new Set(validMeta.map(m => m.blobKey ?? m.transferId));
+    for (const key of expiredKeys) {
+      if (!stillUsed.has(key)) await deleteBlobFromCache(`pending-${key}`);
+    }
     return restored;
   } catch (err) {
     console.debug('Failed to load pending uploads:', err);

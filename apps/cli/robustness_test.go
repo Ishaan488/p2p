@@ -488,3 +488,123 @@ func TestAnnounceSeq_StrictlyIncreasesAcrossAnnouncesAndReplies(t *testing.T) {
 		last, boot = m.Seq, m.Boot
 	}
 }
+
+// TestListenDiscoverySocket_TwoLocalInstancesCanBothBind is the regression test for the bug this fixes:
+// a second local instance (another PC in a multi-device-on-one-machine test setup, or genuinely two
+// PCs that happen to share a default/cloned hostname) used to lose UDP discovery entirely because the
+// discovery port can only be bound once without SO_REUSEADDR.
+func TestListenDiscoverySocket_TwoLocalInstancesCanBothBind(t *testing.T) {
+	c1, recv1 := listenDiscoverySocket()
+	if c1 == nil {
+		t.Skip("no UDP socket could be opened in this environment")
+	}
+	defer c1.Close()
+	if !recv1 {
+		t.Skip("this OS/sandbox does not allow binding the discovery port at all here")
+	}
+
+	c2, recv2 := listenDiscoverySocket()
+	if c2 == nil {
+		t.Fatal("a second local instance must still get a usable (at least send-only) socket")
+	}
+	defer c2.Close()
+	if !recv2 {
+		t.Fatal("SO_REUSEADDR should let a second local instance also bind and receive on the shared port, " +
+			"but it fell back to send-only — discovery regressed to the pre-fix behaviour")
+	}
+}
+
+// TestListenDiscoverySocket_DegradesGracefullyWhenPortIsTaken simulates an instance that genuinely
+// cannot share the port (e.g. an older build without SO_REUSEADDR already holds it): discovery must
+// still return a usable send-only socket rather than nothing at all.
+func TestListenDiscoverySocket_DegradesGracefullyWhenPortIsTaken(t *testing.T) {
+	blocker, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: UDPDiscoverPort})
+	if err != nil {
+		t.Skipf("discovery port busy already: %v", err)
+	}
+	defer blocker.Close()
+
+	conn, receiving := listenDiscoverySocket()
+	if conn == nil {
+		t.Fatal("expected a degraded send-only socket, got none")
+	}
+	defer conn.Close()
+	if receiving {
+		t.Fatal("a plain (non-REUSEADDR) holder of the port must not be shareable; expected degraded send-only mode")
+	}
+	// A send-only socket must still be able to send (announcements keep working even in degraded mode).
+	if _, err := conn.WriteTo([]byte("probe"), &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: UDPDiscoverPort}); err != nil {
+		t.Fatalf("degraded socket should still be able to send: %v", err)
+	}
+}
+
+// TestUDPDiscovery_TwoLocalInstancesBothAnnounceAndReply is the end-to-end version: two full
+// startUDPDiscovery sessions sharing the real discovery port (as two p2p.exe processes on one machine
+// would), both able to answer a phone's direct discovery request — not just the first one started.
+func TestUDPDiscovery_TwoLocalInstancesBothAnnounceAndReply(t *testing.T) {
+	phone, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Skipf("cannot open loopback socket: %v", err)
+	}
+	defer phone.Close()
+
+	saved := announceTargets
+	announceTargets = func() []*net.UDPAddr { return []*net.UDPAddr{phone.LocalAddr().(*net.UDPAddr)} }
+	defer func() { announceTargets = saved }()
+
+	stopA, err := startUDPDiscovery(8080, "Instance A", "instance-a", "http", "")
+	if err != nil {
+		t.Skipf("discovery port busy: %v", err)
+	}
+	defer stopA()
+
+	stopB, err := startUDPDiscovery(8081, "Instance B", "instance-b", "http", "")
+	if err != nil {
+		t.Fatalf("a second local instance must also be able to start discovery, got: %v", err)
+	}
+	defer stopB()
+
+	seenIDs := map[string]bool{}
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) && len(seenIDs) < 2 {
+		_ = phone.SetReadDeadline(time.Now().Add(4 * time.Second))
+		buf := make([]byte, 2048)
+		n, _, err := phone.ReadFromUDP(buf)
+		if err != nil {
+			break
+		}
+		var m DiscoveryInfo
+		if json.Unmarshal(buf[:n], &m) == nil && m.Type == "announce" {
+			seenIDs[m.DeviceID] = true
+		}
+	}
+	if !seenIDs["instance-a"] || !seenIDs["instance-b"] {
+		t.Fatalf("expected announces from both local instances, got: %v", seenIDs)
+	}
+}
+
+func TestMDNSInstanceName(t *testing.T) {
+	// Real server IDs are randomID(): hex, random from the first character (see transfer_state.go),
+	// not a shared human-readable prefix — that is what gives the truncated suffix its uniqueness.
+	a := mdnsInstanceName("DESKTOP-ABC123", randomID())
+	b := mdnsInstanceName("DESKTOP-ABC123", randomID())
+	if a == b {
+		t.Fatalf("two different device IDs on the same (possibly cloned/default) hostname must not collide: %q == %q", a, b)
+	}
+	if !strings.Contains(a, "DESKTOP-ABC123") {
+		t.Fatalf("instance name should stay human-recognizable, got %q", a)
+	}
+	if strings.Contains(a, " ") {
+		t.Fatalf("mDNS instance names must not contain raw spaces: %q", a)
+	}
+	// Same device ID, same hostname -> deterministic (re-registration after a network change must match).
+	first := mdnsInstanceName("PC", "same-id")
+	second := mdnsInstanceName("PC", "same-id")
+	if first != second {
+		t.Fatalf("instance name must be deterministic for the same inputs: %q vs %q", first, second)
+	}
+	// No device ID at all must not crash and must still be usable.
+	if got := mdnsInstanceName("My PC", ""); !strings.HasPrefix(got, "p2p-My-PC") {
+		t.Fatalf("empty device id should still produce a sane name, got %q", got)
+	}
+}

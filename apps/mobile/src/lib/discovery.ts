@@ -62,12 +62,15 @@ export function reprobeDiscoveredDevice(device: DiscoveredDevice): Promise<boole
  *  - a /24 HTTP sweep, re-run when the app returns to the foreground
  *
  * `onDevice` fires when a PC appears (state `appearing`, before it is verified),
- * is confirmed, or changes; `onLost` when it leaves. Returns a teardown function.
+ * is confirmed, or changes; `onLost` when it leaves. `knownAddresses` are the
+ * host:port of PCs already paired with this phone: they are probed straight away
+ * (a PC answers in milliseconds) instead of waiting to be heard. Returns a teardown function.
  */
 export function startAutoDiscovery(
   onDevice: (device: DiscoveredDevice) => void,
   onDiagnostics?: (msg: string) => void,
-  onLost?: (key: string) => void
+  onLost?: (key: string) => void,
+  options: { knownAddresses?: readonly string[] } = {}
 ): () => void {
   let active = true;
   const native = Capacitor.isNativePlatform();
@@ -158,23 +161,20 @@ export function startAutoDiscovery(
     await Promise.all(Array.from({ length: SUBNET_SCAN_CONCURRENCY }, worker));
   };
 
-  let savedHost = '';
-  let savedPort = 8080;
-  try {
-    const rawSaved = localStorage.getItem('p2p_address') || '';
-    if (rawSaved) {
-      const parts = rawSaved.split(':');
-      savedHost = parts[0];
-      if (parts[1]) savedPort = parseInt(parts[1], 10) || 8080;
-    }
-  } catch {
-    // storage unavailable: skip the saved-address shortcut
+  // Addresses of already paired PCs (deduplicated, capped), as { host, port }.
+  const known: Array<{ host: string; port: number }> = [];
+  for (const raw of options.knownAddresses ?? []) {
+    const [host, portText] = raw.replace(/^https?:\/\//, '').split('/')[0].split(':');
+    const port = parseInt(portText, 10) || 8080;
+    if (host && !known.some(k => k.host === host && k.port === port) && known.length < 12) known.push({ host, port });
   }
+  const knownPorts = [...new Set([8080, ...known.map(k => k.port)])];
+  const probeKnown = (timeoutMs: number) => known.forEach(k => void probeAndConfirm(k.host, k.port, timeoutMs));
 
   const sweepSubnet = async () => {
     if (!active || Date.now() - lastSubnetScan < MIN_SUBNET_SCAN_GAP_MS) return;
     lastSubnetScan = Date.now();
-    const ports = savedPort !== 8080 ? [8080, savedPort] : [8080];
+    const ports = knownPorts;
     let subnet = '';
     if (native) {
       try {
@@ -183,12 +183,13 @@ export function startAutoDiscovery(
         console.debug('getNetworkInfo failed:', err);
       }
     }
-    if (!subnet && savedHost.includes('.')) subnet = savedHost.substring(0, savedHost.lastIndexOf('.') + 1);
+    const guess = known.find(k => k.host.includes('.'))?.host;
+    if (!subnet && guess) subnet = guess.substring(0, guess.lastIndexOf('.') + 1);
     if (subnet) await scanSubnet(subnet, ports);
   };
 
-  // 1. Saved address: answers in milliseconds.
-  if (savedHost) void probeAndConfirm(savedHost, savedPort, 600);
+  // 1. Paired PCs' last addresses: answer in milliseconds.
+  probeKnown(600);
 
   // 2. Native listeners first, then start, so no early event is missed. The
   // native side pauses itself when the app is backgrounded and resumes with it.
@@ -217,14 +218,14 @@ export function startAutoDiscovery(
   const refreshTimer = setInterval(() => {
     if (!active || isHidden()) return;
     registry.refreshQuiet(QUIET_AFTER_MS, REFRESH_MAX_PER_TICK);
-    if (savedHost && registry.size === 0) void probeAndConfirm(savedHost, savedPort, 500);
+    if (registry.size === 0) probeKnown(500);
   }, REFRESH_INTERVAL_MS);
 
   // Back in the foreground: nothing may be judged stale before it had a chance to be heard again.
   const onVisible = () => {
     if (!active || isHidden()) return;
     registry.touchAll();
-    if (savedHost) void probeAndConfirm(savedHost, savedPort, 600);
+    probeKnown(600);
     void sweepSubnet();
     if (native) DiscoveryNative.startDiscovery().catch(() => {}); // idempotent; resumes if native did not
   };

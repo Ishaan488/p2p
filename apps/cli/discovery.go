@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -93,7 +94,7 @@ func startMDNS(port int, pcName string, deviceID string, scheme string, certFP s
 	if hostname == "" {
 		hostname = pcName
 	}
-	instanceName := fmt.Sprintf("p2p-%s", strings.ReplaceAll(hostname, " ", "-"))
+	instanceName := mdnsInstanceName(hostname, deviceID)
 
 	txtRecords := []string{
 		fmt.Sprintf("name=%s", pcName),
@@ -120,6 +121,26 @@ func startMDNS(port int, pcName string, deviceID string, scheme string, certFP s
 
 	mdnsServer = server
 	return server, nil
+}
+
+// mdnsInstanceName builds a unique-per-process mDNS service instance name.
+// Hostname alone is not enough: two unrelated PCs can share a default/cloned
+// hostname (e.g. "DESKTOP-ABC123" from the same disk image), and two local
+// instances of this program (same hostname, different ports, used for
+// testing) are not unrelated — both would otherwise register an identical
+// name and silently collide per RFC 6762. deviceID is this instance's stable,
+// persisted server ID, so appending a short slice of it makes the name
+// unique while keeping it human-recognizable.
+func mdnsInstanceName(hostname, deviceID string) string {
+	clean := strings.ReplaceAll(hostname, " ", "-")
+	suffix := deviceID
+	if len(suffix) > 6 {
+		suffix = suffix[:6]
+	}
+	if suffix == "" {
+		return fmt.Sprintf("p2p-%s", clean)
+	}
+	return fmt.Sprintf("p2p-%s-%s", clean, suffix)
 }
 
 // stopMDNS cleanly unregisters the mDNS service (sends the mDNS "goodbye").
@@ -217,14 +238,48 @@ func nextAnnounceDelay() time.Duration {
 	return announceInterval - announceJitter/2 + time.Duration(rand.Int63n(int64(announceJitter)))
 }
 
+// listenDiscoverySocket opens the UDP socket discovery runs on, in three
+// steps of decreasing capability so one blocked path never takes down the
+// whole feature:
+//
+//  1. Bind the shared discovery port with SO_REUSEADDR. This is what lets more
+//     than one local P2P Link process (another instance on this machine, used
+//     e.g. for testing) share the port: the OS then delivers broadcast and
+//     multicast datagrams to every socket bound this way, so every instance
+//     can both announce itself and answer direct requests.
+//  2. A plain bind of the same port, in case SO_REUSEADDR itself is rejected
+//     by this OS/sandbox but the port is otherwise free.
+//  3. An ephemeral, send-only socket. Announcements still reach listening
+//     phones (their destination port is UDPDiscoverPort regardless of our
+//     source port), so discovery keeps working — just without answering the
+//     phone's direct startup request burst. receiving is false in this case.
+func listenDiscoverySocket() (conn *net.UDPConn, receiving bool) {
+	lc := net.ListenConfig{Control: reuseAddrControl}
+	if pc, err := lc.ListenPacket(context.Background(), "udp4", fmt.Sprintf(":%d", UDPDiscoverPort)); err == nil {
+		return pc.(*net.UDPConn), true
+	}
+
+	if c, err := net.ListenUDP("udp4", &net.UDPAddr{Port: UDPDiscoverPort, IP: net.IPv4zero}); err == nil {
+		return c, true
+	}
+
+	c, err := net.ListenUDP("udp4", &net.UDPAddr{Port: 0, IP: net.IPv4zero})
+	if err != nil {
+		log.Printf("UDP discovery: no UDP socket could be opened at all: %v", err)
+		return nil, false
+	}
+	log.Printf("UDP discovery: port %d is unavailable here, so this instance will only send "+
+		"announcements (it will not answer other devices' direct discovery requests)", UDPDiscoverPort)
+	return c, false
+}
+
 // startUDPDiscovery listens on the discovery port for phone requests and
 // announces presence on the local broadcast and multicast channels. The
 // returned stop function broadcasts a goodbye before closing the socket.
 func startUDPDiscovery(port int, pcName string, deviceID string, scheme string, certFP string) (func(), error) {
-	conn, err := net.ListenUDP("udp4", &net.UDPAddr{Port: UDPDiscoverPort, IP: net.IPv4zero})
-	if err != nil {
-		// Port might be in use by another instance; non-fatal
-		return func() {}, err
+	conn, receiving := listenDiscoverySocket()
+	if conn == nil {
+		return func() {}, fmt.Errorf("could not open a UDP socket for discovery")
 	}
 
 	stopCh := make(chan struct{})
@@ -265,37 +320,41 @@ func startUDPDiscovery(port int, pcName string, deviceID string, scheme string, 
 		}
 	}
 
-	// 1. Responder: answers DiscoverReqMsg with a unicast DiscoveryInfo.
-	responderWG.Add(1)
-	go func() {
-		defer responderWG.Done()
-		var limiter requestLimiter
-		buf := make([]byte, 1024)
-		for {
-			_ = conn.SetReadDeadline(time.Now().Add(time.Second))
-			n, remote, err := conn.ReadFrom(buf)
-			if err != nil {
-				if ne, ok := err.(net.Error); ok && ne.Timeout() {
+	// 1. Responder: answers DiscoverReqMsg with a unicast DiscoveryInfo. Only
+	// meaningful when this socket actually owns the shared port (receiving);
+	// otherwise nothing destined for UDPDiscoverPort ever reaches it.
+	if receiving {
+		responderWG.Add(1)
+		go func() {
+			defer responderWG.Done()
+			var limiter requestLimiter
+			buf := make([]byte, 1024)
+			for {
+				_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+				n, remote, err := conn.ReadFrom(buf)
+				if err != nil {
+					if ne, ok := err.(net.Error); ok && ne.Timeout() {
+						select {
+						case <-stopCh:
+							return
+						default:
+							continue
+						}
+					}
 					select {
 					case <-stopCh:
 						return
 					default:
-						continue
 					}
+					time.Sleep(100 * time.Millisecond) // transient error: avoid a hot loop
+					continue
 				}
-				select {
-				case <-stopCh:
-					return
-				default:
+				if strings.HasPrefix(strings.TrimSpace(string(buf[:n])), DiscoverReqMsg) && limiter.allow(remote) {
+					_, _ = conn.WriteTo(build(""), remote)
 				}
-				time.Sleep(100 * time.Millisecond) // transient error: avoid a hot loop
-				continue
 			}
-			if strings.HasPrefix(strings.TrimSpace(string(buf[:n])), DiscoverReqMsg) && limiter.allow(remote) {
-				_, _ = conn.WriteTo(build(""), remote)
-			}
-		}
-	}()
+		}()
+	}
 
 	// 2. Announcer: immediately (a phone that is already listening learns about
 	// us at once), twice more shortly after in case a datagram was lost, then a
