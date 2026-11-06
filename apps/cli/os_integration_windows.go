@@ -159,8 +159,8 @@ const (
 
 	idiApplication = 32512
 
-	mfString    = 0x00000000
-	mfSeparator = 0x00000800
+	mfString       = 0x00000000
+	mfSeparator    = 0x00000800
 	tpmBottomAlign = 0x0020
 	tpmLeftAlign   = 0x0000
 	tpmRightButton = 0x0002
@@ -184,7 +184,7 @@ type guid struct {
 
 type notifyIconDataW struct {
 	CbSize           uint32
-	HWnd              uintptr
+	HWnd             uintptr
 	UID              uint32
 	UFlags           uint32
 	UCallbackMessage uint32
@@ -252,12 +252,12 @@ var (
 	procGetModuleHandleW = kernel32.NewProc("GetModuleHandleW")
 	procGetConsoleWindow = kernel32.NewProc("GetConsoleWindow")
 
-	trayMu          sync.Mutex
-	trayActive      bool
-	trayHWnd        uintptr
-	trayNID         notifyIconDataW
-	consoleVisible  = true
-	trayServerPort  int
+	trayMu         sync.Mutex
+	trayActive     bool
+	trayHWnd       uintptr
+	trayNID        notifyIconDataW
+	consoleVisible = true
+	trayServerPort int
 )
 
 func toggleConsoleVisibility() {
@@ -349,8 +349,7 @@ func trayWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 				}
 			}
 		case menuCmdExit:
-			stopSystemTray()
-			os.Exit(0)
+			requestShutdown()
 		}
 		return 0
 	case wmDestroy:
@@ -439,4 +438,3 @@ func stopSystemTray() {
 	procShellNotifyIconW.Call(nimDelete, uintptr(unsafe.Pointer(&trayNID)))
 	trayActive = false
 }
-

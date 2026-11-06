@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -13,15 +15,42 @@ import (
 	"github.com/grandcat/zeroconf"
 )
 
-// Service discovery constants for P2P Link
+// Service discovery: how phones find this PC without typing an address.
+//
+// Three channels run side by side because each one is blocked on some networks:
+//
+//	mDNS (_p2plink._tcp)   standard zero-config; the OS/router may filter it
+//	UDP announcements      this PC broadcasts "I'm here" to 255.255.255.255,
+//	                       every subnet broadcast address and 224.0.0.167
+//	HTTP /discover         unicast probe used by the phone's subnet scan
+//
+// Presence protocol on UDP port 8089 (JSON, one datagram each):
+//
+//	{"type":"announce", ...DiscoveryInfo}   on start, then every ~4s with jitter
+//	{"type":"bye", "id": "<server id>"}     on a clean shutdown
+//	reply to "P2P_DISCOVER_REQ"             unicast DiscoveryInfo
+//
+// Announcements scale linearly with the number of PCs on a network (N packets
+// per interval, received by everyone) whereas request/response polling would
+// scale quadratically, so announcements are the steady-state mechanism and
+// requests are only used by a phone for a short burst right after it starts.
+
 const (
 	MDNSServiceType = "_p2plink._tcp"
 	MDNSDomain      = "local."
 	UDPDiscoverPort = 8089
 	DiscoverReqMsg  = "P2P_DISCOVER_REQ"
+
+	announceInterval = 4 * time.Second
+	announceJitter   = time.Second // each interval is announceInterval ± announceJitter/2
+	requestMinGap    = time.Second // per-source limit on request replies
+	byeRepeats       = 2           // datagrams are unreliable: say goodbye twice
+
+	maxTrackedRequesters = 1024
 )
 
 type DiscoveryInfo struct {
+	Type        string   `json:"type,omitempty"` // "announce" or "bye"; empty in replies and /discover
 	Name        string   `json:"name"`
 	DeviceID    string   `json:"id"`
 	Port        int      `json:"port"`
@@ -81,7 +110,7 @@ func startMDNS(port int, pcName string, deviceID string, scheme string, certFP s
 	return server, nil
 }
 
-// stopMDNS cleanly unregisters the mDNS service
+// stopMDNS cleanly unregisters the mDNS service (sends the mDNS "goodbye").
 func stopMDNS() {
 	mdnsMu.Lock()
 	defer mdnsMu.Unlock()
@@ -91,31 +120,117 @@ func stopMDNS() {
 	}
 }
 
-// startUDPDiscovery listens on a local UDP port for broadcast pings from mobile apps or web clients,
-// and periodically announces presence on local broadcast and multicast channels,
-// providing a resilient discovery mechanism for routers that filter mDNS multicast packets.
-func startUDPDiscovery(port int, pcName string, deviceID string, scheme string, certFP string) (func(), error) {
-	addr := &net.UDPAddr{
-		Port: UDPDiscoverPort,
-		IP:   net.IPv4zero,
+// announceTargets lists where announcements are sent; tests point it at loopback.
+var announceTargets = localBroadcastAddrs
+
+var (
+	discoveryMu  sync.Mutex
+	stopUDP      func()
+	discoveryOff bool
+)
+
+// startDiscovery announces this node over mDNS and UDP broadcast. Failures are
+// non-fatal: devices can still pair by scanning the QR code or typing the address.
+func startDiscovery(port int, pcName, deviceID, scheme, certFP string) {
+	if _, err := startMDNS(port, pcName, deviceID, scheme, certFP); err != nil {
+		log.Printf("mDNS announcement unavailable: %v", err)
 	}
-	conn, err := net.ListenUDP("udp4", addr)
+	stop, err := startUDPDiscovery(port, pcName, deviceID, scheme, certFP)
+	if err != nil {
+		log.Printf("UDP discovery unavailable: %v", err)
+		return
+	}
+	discoveryMu.Lock()
+	defer discoveryMu.Unlock()
+	if discoveryOff { // shutdown raced with startup
+		stop()
+		return
+	}
+	stopUDP = stop
+}
+
+// stopDiscovery says goodbye on every channel and releases the sockets, so
+// phones drop this PC from their list immediately instead of waiting for a timeout.
+func stopDiscovery() {
+	discoveryMu.Lock()
+	discoveryOff = true
+	stop := stopUDP
+	stopUDP = nil
+	discoveryMu.Unlock()
+
+	if stop != nil {
+		stop() // sends the UDP "bye"
+	}
+	stopMDNS() // sends the mDNS goodbye
+}
+
+// requestLimiter allows one reply per source address per requestMinGap, so a
+// burst of phones (or a malicious sender) cannot make this PC flood the network.
+type requestLimiter struct {
+	mu   sync.Mutex
+	last map[string]time.Time
+}
+
+func (l *requestLimiter) allow(addr net.Addr) bool {
+	host := addr.String()
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	now := time.Now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.last == nil {
+		l.last = make(map[string]time.Time)
+	}
+	if t, ok := l.last[host]; ok && now.Sub(t) < requestMinGap {
+		return false
+	}
+	if len(l.last) >= maxTrackedRequesters {
+		for k, t := range l.last {
+			if now.Sub(t) > requestMinGap {
+				delete(l.last, k)
+			}
+		}
+		if len(l.last) >= maxTrackedRequesters {
+			return false
+		}
+	}
+	l.last[host] = now
+	return true
+}
+
+// nextAnnounceDelay is announceInterval with random jitter so PCs that
+// started together do not keep transmitting in lock-step.
+func nextAnnounceDelay() time.Duration {
+	return announceInterval - announceJitter/2 + time.Duration(rand.Int63n(int64(announceJitter)))
+}
+
+// startUDPDiscovery listens on the discovery port for phone requests and
+// announces presence on the local broadcast and multicast channels. The
+// returned stop function broadcasts a goodbye before closing the socket.
+func startUDPDiscovery(port int, pcName string, deviceID string, scheme string, certFP string) (func(), error) {
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{Port: UDPDiscoverPort, IP: net.IPv4zero})
 	if err != nil {
 		// Port might be in use by another instance; non-fatal
 		return func() {}, err
 	}
 
 	stopCh := make(chan struct{})
+	var responderWG, announcerWG sync.WaitGroup
 
-	buildInfo := func() []byte {
-		displayName := pcName
+	displayName := func() string {
 		if alias := getServerAlias(); alias != "" {
-			displayName = alias
-		} else if displayName == "" {
-			displayName = getServerName()
+			return alias
 		}
+		if pcName != "" {
+			return pcName
+		}
+		return getServerName()
+	}
+	build := func(kind string) []byte {
 		info := DiscoveryInfo{
-			Name:        displayName,
+			Type:        kind,
+			Name:        displayName(),
 			DeviceID:    deviceID,
 			Port:        port,
 			Scheme:      scheme,
@@ -124,62 +239,98 @@ func startUDPDiscovery(port int, pcName string, deviceID string, scheme string, 
 			Version:     "1.0",
 			RequirePair: true,
 		}
-		respBytes, _ := json.Marshal(info)
-		return respBytes
+		b, _ := json.Marshal(info)
+		return b
+	}
+	broadcast := func(payload []byte) {
+		for _, dst := range announceTargets() {
+			_, _ = conn.WriteTo(payload, dst)
+		}
 	}
 
-	// 1. Passive listener: immediately answers any DiscoverReqMsg directed at port 8089
+	// 1. Responder: answers DiscoverReqMsg with a unicast DiscoveryInfo.
+	responderWG.Add(1)
 	go func() {
-		defer conn.Close()
+		defer responderWG.Done()
+		var limiter requestLimiter
 		buf := make([]byte, 1024)
 		for {
-			select {
-			case <-stopCh:
-				return
-			default:
-			}
-
-			_ = conn.SetReadDeadline(time.Now().Add(1 * time.Second))
-			n, remoteAddr, err := conn.ReadFrom(buf)
+			_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+			n, remote, err := conn.ReadFrom(buf)
 			if err != nil {
+				if ne, ok := err.(net.Error); ok && ne.Timeout() {
+					select {
+					case <-stopCh:
+						return
+					default:
+						continue
+					}
+				}
+				select {
+				case <-stopCh:
+					return
+				default:
+				}
+				time.Sleep(100 * time.Millisecond) // transient error: avoid a hot loop
 				continue
 			}
-
-			req := strings.TrimSpace(string(buf[:n]))
-			if strings.HasPrefix(req, DiscoverReqMsg) {
-				respBytes := buildInfo()
-				if len(respBytes) > 0 {
-					_, _ = conn.WriteTo(respBytes, remoteAddr)
-				}
+			if strings.HasPrefix(strings.TrimSpace(string(buf[:n])), DiscoverReqMsg) && limiter.allow(remote) {
+				_, _ = conn.WriteTo(build(""), remote)
 			}
 		}
 	}()
 
-	// 2. Active periodic announcement: broadcast presence every 3 seconds to all subnet broadcast
-	// addresses and multicast group 224.0.0.167 so listening mobile devices discover this PC automatically.
+	// 2. Announcer: immediately (a phone that is already listening learns about
+	// us at once), twice more shortly after in case a datagram was lost, then a
+	// jittered heartbeat. Also re-registers mDNS if the network or name changed.
+	announcerWG.Add(1)
 	go func() {
-		ticker := time.NewTicker(3 * time.Second)
-		defer ticker.Stop()
-
-		for {
+		defer announcerWG.Done()
+		sleep := func(d time.Duration) bool {
+			t := time.NewTimer(d)
+			defer t.Stop()
 			select {
 			case <-stopCh:
-				return
-			case <-ticker.C:
-				respBytes := buildInfo()
-				if len(respBytes) == 0 {
-					continue
-				}
-				for _, dst := range localBroadcastAddrs() {
-					_, _ = conn.WriteTo(respBytes, dst)
-				}
+				return false
+			case <-t.C:
+				return true
 			}
+		}
+		signature := func() string { return displayName() + "|" + strings.Join(localIPs(), ",") }
+		lastSig := signature()
+
+		for _, d := range []time.Duration{0, 400 * time.Millisecond, 800 * time.Millisecond} {
+			if !sleep(d) {
+				return
+			}
+			broadcast(build("announce"))
+		}
+		for sleep(nextAnnounceDelay()) {
+			if sig := signature(); sig != lastSig {
+				lastSig = sig
+				go func() { // network changed: refresh the mDNS record too
+					if _, err := startMDNS(port, displayName(), deviceID, scheme, certFP); err != nil {
+						log.Printf("mDNS re-registration failed: %v", err)
+					}
+				}()
+			}
+			broadcast(build("announce"))
 		}
 	}()
 
+	var stopOnce sync.Once
 	return func() {
-		close(stopCh)
-		conn.Close()
+		stopOnce.Do(func() {
+			close(stopCh)
+			announcerWG.Wait() // no "announce" may follow the "bye"
+			bye, _ := json.Marshal(DiscoveryInfo{Type: "bye", DeviceID: deviceID, Port: port, Name: displayName()})
+			for i := 0; i < byeRepeats; i++ {
+				broadcast(bye)
+				time.Sleep(20 * time.Millisecond)
+			}
+			conn.Close() // also wakes the responder
+			responderWG.Wait()
+		})
 	}, nil
 }
 
@@ -217,8 +368,7 @@ func localBroadcastAddrs() []*net.UDPAddr {
 		}
 	}
 	addrs = append(addrs, &net.UDPAddr{IP: net.IPv4bcast, Port: UDPDiscoverPort})
-	mcastIP := net.ParseIP("224.0.0.167")
-	if mcastIP != nil {
+	if mcastIP := net.ParseIP("224.0.0.167"); mcastIP != nil {
 		addrs = append(addrs, &net.UDPAddr{IP: mcastIP, Port: UDPDiscoverPort})
 	}
 	return addrs

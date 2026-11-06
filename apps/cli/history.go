@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -43,13 +44,20 @@ func loadHistory() {
 
 func saveHistoryLocked() {
 	data, err := json.MarshalIndent(history, "", "  ")
-	if err == nil {
-		_ = os.MkdirAll(baseDir, 0755)
-		tmp := historyPath() + ".tmp"
-		if err := os.WriteFile(tmp, data, 0600); err == nil {
-			_ = os.Rename(tmp, historyPath())
-		}
+	if err != nil {
+		return
 	}
+	if err := writeFileAtomic(historyPath(), data, 0o600); err != nil {
+		fmt.Printf("%sCould not save transfer history: %v%s\n", Yellow, err, Reset)
+	}
+}
+
+// clearHistory forgets all recorded transfers.
+func clearHistory() {
+	historyMu.Lock()
+	defer historyMu.Unlock()
+	history = nil
+	_ = os.Remove(historyPath())
 }
 
 func recordTransfer(rec TransferRecord) {
@@ -80,7 +88,7 @@ func isRecordFileValid(r *TransferRecord) bool {
 	if r == nil || r.Status != "Completed" {
 		return false
 	}
-	p := filepath.Join(receiveDir, r.Filename)
+	p := filepath.Join(getReceiveDir(), r.Filename)
 	fi, err := os.Stat(p)
 	return err == nil && fi.Size() == r.Size
 }
@@ -152,16 +160,16 @@ func printTransferHistory() {
 			statusColor = Red
 		}
 
-		name := r.Filename
-		if len(name) > 24 {
+		name := printableText(r.Filename, 0)
+		if len([]rune(name)) > 24 {
 			ext := filepath.Ext(name)
-			base := name[:min(len(name)-len(ext), 20)]
-			name = base + "..." + ext
+			base := []rune(strings.TrimSuffix(name, ext))
+			if len(base) > 20 {
+				base = base[:20]
+			}
+			name = string(base) + "..." + ext
 		}
-		dev := r.Device
-		if len(dev) > 16 {
-			dev = dev[:13] + "..."
-		}
+		dev := printableText(r.Device, 16)
 
 		fmt.Printf("  %s%-6s%s  %s%-9s%s  %-24s  %-10s  %-16s  %s%s%s\n",
 			Dim, tStr, Reset,
@@ -171,4 +179,3 @@ func printTransferHistory() {
 	}
 	fmt.Println()
 }
-

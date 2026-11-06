@@ -49,7 +49,7 @@ func removeTestSession(sessionID string) {
 }
 
 // 1. Multi-device support: verify per-device targeting only routes to matching client
-func TestPhase4_MultiDeviceTargeting(t *testing.T) {
+func TestMultiDeviceTargeting(t *testing.T) {
 	clientsMu.Lock()
 	oldClients := clients
 	clients = make(map[*Client]bool)
@@ -133,7 +133,7 @@ func TestPhase4_MultiDeviceTargeting(t *testing.T) {
 }
 
 // 2. Per-device isolated outbox queue across offline reconnects
-func TestPhase4_DeviceIsolatedOutbox(t *testing.T) {
+func TestDeviceIsolatedOutbox(t *testing.T) {
 	outboxMu.Lock()
 	oldOutbox := deviceOutbox
 	deviceOutbox = make(map[string][]Message)
@@ -217,7 +217,7 @@ func TestPhase4_DeviceIsolatedOutbox(t *testing.T) {
 }
 
 // 3. Fast content deduplication via SHA-256 pre-flight check
-func TestPhase4_ContentDeduplication(t *testing.T) {
+func TestContentDeduplication(t *testing.T) {
 	tempDir := t.TempDir()
 	receiveDir = tempDir
 
@@ -311,7 +311,7 @@ func TestPhase4_ContentDeduplication(t *testing.T) {
 }
 
 // 4. Parallel chunk streams: chunks arriving out-of-order concurrently assemble correctly
-func TestPhase4_ParallelOutOfOrderChunks(t *testing.T) {
+func TestParallelOutOfOrderChunks(t *testing.T) {
 	tempBase := t.TempDir()
 	baseDir = tempBase
 	receiveDir = filepath.Join(tempBase, "received")
@@ -417,7 +417,7 @@ func TestPhase4_ParallelOutOfOrderChunks(t *testing.T) {
 }
 
 // 5. Memory efficiency test: verify O(1) flat memory footprint during large file chunk writes
-func TestPhase4_FlatMemoryScaling(t *testing.T) {
+func TestFlatMemoryScaling(t *testing.T) {
 	tempBase := t.TempDir()
 	baseDir = tempBase
 	receiveDir = filepath.Join(tempBase, "received")
@@ -469,7 +469,7 @@ func TestPhase4_FlatMemoryScaling(t *testing.T) {
 }
 
 // 6. Scale test: 100 simultaneous transfers running concurrently without deadlock or data races
-func TestPhase4_100SimultaneousTransfers(t *testing.T) {
+func Test100SimultaneousTransfers(t *testing.T) {
 	tempBase := t.TempDir()
 	baseDir = tempBase
 	receiveDir = filepath.Join(tempBase, "received")
@@ -562,7 +562,7 @@ func TestPhase4_100SimultaneousTransfers(t *testing.T) {
 }
 
 // 7. Pprof profiling diagnostics endpoint test
-func TestPhase4_PprofEndpoint(t *testing.T) {
+func TestPprofEndpoint(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
 	mux.HandleFunc("/debug/pprof/goroutine", pprof.Handler("goroutine").ServeHTTP)

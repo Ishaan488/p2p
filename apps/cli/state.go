@@ -58,7 +58,8 @@ func loadState() {
 	p := statePath()
 	if data, err := os.ReadFile(p); err == nil {
 		if err := json.Unmarshal(data, &state); err != nil {
-			// Corrupted state file recovery: back up corrupted file and start clean
+			// Corrupted state file recovery: back up corrupted file and start clean.
+			// This unpairs every device; they simply pair again.
 			backup := fmt.Sprintf("%s.corrupt.%d", p, time.Now().Unix())
 			_ = os.Rename(p, backup)
 			fmt.Printf("%s[State Recovery] Corrupted %s detected. Backed up to %s and initialized clean state.%s\n",
@@ -71,8 +72,9 @@ func loadState() {
 		saveStateLocked()
 	}
 	if state.CustomReceiveDir != "" {
-		if err := os.MkdirAll(state.CustomReceiveDir, 0755); err == nil {
-			receiveDir = state.CustomReceiveDir
+		if err := setReceiveDir(state.CustomReceiveDir); err != nil {
+			fmt.Printf("%sCustom receive folder %s is unusable (%v); using %s%s\n",
+				Yellow, state.CustomReceiveDir, err, getReceiveDir(), Reset)
 		}
 	}
 	if state.BandwidthLimitBps > 0 {
@@ -86,13 +88,50 @@ func saveStateLocked() {
 	if err != nil {
 		return
 	}
-	os.MkdirAll(baseDir, 0755)
-	tmp := statePath() + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
+	if err := writeFileAtomic(statePath(), data, 0o600); err != nil {
 		fmt.Printf("%sCould not save %s: %v%s\n", Red, statePath(), err, Reset)
-		return
 	}
-	os.Rename(tmp, statePath())
+}
+
+// writeFileAtomic replaces path with data so a crash never leaves a half-written file.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	_, werr := f.Write(data)
+	if werr == nil {
+		werr = f.Sync()
+	}
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr == nil {
+		werr = os.Chmod(tmp, perm)
+	}
+	if werr == nil {
+		werr = os.Rename(tmp, path)
+	}
+	if werr != nil {
+		_ = os.Remove(tmp)
+	}
+	return werr
+}
+
+// persistBandwidthLimit applies a bandwidth cap (bytes/s, 0 = unlimited) and remembers it.
+func persistBandwidthLimit(bps int64) {
+	if bps < 0 {
+		bps = 0
+	}
+	setBandwidthLimitBps(bps)
+	stateMu.Lock()
+	state.BandwidthLimitBps = bps
+	saveStateLocked()
+	stateMu.Unlock()
 }
 
 func findDevice(id string) *Device {
@@ -136,6 +175,9 @@ func getServerAlias() string {
 
 // findDeviceByQuery matches a device by alias, exact name, or by id prefix.
 func findDeviceByQuery(query string) *Device {
+	if strings.TrimSpace(query) == "" {
+		return nil
+	}
 	stateMu.Lock()
 	defer stateMu.Unlock()
 	for _, d := range state.Devices {
@@ -158,6 +200,9 @@ func findDeviceByQuery(query string) *Device {
 
 // setDeviceAlias assigns or clears a custom alias for a paired device (FR 4).
 func setDeviceAlias(query, alias string) (*Device, bool) {
+	if strings.TrimSpace(query) == "" {
+		return nil, false
+	}
 	stateMu.Lock()
 	defer stateMu.Unlock()
 	cleanAlias := sanitizeDeviceName(alias)
@@ -227,6 +272,9 @@ func touchDevice(d *Device) {
 }
 
 func setDeviceTrust(id string, trusted bool) bool {
+	if strings.TrimSpace(id) == "" {
+		return false
+	}
 	stateMu.Lock()
 	defer stateMu.Unlock()
 	for _, d := range state.Devices {

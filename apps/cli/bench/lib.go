@@ -227,21 +227,21 @@ type UpOpts struct {
 }
 
 type UpRes struct {
-	TotalChunks   int     `json:"total_chunks"`
-	AlreadyHad    int     `json:"chunks_already_on_server"`
-	SentNow       int     `json:"chunks_sent_now"`
-	PlainBytesNow int64   `json:"plain_bytes_sent_now"`
-	WireBytesNow  int64   `json:"wire_bytes_sent_now"`
-	FinalName     string  `json:"final_name,omitempty"`
-	DedupHit      bool    `json:"dedup_hit,omitempty"`
-	DedupMs       float64 `json:"dedup_preflight_ms,omitempty"`
-	InitMs        float64 `json:"init_ms"`
-	ChunksMs      float64 `json:"chunks_ms"`
-	CompleteMs    float64 `json:"complete_ms"`
-	TotalMs       float64 `json:"total_ms"`
-	Err           string  `json:"error,omitempty"`
-	AckedChunks   []int   `json:"acked_chunks,omitempty"`
-	AlreadyHadChunks []int `json:"already_had_chunks,omitempty"`
+	TotalChunks      int     `json:"total_chunks"`
+	AlreadyHad       int     `json:"chunks_already_on_server"`
+	SentNow          int     `json:"chunks_sent_now"`
+	PlainBytesNow    int64   `json:"plain_bytes_sent_now"`
+	WireBytesNow     int64   `json:"wire_bytes_sent_now"`
+	FinalName        string  `json:"final_name,omitempty"`
+	DedupHit         bool    `json:"dedup_hit,omitempty"`
+	DedupMs          float64 `json:"dedup_preflight_ms,omitempty"`
+	InitMs           float64 `json:"init_ms"`
+	ChunksMs         float64 `json:"chunks_ms"`
+	CompleteMs       float64 `json:"complete_ms"`
+	TotalMs          float64 `json:"total_ms"`
+	Err              string  `json:"error,omitempty"`
+	AckedChunks      []int   `json:"acked_chunks,omitempty"`
+	AlreadyHadChunks []int   `json:"already_had_chunks,omitempty"`
 }
 
 func hashFile(path string) (string, error) {

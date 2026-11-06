@@ -45,6 +45,17 @@ const (
 
 var deviceIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
 
+// mustRandomBytes returns n cryptographically secure random bytes. A failing
+// system RNG is unrecoverable (keys and nonces depend on it), so it panics
+// rather than continue with weak values.
+func mustRandomBytes(n int) []byte {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand unavailable: " + err.Error())
+	}
+	return b
+}
+
 func hmacSHA256(key []byte, parts ...[]byte) []byte {
 	mac := hmac.New(sha256.New, key)
 	for _, p := range parts {
@@ -75,11 +86,15 @@ var (
 
 // newPairCode replaces the current pairing code with a fresh one.
 func newPairCode() string {
-	buf := make([]byte, pairCodeLength)
-	rand.Read(buf)
-	code := make([]byte, pairCodeLength)
-	for i, b := range buf {
-		code[i] = pairCodeAlphabet[int(b)%len(pairCodeAlphabet)]
+	code := make([]byte, 0, pairCodeLength)
+	// Rejection sampling: every symbol of the alphabet is equally likely.
+	limit := 256 - 256%len(pairCodeAlphabet)
+	for len(code) < pairCodeLength {
+		for _, b := range mustRandomBytes(pairCodeLength) {
+			if int(b) < limit && len(code) < pairCodeLength {
+				code = append(code, pairCodeAlphabet[int(b)%len(pairCodeAlphabet)])
+			}
+		}
 	}
 	pairMu.Lock()
 	pairCode = string(code)
@@ -92,14 +107,6 @@ func currentPairCode() (string, bool) {
 	pairMu.Lock()
 	defer pairMu.Unlock()
 	return pairCode, pairCode != "" && time.Now().Before(pairExpires)
-}
-
-func formatPairCode(code string) string {
-	groups := []string{}
-	for i := 0; i < len(code); i += 4 {
-		groups = append(groups, code[i:min(i+4, len(code))])
-	}
-	return strings.Join(groups, "-")
 }
 
 func sanitizeDeviceName(name string) string {
@@ -262,8 +269,9 @@ var (
 )
 
 const (
-	maxPairAttempts = 5
-	pairLockoutTime = 5 * time.Minute
+	maxPairLimitEntries = 4096
+	maxPairAttempts     = 5
+	pairLockoutTime     = 5 * time.Minute
 )
 
 func clientIP(remoteAddr string) string {
@@ -300,6 +308,13 @@ func recordPairFailure(ip string) (bool, time.Duration) {
 	if !exists {
 		att = &pairAttempt{count: 0, lastTime: now}
 		pairLimits[ip] = att
+	}
+	if !exists && len(pairLimits) >= maxPairLimitEntries {
+		for k, v := range pairLimits { // bound memory under address-spoofing floods
+			if now.After(v.lockedUntil) && now.Sub(v.lastTime) > time.Minute {
+				delete(pairLimits, k)
+			}
+		}
 	}
 	att.count++
 	att.lastTime = now
@@ -379,11 +394,12 @@ func handlePair(w http.ResponseWriter, r *http.Request) {
 	printAsync(Green, "● Paired", device.Name, "connected")
 
 	hostname, _ := os.Hostname()
+	serverID := getServerID()
 	writeJSON(w, http.StatusOK, map[string]string{
-		"serverId":   state.ServerID,
+		"serverId":   serverID,
 		"serverName": hostname,
 		"deviceName": device.Name,
-		"proof":      hex.EncodeToString(hmacSHA256(key, []byte("paired\n"+state.ServerID))),
+		"proof":      hex.EncodeToString(hmacSHA256(key, []byte("paired\n"+serverID))),
 	})
 }
 
@@ -396,9 +412,15 @@ type Session struct {
 	aead      cipher.AEAD // encrypts everything the session carries
 	wsClaimed bool        // a session carries at most one WebSocket, so frame counters never repeat
 
-	noncesMu   sync.Mutex
-	seenNonces map[string]time.Time
+	noncesMu     sync.Mutex
+	seenNonces   map[string]time.Time
+	noncesPruned time.Time
 }
+
+const (
+	nonceTTL           = 15 * time.Minute
+	noncePruneInterval = time.Minute
+)
 
 func (s *Session) recordNonce(nonce string) bool {
 	if nonce == "" {
@@ -410,10 +432,13 @@ func (s *Session) recordNonce(nonce string) bool {
 		s.seenNonces = make(map[string]time.Time)
 	}
 	now := time.Now()
-	for n, t := range s.seenNonces {
-		if now.Sub(t) > 15*time.Minute {
-			delete(s.seenNonces, n)
+	if now.Sub(s.noncesPruned) > noncePruneInterval { // pruning on every call would be O(n) per request
+		for n, t := range s.seenNonces {
+			if now.Sub(t) > nonceTTL {
+				delete(s.seenNonces, n)
+			}
 		}
+		s.noncesPruned = now
 	}
 	if _, seen := s.seenNonces[nonce]; seen {
 		return false
@@ -435,7 +460,7 @@ func newSession(device *Device, key []byte) *Session {
 // seal encrypts plaintext bound to aad; the random nonce is prepended.
 func (s *Session) seal(plaintext []byte, aad string) []byte {
 	nonce := make([]byte, 12, len(plaintext)+sealOverhead)
-	rand.Read(nonce)
+	copy(nonce, mustRandomBytes(12))
 	return s.aead.Seal(nonce, nonce, plaintext, []byte(aad))
 }
 
@@ -506,8 +531,7 @@ func handleHello(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	serverNonce := make([]byte, 16)
-	rand.Read(serverNonce)
+	serverNonce := mustRandomBytes(16)
 	session := newSession(device, hkdf32(device.Key, append(clientNonce, serverNonce...), "p2p-link session v1"))
 
 	sessionsMu.Lock()
@@ -523,7 +547,7 @@ func handleHello(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if count >= maxSessions {
+	if count >= maxSessions && oldest != nil {
 		delete(sessions, oldest.ID)
 	}
 	sessions[session.ID] = session
@@ -612,34 +636,8 @@ func authed(handler func(w http.ResponseWriter, r *http.Request, s *Session)) ht
 
 // handleUnpair revokes a paired device from the mobile client side
 func handleUnpair(w http.ResponseWriter, r *http.Request, s *Session) {
-	deviceID := s.Device.ID
 	deviceName := s.Device.Name
-
-	removeDevice(deviceID)
-	dropSessions(deviceID)
-
-	transfersMu.Lock()
-	var abandoned []*TransferState
-	for id, state := range transfers {
-		if state.Owner == deviceID {
-			abandoned = append(abandoned, state)
-			delete(transfers, id)
-		}
-	}
-	transfersMu.Unlock()
-	for _, state := range abandoned {
-		state.discard()
-	}
-
-	clientsMu.Lock()
-	for client := range clients {
-		if client.device.ID == deviceID {
-			client.Close()
-			delete(clients, client)
-		}
-	}
-	clientsMu.Unlock()
-
+	revokeDevice(s.Device.ID)
 	printAsync(Yellow, "○ Revoked", deviceName, "unpaired by remote device")
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

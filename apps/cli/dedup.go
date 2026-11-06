@@ -26,8 +26,9 @@ var (
 	sizeIndexed bool
 )
 
-// resetDedupIndexForTesting clears both indexes for isolated test runs.
-func resetDedupIndexForTesting() {
+// resetDedupIndex forgets everything learned about the receive directory
+// (used when the directory changes).
+func resetDedupIndex() {
 	hashIndexMu.Lock()
 	defer hashIndexMu.Unlock()
 	hashIndex = make(map[string]HashIndexEntry)
@@ -40,7 +41,7 @@ func ensureSizeIndexLoadedLocked() {
 		return
 	}
 	sizeIndexed = true
-	entries, err := os.ReadDir(receiveDir)
+	entries, err := os.ReadDir(getReceiveDir())
 	if err != nil {
 		return
 	}
@@ -135,7 +136,8 @@ func lookupFileByHash(hash string, totalSize int64) (string, bool) {
 	}
 
 	// Cold scan of receiveDir for candidate files matching totalSize if not yet computed in hashIndex
-	entries, err := os.ReadDir(receiveDir)
+	recvDir := getReceiveDir()
+	entries, err := os.ReadDir(recvDir)
 	if err != nil {
 		return "", false
 	}
@@ -149,7 +151,7 @@ func lookupFileByHash(hash string, totalSize int64) (string, bool) {
 			continue
 		}
 
-		p := filepath.Join(receiveDir, e.Name())
+		p := filepath.Join(recvDir, e.Name())
 		if computed, err := computeFileSHA256(p); err == nil {
 			recordFileHash(computed, p, info.Size(), e.Name())
 			if computed == hash {

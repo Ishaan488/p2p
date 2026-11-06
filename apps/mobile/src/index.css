@@ -878,6 +878,29 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
+  /* Busy networks can list many PCs: scroll inside the card instead of pushing the page down. */
+  max-height: 42vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.discovered-more-note {
+  margin: 0;
+  text-align: center;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+/* Generic rotating icon (lucide Loader2 etc.). The project has no Tailwind, so this
+   class must be defined here; the older `spin` keyframes include a translate and are
+   only meant for the centered video spinner. */
+.animate-spin {
+  animation: p2p-spin 1s linear infinite;
+  transform-origin: center;
+}
+
+@keyframes p2p-spin {
+  to { transform: rotate(360deg); }
 }
 
 .discovered-card {

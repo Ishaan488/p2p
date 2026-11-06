@@ -34,7 +34,7 @@ if %NEED_BUILD%==0 (
 )
 if %NEED_BUILD%==1 (
     echo [INFO] Building desktop binary p2p.exe...
-    call "%~dp0build-desktop.bat"
+    call "%~dp0scripts\build-desktop.bat"
     if errorlevel 1 (
         echo.
         echo [ERROR] Build failed. Please ensure Go is installed.

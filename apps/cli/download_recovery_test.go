@@ -103,4 +103,3 @@ func TestDownloadTransferPersistenceAndRecovery(t *testing.T) {
 		t.Fatalf("expected dlmeta file to be swept when source file is missing")
 	}
 }
-

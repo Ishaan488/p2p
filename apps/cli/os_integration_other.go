@@ -51,6 +51,9 @@ func syncQuickSendShortcuts() error {
 }
 
 func setOSAutostart(enabled bool) error {
+	if runtime.GOOS == "darwin" {
+		return setLaunchdAutostart(enabled)
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
@@ -72,6 +75,9 @@ func setOSAutostart(enabled bool) error {
 }
 
 func isOSAutostartEnabled() bool {
+	if runtime.GOOS == "darwin" {
+		return isLaunchdAutostartEnabled()
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return false
@@ -85,4 +91,3 @@ func startSystemTray(port int) {}
 func stopSystemTray() {}
 
 func toggleConsoleVisibility() {}
-

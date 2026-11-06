@@ -48,7 +48,7 @@ import {
   removePendingUpload,
   isSensitiveClipboardText
 } from './lib/storage';
-import { startAutoDiscovery, DiscoveredDevice } from './lib/discovery';
+import { startAutoDiscovery, deviceKey, DiscoveredDevice } from './lib/discovery';
 import { ToastContainer, ToastMessage } from './components/Toast';
 import { MediaViewer, MediaViewerProps } from './components/MediaViewer';
 import { BatchProgress } from './components/BatchProgress';
@@ -151,6 +151,9 @@ function getDateGroup(timestamp: number): 'Today' | 'Yesterday' | 'Earlier this 
   if (timestamp >= startOfWeek) return 'Earlier this week';
   return 'Older';
 }
+
+// Upper bound on PCs tracked from discovery, so a very crowded network cannot grow state without limit.
+const MAX_DISCOVERED_DEVICES = 200;
 
 export default function App() {
   const [status, setStatus] = useState<'connected' | 'disconnected' | 'connecting' | 'error'>('connecting');
@@ -301,19 +304,30 @@ export default function App() {
   }, []);
 
   // Auto-discovery (active in standby, disconnected, or connection error states)
+  // Keyed on "connected or not" so the connecting/error churn does not restart the scan.
+  const discoveryActive = status !== 'connected';
   useEffect(() => {
-    if (status === 'connected') return;
+    if (!discoveryActive) return;
+    setDiscoveredDevices([]); // anything remembered from an earlier scan may be gone by now
+    setDiscoveryTip('');
     const stop = startAutoDiscovery(
+      // A PC appeared or its details changed.
       device => {
         setDiscoveredDevices(prev => {
-          if (prev.some(d => d.host === device.host && d.port === device.port)) return prev;
-          return [...prev, device];
+          const key = deviceKey(device);
+          const i = prev.findIndex(d => deviceKey(d) === key);
+          if (i === -1) return prev.length >= MAX_DISCOVERED_DEVICES ? prev : [...prev, device];
+          const next = prev.slice();
+          next[i] = device;
+          return next;
         });
       },
-      tip => setDiscoveryTip(tip)
+      tip => setDiscoveryTip(tip),
+      // A PC said goodbye or stopped announcing.
+      key => setDiscoveredDevices(prev => prev.filter(d => deviceKey(d) !== key))
     );
     return stop;
-  }, [status]);
+  }, [discoveryActive]);
 
   // Back button and lifecycle cleanup init
   useEffect(() => {

@@ -18,6 +18,9 @@ func readOSClipboardImage() ([]byte, error) {
 	if err := cmd.Run(); err != nil {
 		return nil, nil // Clipboard does not contain an image
 	}
-	return out.Bytes(), nil
+	png, err := decodeAppleScriptData(out.Bytes())
+	if err != nil {
+		return nil, nil
+	}
+	return png, nil
 }
-

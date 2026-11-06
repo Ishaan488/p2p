@@ -67,6 +67,56 @@ It pairs a high-throughput **Go host engine** on desktop with a polished **Obsid
 
 ---
 
+### macOS and Linux
+
+The desktop host is the same Go program on every OS. Windows-only extras (system tray icon, Explorer
+context menu, "Send to" shortcuts) are skipped elsewhere; everything else works from the terminal.
+
+**1. Install the tools** (once)
+- macOS: `brew install go node`
+- Debian/Ubuntu: `sudo apt install golang nodejs npm` (Go 1.21+ and Node 18+ are required; use the
+  official installers if your distribution ships older versions)
+- Linux clipboard sync additionally needs one of `xclip`, `xsel` (X11) or `wl-clipboard` (Wayland):
+  `sudo apt install xclip`
+
+**2. Build** (from the repository root)
+```bash
+scripts/build-desktop.sh        # builds the web UI if needed, then ./p2p
+```
+or build every platform at once from a Windows/Linux/macOS machine with `make web cross` and copy the
+matching file from `dist-bin/` (for example `p2p-darwin-arm64` for Apple Silicon).
+
+**3. Run**
+```bash
+./p2p                 # add --tls for HTTPS, --port 9000 to change the port
+```
+A QR code appears in the terminal; scan it with the phone app. Type `help` for commands.
+
+**4. First-run permissions**
+- macOS shows "Do you want the application p2p to accept incoming network connections?" - choose **Allow**.
+  A binary copied from another machine is quarantined; clear it with
+  `xattr -d com.apple.quarantine ./p2p && chmod +x ./p2p`. (If you build locally this is not needed.)
+- Linux firewalls must allow the phone in: for ufw,
+  `sudo ufw allow 8080:8090/tcp && sudo ufw allow 8089/udp && sudo ufw allow 5353/udp`.
+- Both phone and computer must be on the same Wi-Fi network and the router must not isolate clients.
+
+**5. Start at login (optional)**
+```bash
+./p2p --autostart on     # macOS: ~/Library/LaunchAgents/com.p2plink.agent.plist (starts at next login)
+                         # Linux: ~/.config/autostart/p2plink.desktop
+./p2p --autostart off
+```
+Autostart runs without a terminal; logs go to `~/P2P/p2p.log` on macOS. Stop a background instance with
+`pkill p2p` (a clean stop also tells phones the PC left).
+
+**6. Send from the file manager (Linux)**: `./p2p --install-context-menu` adds a "Send via P2P Link" entry.
+Anywhere: `./p2p --send ~/file.zip` hands the file to the running instance.
+
+Received files go to `~/P2P/received`. Note: macOS and Linux were verified to compile and vet cleanly
+(`GOOS=darwin|linux`), but the full test suite and the runtime behaviour have only been exercised on Windows.
+
+---
+
 ### Desktop (Go Host Engine)
 
 #### 1. Launch the Server
@@ -140,6 +190,38 @@ p2p>
 
 ---
 
+## 🗂️ Repository Layout
+
+```
+apps/
+  cli/                  Go desktop host (single `main` package, one concern per file)
+    main.go             flags, startup, graceful shutdown, HTTP server wiring
+    repl.go cmdparse.go interactive "p2p>" terminal and its argument parsing
+    clients.go          WebSocket clients, message dispatch, offline outbox
+    auth.go             pairing, sessions, request signing, AES-GCM sealing
+    state.go dirs.go    persisted state (devices, settings) and data directories
+    upload.go download.go folder_transfer.go   the transfer endpoints
+    transfer_state.go transfer_meta.go         in-flight transfers, crash recovery
+    dedup.go history.go bandwidth.go           dedup index, history, rate limiter
+    clipboard*.go       clipboard sync, sensitive-content filter, image capture
+    discovery.go        mDNS + UDP broadcast announcement, /discover probe
+    settings.go local_ipc.go   remote settings API, context-menu hand-off
+    os_integration_*.go OS shell/tray/autostart (Windows) and desktop entries (Linux)
+    bench/              benchmark harness (not part of the app)
+  mobile/               React + Capacitor client (PWA and Android app)
+    src/lib/            protocol client: api, transport, uploads, downloads, discovery
+    src/components/     UI
+    android/            Capacitor Android project and native plugins
+docs/                   protocol, security, requirements, architecture, audit reports
+scripts/                build-desktop, build-apk, install-phone helpers
+benchmark_results/      committed benchmark summaries (raw dumps are git-ignored)
+```
+
+Everything under `apps/cli` that is not `*_test.go` ships in the binary; the web UI from
+`apps/mobile/dist` is embedded into it at build time (`make build`).
+
+---
+
 ## 🧩 Component Architecture
 
 ```
@@ -197,9 +279,12 @@ cd apps/cli
 go test -v ./...
 ```
 - **Crash Recovery:** `TestRestartTransferRecovery` validates chunk resumption after process kills.
-- **Multi-Device Targeting:** `TestPhase4_MultiDeviceTargeting` ensures isolated message delivery.
-- **Content Deduplication:** `TestPhase4_ContentDeduplication` verifies zero-byte transmission for identical files.
+- **Multi-Device Targeting:** `TestMultiDeviceTargeting` ensures isolated message delivery.
+- **Content Deduplication:** `TestContentDeduplication` verifies zero-byte transmission for identical files.
 - **Fuzzing Suite:** Continuous fuzz testing on filename sanitizers, chunk AAD bindings, and request signatures.
+- **Hardening Regressions:** `robustness_test.go` pins fixes for download ownership, UDP discovery lifetime, pprof exposure, bounded queues and more.
+
+Static checks used before every release: `make check` (gofmt, `go vet`, tests, TypeScript compile).
 
 ### Mobile Build & TypeScript Verification
 ```bash

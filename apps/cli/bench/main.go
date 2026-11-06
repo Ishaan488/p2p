@@ -83,8 +83,6 @@ func fatalf(f string, a ...any) {
 
 func logf(f string, a ...any) { fmt.Printf(time.Now().Format("15:04:05 ")+f+"\n", a...) }
 
-func ptr[T any](v T) *T { return &v }
-
 func verifyReceived(srv *Server, final string, size int64, wantSHA string) string {
 	p := srv.ReceivedPath(final)
 	st, err := os.Stat(p)

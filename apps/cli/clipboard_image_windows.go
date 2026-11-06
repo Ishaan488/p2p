@@ -6,11 +6,11 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"image"
-	_ "image/jpeg"
 	"image/png"
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/image/bmp"
 )
 
 // Windows implementation: reads CF_DIB from Win32 clipboard API and encodes as PNG
@@ -56,19 +56,28 @@ func readOSClipboardImage() ([]byte, error) {
 		return nil, nil
 	}
 
-	dibData := make([]byte, size)
-	for i := uintptr(0); i < size && i < uintptr(len(dibData)); i++ {
-		dibData[i] = *(*byte)(unsafe.Pointer(ptr + i))
+	if size > maxClipboardImageBytes*4 { // raw DIBs are uncompressed; refuse absurd sizes
+		return nil, fmt.Errorf("clipboard image too large (%d bytes)", size)
 	}
 
+	// ptr is a pointer into the locked global memory block, valid until GlobalUnlock.
+	// Re-interpreting the uintptr slot avoids a uintptr->Pointer conversion.
+	locked := unsafe.Slice((*byte)(*(*unsafe.Pointer)(unsafe.Pointer(&ptr))), int(size))
+	dibData := make([]byte, len(locked))
+	copy(dibData, locked)
+
+	return dibToPNG(dibData)
+}
+
+// dibToPNG converts a Windows device-independent bitmap to PNG bytes.
+func dibToPNG(dib []byte) ([]byte, error) {
 	// Convert DIB to BMP byte stream by prepending BITMAPFILEHEADER
-	bmpBytes, err := dibToBmp(dibData)
+	bmpBytes, err := dibToBmp(dib)
 	if err != nil {
 		return nil, err
 	}
 
-	// Decode BMP image and encode to compressed PNG
-	img, _, err := image.Decode(bytes.NewReader(bmpBytes))
+	img, err := bmp.Decode(bytes.NewReader(bmpBytes))
 	if err != nil {
 		return nil, fmt.Errorf("decode bmp error: %w", err)
 	}
@@ -77,7 +86,6 @@ func readOSClipboardImage() ([]byte, error) {
 	if err := png.Encode(&pngBuf, img); err != nil {
 		return nil, fmt.Errorf("encode png error: %w", err)
 	}
-
 	return pngBuf.Bytes(), nil
 }
 
@@ -117,4 +125,3 @@ func dibToBmp(dib []byte) ([]byte, error) {
 	copy(bmp[14:], dib)
 	return bmp, nil
 }
-

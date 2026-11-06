@@ -6,25 +6,34 @@ dist-ssr/
 vite.config.ts.timestamp-*
 *.timestamp-*.mjs
 
-# Go
-apps/cli/*.exe
-apps/cli/p2p
-apps/cli/p2p.exe
+# Go build output and tooling
+/p2p
 /p2p.exe
-p2p.exe
-p2p.exe~
+apps/cli/p2p
+apps/cli/*.exe
 *.exe~
 dist-bin/
+*.test
+*.out
+coverage.*
+
+# Runtime data accidentally created in the repo
+*.corrupt.*
+*.part
+*.meta.json
+*.meta.journal
+.local_ipc_token
 
 # OS
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# IDEs
+# IDEs / agents
 .vscode/
 .idea/
 *.sw?
+.claude/
 
 # Environment
 .env

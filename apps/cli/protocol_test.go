@@ -135,7 +135,7 @@ func TestProtocol_ZeroByteSendTransfer(t *testing.T) {
 	emptyFile.Close()
 	defer os.Remove(emptyPath)
 
-	err = startSendTransfer(emptyPath)
+	err = startSendTransferTargeted(emptyPath, nil)
 	if err != nil {
 		t.Fatalf("startSendTransfer failed on 0-byte file: %v", err)
 	}
@@ -193,9 +193,9 @@ func TestProtocol_ChunkValidation(t *testing.T) {
 
 	// B) Calculation check
 	tests := []struct {
-		totalSize   int64
-		chunkSize   int64
-		wantChunks  int
+		totalSize  int64
+		chunkSize  int64
+		wantChunks int
 	}{
 		{0, 1 << 20, 0},
 		{1, 1 << 20, 1},

@@ -1,0 +1,9 @@
+# Normalise line endings in the repository; Windows scripts stay CRLF.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.sh text eol=lf
+*.png binary
+*.jar binary
+*.apk binary
+*.exe binary

@@ -10,16 +10,15 @@ import (
 	"time"
 )
 
-// FolderMetadata carries details about a streamed folder transfer
-type FolderMetadata struct {
-	FolderName   string `json:"folderName"`
-	TotalFiles   int    `json:"totalFiles"`
-	TotalDirs    int    `json:"totalDirs"`
-	OriginalSize int64  `json:"originalSize"`
-}
+// Folder transfers: a directory is packed into a temporary zip which is then
+// sent like any other file.
 
-// zipDirectory streams a directory into a zip writer, preserving relative structure,
-// empty directories, and protecting against symlink escapes.
+// maxUncompressedFileBytes caps what a single zip entry may expand to (zip bombs).
+const maxUncompressedFileBytes = 10 << 30
+
+// zipDirectory streams a directory into a zip writer, preserving the relative
+// structure and empty directories. Symlinks and other special files are skipped
+// (they could point outside the folder), as are files that cannot be read.
 func zipDirectory(srcDir string, targetWriter io.Writer) (fileCount int, dirCount int, totalBytes int64, err error) {
 	cleanSrc := filepath.Clean(srcDir)
 	srcInfo, err := os.Stat(cleanSrc)
@@ -31,11 +30,13 @@ func zipDirectory(srcDir string, targetWriter io.Writer) (fileCount int, dirCoun
 	}
 
 	zipWriter := zip.NewWriter(targetWriter)
-	defer zipWriter.Close()
 
-	err = filepath.Walk(cleanSrc, func(path string, info os.FileInfo, walkErr error) error {
+	walkErr := filepath.Walk(cleanSrc, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
-			return walkErr
+			if path == cleanSrc {
+				return walkErr
+			}
+			return nil // vanished or unreadable entry: skip it, keep going
 		}
 
 		relPath, err := filepath.Rel(cleanSrc, path)
@@ -45,32 +46,23 @@ func zipDirectory(srcDir string, targetWriter io.Writer) (fileCount int, dirCoun
 		if relPath == "." {
 			return nil
 		}
-
-		// Convert Windows backslashes to forward slashes for cross-platform ZIP standard
+		// Convert Windows backslashes to forward slashes for the ZIP standard
 		slashPath := filepath.ToSlash(relPath)
-
-		// Check for symlinks to prevent directory traversal escapes
-		if info.Mode()&os.ModeSymlink != 0 {
-			resolved, err := filepath.EvalSymlinks(path)
-			if err != nil {
-				// Skip broken symlinks safely
-				return nil
-			}
-			resolvedClean := filepath.Clean(resolved)
-			// If symlink points outside the source directory, skip to prevent leakage
-			if !strings.HasPrefix(resolvedClean, cleanSrc+string(os.PathSeparator)) && resolvedClean != cleanSrc {
-				return nil
-			}
-		}
 
 		if info.IsDir() {
 			dirCount++
 			_, err = zipWriter.Create(slashPath + "/")
 			return err
 		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
 
-		fileCount++
-		totalBytes += info.Size()
+		file, err := os.Open(path)
+		if err != nil {
+			return nil // locked or permission denied: skip this file
+		}
+		defer file.Close()
 
 		header, err := zip.FileInfoHeader(info)
 		if err != nil {
@@ -78,86 +70,59 @@ func zipDirectory(srcDir string, targetWriter io.Writer) (fileCount int, dirCoun
 		}
 		header.Name = slashPath
 		header.Method = zip.Deflate
-
 		writer, err := zipWriter.CreateHeader(header)
 		if err != nil {
 			return err
 		}
-
-		file, err := os.Open(path)
+		n, err := io.Copy(writer, file)
 		if err != nil {
 			return err
 		}
-		defer file.Close()
-
-		_, err = io.Copy(writer, file)
-		return err
+		fileCount++
+		totalBytes += n
+		return nil
 	})
 
-	if err != nil {
-		return fileCount, dirCount, totalBytes, err
+	// Closing writes the central directory; without it the archive is unreadable.
+	if closeErr := zipWriter.Close(); walkErr == nil {
+		walkErr = closeErr
 	}
-
-	return fileCount, dirCount, totalBytes, nil
+	return fileCount, dirCount, totalBytes, walkErr
 }
 
 // extractZipSafely unpacks a ZIP archive into destDir with strict Zip Slip path traversal defenses.
 // It verifies that all entries resolve strictly inside destDir, preserving subfolders and empty folders.
 func extractZipSafely(zipReader *zip.Reader, destDir string) (extractedFiles int, extractedDirs int, err error) {
 	cleanDest := filepath.Clean(destDir)
-	if err := os.MkdirAll(cleanDest, 0755); err != nil {
+	if err := os.MkdirAll(cleanDest, 0o755); err != nil {
 		return 0, 0, err
 	}
 
 	for _, file := range zipReader.File {
 		cleanName := filepath.Clean(file.Name)
 
-		// 1. Strict Zip Slip Defense: reject any relative path traversal or drive letters
-		if strings.HasPrefix(cleanName, "..") || filepath.IsAbs(cleanName) || strings.Contains(file.Name, "../") || strings.Contains(file.Name, "..\\") {
+		// Reject relative path traversal and absolute paths / drive letters
+		if cleanName == ".." || strings.HasPrefix(cleanName, ".."+string(os.PathSeparator)) ||
+			filepath.IsAbs(cleanName) || filepath.VolumeName(cleanName) != "" ||
+			strings.Contains(file.Name, "../") || strings.Contains(file.Name, "..\\") {
 			return extractedFiles, extractedDirs, fmt.Errorf("security alert: Zip Slip path traversal entry rejected (%q)", file.Name)
 		}
 
 		targetPath := filepath.Join(cleanDest, cleanName)
-		// Ensure resolved target is strictly within cleanDest
-		if !strings.HasPrefix(filepath.Clean(targetPath), cleanDest+string(os.PathSeparator)) && filepath.Clean(targetPath) != cleanDest {
+		if targetPath != cleanDest && !strings.HasPrefix(targetPath, cleanDest+string(os.PathSeparator)) {
 			return extractedFiles, extractedDirs, fmt.Errorf("security alert: target path %q escapes destination %q", targetPath, cleanDest)
 		}
 
 		if file.FileInfo().IsDir() {
 			extractedDirs++
-			if err := os.MkdirAll(targetPath, 0755); err != nil {
+			if err := os.MkdirAll(targetPath, 0o755); err != nil {
 				return extractedFiles, extractedDirs, err
 			}
 			continue
 		}
 
-		// Ensure parent directory exists for nested files
-		parentDir := filepath.Dir(targetPath)
-		if err := os.MkdirAll(parentDir, 0755); err != nil {
+		if err := extractZipEntry(file, targetPath); err != nil {
 			return extractedFiles, extractedDirs, err
-		}
-
-		// Read and extract file with bounded decompression to prevent Zip Bombs
-		rc, err := file.Open()
-		if err != nil {
-			return extractedFiles, extractedDirs, err
-		}
-
-		outFile, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, file.Mode())
-		if err != nil {
-			rc.Close()
-			return extractedFiles, extractedDirs, err
-		}
-
-		// Limit uncompressed size per file to 10 GB to mitigate zip bombs
-		const maxFileUncompressed = 10 * 1024 * 1024 * 1024
-		lr := io.LimitReader(rc, maxFileUncompressed)
-		_, copyErr := io.Copy(outFile, lr)
-		outFile.Close()
-		rc.Close()
-
-		if copyErr != nil {
-			return extractedFiles, extractedDirs, copyErr
 		}
 		extractedFiles++
 	}
@@ -165,10 +130,32 @@ func extractZipSafely(zipReader *zip.Reader, destDir string) (extractedFiles int
 	return extractedFiles, extractedDirs, nil
 }
 
-// startSendFolderTransfer packages a directory into a temporary zip package on the fly
-// and enqueues a folder transfer to connected devices.
-func startSendFolderTransfer(folderPath string) error {
-	return startSendFolderTransferTargeted(folderPath, nil)
+func extractZipEntry(file *zip.File, targetPath string) error {
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		return err
+	}
+	rc, err := file.Open()
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+
+	outFile, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, file.Mode().Perm()|0o600)
+	if err != nil {
+		return err
+	}
+	// Read one byte past the limit so an oversized entry is detected, not silently truncated.
+	n, copyErr := io.Copy(outFile, io.LimitReader(rc, maxUncompressedFileBytes+1))
+	if closeErr := outFile.Close(); copyErr == nil {
+		copyErr = closeErr
+	}
+	if copyErr == nil && n > maxUncompressedFileBytes {
+		copyErr = fmt.Errorf("zip entry %q exceeds the %d byte limit", file.Name, int64(maxUncompressedFileBytes))
+	}
+	if copyErr != nil {
+		_ = os.Remove(targetPath)
+	}
+	return copyErr
 }
 
 func startSendFolderTransferTargeted(folderPath string, targetDevice *Device) error {
@@ -181,16 +168,18 @@ func startSendFolderTransferTargeted(folderPath string, targetDevice *Device) er
 		return fmt.Errorf("%s is not a directory", cleanPath)
 	}
 
+	initDirs()
 	folderName := sanitizeFilename(filepath.Base(cleanPath))
-	tmpZipPath := filepath.Join(tempDir, fmt.Sprintf("folder_%s_%d.zip", folderName, time.Now().UnixNano()))
+	tmpZipPath := filepath.Join(getTempDir(), fmt.Sprintf("folder_%s_%d.zip", folderName, time.Now().UnixNano()))
 
-	zipFile, err := os.Create(tmpZipPath)
+	zipFile, err := os.OpenFile(tmpZipPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("failed to create folder zip container: %w", err)
 	}
-
 	files, dirs, origSize, err := zipDirectory(cleanPath, zipFile)
-	zipFile.Close()
+	if cerr := zipFile.Close(); err == nil {
+		err = cerr
+	}
 	if err != nil {
 		_ = os.Remove(tmpZipPath)
 		return fmt.Errorf("failed to package folder: %w", err)
@@ -202,25 +191,17 @@ func startSendFolderTransferTargeted(folderPath string, targetDevice *Device) er
 		return err
 	}
 
-	transferID := randomID()
-	totalSize := zipStat.Size()
-	chunkSize := int64(defaultChunkSize)
-	totalChunks := int((totalSize + chunkSize - 1) / chunkSize)
-	if totalSize == 0 {
-		totalChunks = 0
-	}
-
 	ownerID := ""
 	if targetDevice != nil {
 		ownerID = targetDevice.ID
 	}
-
+	chunkSize := int64(defaultChunkSize)
 	state := &TransferState{
-		ID:          transferID,
+		ID:          randomID(),
 		Filename:    folderName + ".zip",
-		TotalChunks: totalChunks,
+		TotalChunks: chunkCount(zipStat.Size(), chunkSize),
 		ChunkSize:   chunkSize,
-		TotalSize:   totalSize,
+		TotalSize:   zipStat.Size(),
 		FilePath:    tmpZipPath,
 		IsDownload:  true,
 		IsFolder:    true,
@@ -230,47 +211,22 @@ func startSendFolderTransferTargeted(folderPath string, targetDevice *Device) er
 	}
 
 	transfersMu.Lock()
-	transfers[transferID] = state
+	transfers[state.ID] = state
 	transfersMu.Unlock()
 
 	if err := state.saveMeta(); err != nil {
-		fmt.Printf("Warning: failed to persist folder download state: %v\n", err)
+		printSync(Yellow, "! Warning", "failed to persist folder download state", err.Error())
 	}
 
-	targetLabel := "all devices"
-	if targetDevice != nil {
-		targetLabel = targetDevice.Name
-	}
+	printSync(Cyan, "📁 Folder", fmt.Sprintf("%s (%d files, %d folders)", folderName, files, dirs), "packaging complete")
 
-	printSync(Cyan, "📁 Folder", fmt.Sprintf("%s (%d files, %d folders · %s → %s)", folderName, files, dirs, formatSize(totalSize), targetLabel), "packaging complete")
-
-	// Notify connected devices of incoming folder transfer
-	msg := Message{
-		Version:   1,
-		Type:      "file_start",
-		ID:        "msg-" + transferID,
-		Timestamp: time.Now().Unix(),
-		Payload: map[string]interface{}{
-			"transferId":   transferID,
-			"filename":     folderName + ".zip",
-			"folderName":   folderName,
-			"isFolder":     true,
-			"totalFiles":   files,
-			"totalDirs":    dirs,
-			"originalSize": origSize,
-			"mimeType":     "application/zip",
-			"totalSize":    totalSize,
-			"chunkSize":    chunkSize,
-			"totalChunks":  totalChunks,
-		},
-	}
-	if targetDevice != nil {
-		msg.TargetDeviceID = targetDevice.ID
-	}
-	delivered := broadcastMessage(msg)
-	if delivered == 0 {
-		printSync(Yellow, "📁 Folder", folderName, fmt.Sprintf("queued for %s", targetLabel))
-	}
+	announceDownload(state, targetDevice, map[string]interface{}{
+		"folderName":   folderName,
+		"isFolder":     true,
+		"totalFiles":   files,
+		"totalDirs":    dirs,
+		"originalSize": origSize,
+		"mimeType":     "application/zip",
+	})
 	return nil
 }
-

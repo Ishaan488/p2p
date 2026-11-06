@@ -68,4 +68,3 @@ func (h procHandle) cpuSeconds() (float64, error) {
 	}
 	return ft(k) + ft(u), nil
 }
-

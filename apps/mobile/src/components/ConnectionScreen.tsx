@@ -1,6 +1,6 @@
 import React from 'react';
 import type { Pairing } from '../lib/api';
-import type { DiscoveredDevice } from '../lib/discovery';
+import { deviceKey, type DiscoveredDevice } from '../lib/discovery';
 import { BrandLogo } from './BrandLogo';
 import {
   Laptop,
@@ -37,6 +37,8 @@ export interface ConnectionScreenProps {
   onUnpairPrompt: () => void;
 }
 
+const MAX_LISTED_DEVICES = 50;
+
 /**
  * ConnectionScreen Component
  *
@@ -67,9 +69,13 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
   onUnpairPrompt
 }) => {
   // Discovered devices on LAN that aren't already represented by the active pairing address
-  const availableDevices = discoveredDevices.filter(
-    d => !pairing || `${d.host}:${d.port}` !== address
-  );
+  const allAvailable = discoveredDevices
+    .filter(d => !pairing || (`${d.host}:${d.port}` !== address && !(d.id && d.id === pairing.serverId)))
+    .sort((a, b) => (a.serverName || a.name).localeCompare(b.serverName || b.name, undefined, { sensitivity: 'base' }) ||
+      deviceKey(a).localeCompare(deviceKey(b)));
+  // A busy network can expose many PCs; render a bounded, stable page of them.
+  const availableDevices = allAvailable.slice(0, MAX_LISTED_DEVICES);
+  const hiddenDeviceCount = allAvailable.length - availableDevices.length;
 
   const isPairedPcOnline = Boolean(
     pairing && discoveredDevices.some(d =>
@@ -573,12 +579,12 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
                     <Wifi size={13} />
                     <span>Available on Wi-Fi</span>
                   </div>
-                  <span className="discovered-badge-count">{availableDevices.length}</span>
+                  <span className="discovered-badge-count">{allAvailable.length}</span>
                 </div>
 
                 <div className="discovered-list">
                   {availableDevices.map(d => (
-                    <div key={`${d.host}:${d.port}`} className="discovered-item-card">
+                    <div key={deviceKey(d)} className="discovered-item-card">
                       <div className="discovered-item-info">
                         <div className="discovered-item-icon">
                           <Laptop size={16} strokeWidth={1.8} />
@@ -599,6 +605,11 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
                     </div>
                   ))}
                 </div>
+                {hiddenDeviceCount > 0 && (
+                  <p className="discovered-more-note">
+                    +{hiddenDeviceCount} more nearby. Scan the QR code on your PC to connect to a specific one.
+                  </p>
+                )}
               </section>
             ) : status !== 'connecting' && !pairing && (
               <div className="discovery-searching-pill" role="status">

@@ -119,4 +119,3 @@ func setupTLS(dir string, lanIPs []string) (*tls.Config, string, error) {
 		MinVersion:   tls.VersionTLS12,
 	}, fpHex, nil
 }
-

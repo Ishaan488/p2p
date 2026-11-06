@@ -15,4 +15,3 @@ func (h procHandle) mem() (ws, peakWS, priv uint64, err error) {
 	return 0, 0, 0, errors.New("unsupported")
 }
 func (h procHandle) cpuSeconds() (float64, error) { return 0, errors.New("unsupported") }
-

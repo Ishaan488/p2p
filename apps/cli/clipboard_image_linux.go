@@ -22,4 +22,3 @@ func readOSClipboardImage() ([]byte, error) {
 	}
 	return nil, nil
 }
-

@@ -14,19 +14,22 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.MulticastSocket;
 import java.net.InterfaceAddress;
 import java.net.NetworkInterface;
-import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -39,12 +42,18 @@ public class DiscoveryPlugin extends Plugin {
     private static final String SERVICE_TYPE = "_p2plink._tcp";
     private static final int UDP_DISCOVER_PORT = 8089;
     private static final String DISCOVER_REQ_MSG = "P2P_DISCOVER_REQ";
+    private static final String MULTICAST_GROUP = "224.0.0.167";
+    private static final int REQUEST_BURSTS = 4;
+    private static final long REQUEST_BURST_GAP_MS = 2000;
+    private static final long NOTIFY_REFRESH_MS = 3000;
 
     private NsdManager nsdManager;
     private NsdManager.DiscoveryListener discoveryListener;
     private WifiManager.MulticastLock multicastLock;
     private boolean isDiscovering = false;
     private ExecutorService udpExecutor;
+    private volatile DatagramSocket udpSocket;
+    private final Map<String, Notified> notified = new ConcurrentHashMap<>();
     private volatile boolean stopUdp = false;
     private final AtomicBoolean isResolvingNsd = new AtomicBoolean(false);
 
@@ -291,82 +300,172 @@ public class DiscoveryPlugin extends Plugin {
         return list;
     }
 
+    /**
+     * UDP presence channel. One socket bound to the discovery port receives the PC's
+     * unsolicited announcements (sent on start, then every few seconds) and goodbyes
+     * ("bye" on a clean exit), so the list updates the moment a PC appears or leaves.
+     * Because announcements scale linearly with the number of PCs, requests are only
+     * sent as a short burst at the start to find PCs that announced before we listened.
+     */
     private void startUdpBroadcastDiscovery() {
-        udpExecutor = Executors.newSingleThreadExecutor();
+        final DatagramSocket socket = openDiscoverySocket();
+        if (socket == null) return;
+        udpSocket = socket;
+        notified.clear();
+        udpExecutor = Executors.newFixedThreadPool(2);
+
+        // Receiver: blocks until stopAllDiscovery() closes the socket.
         udpExecutor.execute(() -> {
-            DatagramSocket socket = null;
-            try {
-                socket = new DatagramSocket();
-                socket.setBroadcast(true);
-                socket.setSoTimeout(1000);
-
-                byte[] reqBytes = DISCOVER_REQ_MSG.getBytes(StandardCharsets.UTF_8);
-
-                // Run continuous ping loop while discovery is active (not just 3 attempts)
-                while (!stopUdp) {
-                    List<InetAddress> broadcastAddrs = getAllBroadcastAddresses();
-                    for (InetAddress bcast : broadcastAddrs) {
-                        try {
-                            DatagramPacket sendPacket = new DatagramPacket(reqBytes, reqBytes.length, bcast, UDP_DISCOVER_PORT);
-                            socket.send(sendPacket);
-                        } catch (Exception ignored) {}
-                    }
-
-                    // Also ping multicast group 224.0.0.167
-                    try {
-                        InetAddress mcast = InetAddress.getByName("224.0.0.167");
-                        DatagramPacket mcastPacket = new DatagramPacket(reqBytes, reqBytes.length, mcast, UDP_DISCOVER_PORT);
-                        socket.send(mcastPacket);
-                    } catch (Exception ignored) {}
-
-                    long deadline = System.currentTimeMillis() + 1200;
-                    byte[] recvBuf = new byte[2048];
-                    while (System.currentTimeMillis() < deadline && !stopUdp) {
-                        DatagramPacket recvPacket = new DatagramPacket(recvBuf, recvBuf.length);
-                        try {
-                            socket.receive(recvPacket);
-                            String jsonStr = new String(recvPacket.getData(), 0, recvPacket.getLength(), StandardCharsets.UTF_8).trim();
-                            if (!jsonStr.startsWith("{")) continue;
-                            JSONObject obj = new JSONObject(jsonStr);
-
-                            JSObject ret = new JSObject();
-                            ret.put("name", obj.optString("name", "Desktop"));
-                            ret.put("host", recvPacket.getAddress().getHostAddress());
-                            ret.put("port", obj.optInt("port", 8080));
-                            ret.put("scheme", obj.optString("scheme", "http"));
-                            ret.put("cert", obj.optString("cert", ""));
-                            ret.put("serverName", obj.optString("name", "Desktop"));
-                            if (obj.has("id")) {
-                                ret.put("id", obj.optString("id"));
-                            }
-
-                            notifyListeners("onDeviceDiscovered", ret);
-                        } catch (SocketTimeoutException timeout) {
-                            break;
-                        } catch (Exception e) {
-                            Log.d(TAG, "UDP parse error: " + e.getMessage());
-                        }
-                    }
-
-                    try {
-                        Thread.sleep(1500);
-                    } catch (InterruptedException e) {
-                        break;
-                    }
+            byte[] recvBuf = new byte[2048];
+            while (!stopUdp && !socket.isClosed()) {
+                DatagramPacket packet = new DatagramPacket(recvBuf, recvBuf.length);
+                try {
+                    socket.receive(packet);
+                    handleDatagram(packet);
+                } catch (Exception e) {
+                    if (stopUdp || socket.isClosed()) break;
+                    Log.d(TAG, "UDP receive error: " + e.getMessage());
                 }
-            } catch (Exception e) {
-                Log.d(TAG, "UDP discovery error: " + e.getMessage());
-            } finally {
-                if (socket != null && !socket.isClosed()) {
-                    socket.close();
+            }
+        });
+
+        // Sender: a few request bursts, then listen-only.
+        udpExecutor.execute(() -> {
+            byte[] reqBytes = DISCOVER_REQ_MSG.getBytes(StandardCharsets.UTF_8);
+            for (int round = 0; round < REQUEST_BURSTS && !stopUdp; round++) {
+                sendRequest(socket, reqBytes);
+                try {
+                    Thread.sleep(REQUEST_BURST_GAP_MS);
+                } catch (InterruptedException e) {
+                    return;
                 }
             }
         });
     }
 
+    /** Binds the shared discovery port (to receive broadcasts); falls back to any free port. */
+    private DatagramSocket openDiscoverySocket() {
+        try {
+            MulticastSocket ms = new MulticastSocket(null);
+            ms.setReuseAddress(true);
+            ms.bind(new InetSocketAddress(UDP_DISCOVER_PORT));
+            ms.setBroadcast(true);
+            try {
+                ms.joinGroup(InetAddress.getByName(MULTICAST_GROUP));
+            } catch (Exception e) {
+                Log.d(TAG, "Could not join multicast group: " + e.getMessage());
+            }
+            return ms;
+        } catch (Exception e) {
+            Log.w(TAG, "Discovery port busy, using an ephemeral port (announcements may be missed): " + e.getMessage());
+        }
+        try {
+            DatagramSocket fallback = new DatagramSocket();
+            fallback.setBroadcast(true);
+            return fallback;
+        } catch (Exception e) {
+            Log.w(TAG, "UDP discovery unavailable: " + e.getMessage());
+            return null;
+        }
+    }
+
+    private void sendRequest(DatagramSocket socket, byte[] reqBytes) {
+        for (InetAddress bcast : getAllBroadcastAddresses()) {
+            try {
+                socket.send(new DatagramPacket(reqBytes, reqBytes.length, bcast, UDP_DISCOVER_PORT));
+            } catch (Exception ignored) {}
+        }
+        try {
+            InetAddress mcast = InetAddress.getByName(MULTICAST_GROUP);
+            socket.send(new DatagramPacket(reqBytes, reqBytes.length, mcast, UDP_DISCOVER_PORT));
+        } catch (Exception ignored) {}
+    }
+
+    private void handleDatagram(DatagramPacket packet) {
+        String json = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8).trim();
+        if (!json.startsWith("{")) return; // includes our own "P2P_DISCOVER_REQ" echo
+        try {
+            JSONObject obj = new JSONObject(json);
+            String host = packet.getAddress().getHostAddress();
+            String id = obj.optString("id", "");
+
+            if ("bye".equals(obj.optString("type"))) {
+                notified.remove(keyFor(id, host, obj.optInt("port", 0)));
+                JSObject lost = new JSObject();
+                lost.put("id", id);
+                lost.put("host", host);
+                lost.put("name", obj.optString("name", ""));
+                notifyListeners("onDeviceLost", lost);
+                return;
+            }
+            if (!obj.has("port")) return;
+
+            int port = obj.optInt("port", 8080);
+            String name = obj.optString("name", "Desktop");
+            String scheme = obj.optString("scheme", "http");
+            String cert = obj.optString("cert", "");
+
+            // Heartbeats arrive every few seconds from every PC; only cross the JS
+            // bridge when something changed or the JS side needs a liveness refresh.
+            String key = keyFor(id, host, port);
+            String fingerprint = host + "|" + port + "|" + name + "|" + scheme + "|" + cert;
+            long now = System.currentTimeMillis();
+            Notified previous = notified.get(key);
+            if (previous != null && previous.fingerprint.equals(fingerprint) && now - previous.at < NOTIFY_REFRESH_MS) {
+                return;
+            }
+            notified.put(key, new Notified(fingerprint, now));
+
+            JSObject ret = new JSObject();
+            ret.put("name", name);
+            ret.put("host", host);
+            ret.put("port", port);
+            ret.put("scheme", scheme);
+            ret.put("cert", cert);
+            ret.put("serverName", name);
+            if (!id.isEmpty()) ret.put("id", id);
+            JSONArray ips = obj.optJSONArray("ips");
+            if (ips != null) ret.put("ips", ips);
+            notifyListeners("onDeviceDiscovered", ret);
+        } catch (Exception e) {
+            Log.d(TAG, "UDP parse error: " + e.getMessage());
+        }
+    }
+
+    private static String keyFor(String id, String host, int port) {
+        return id != null && !id.isEmpty() ? id : host + ":" + port;
+    }
+
+    private static final class Notified {
+        final String fingerprint;
+        final long at;
+
+        Notified(String fingerprint, long at) {
+            this.fingerprint = fingerprint;
+            this.at = at;
+        }
+    }
+
     @PluginMethod
     public void stopDiscovery(PluginCall call) {
+        stopAllDiscovery();
+        call.resolve();
+    }
+
+    /** Release the UDP thread, NSD listener and multicast lock if the WebView/activity goes away. */
+    @Override
+    protected void handleOnDestroy() {
+        stopAllDiscovery();
+        super.handleOnDestroy();
+    }
+
+    private synchronized void stopAllDiscovery() {
         stopUdp = true;
+        DatagramSocket socket = udpSocket;
+        udpSocket = null;
+        if (socket != null) {
+            socket.close(); // unblocks the receiver thread
+        }
         if (udpExecutor != null) {
             udpExecutor.shutdownNow();
             udpExecutor = null;
@@ -388,6 +487,5 @@ public class DiscoveryPlugin extends Plugin {
 
         isDiscovering = false;
         isResolvingNsd.set(false);
-        call.resolve();
     }
 }

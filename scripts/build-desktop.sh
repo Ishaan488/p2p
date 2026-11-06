@@ -7,7 +7,7 @@ echo "  P2P Link Desktop Standalone Builder"
 echo "==================================================="
 echo ""
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"  # repository root
 cd "$SCRIPT_DIR"
 
 # 1. Check for Go
