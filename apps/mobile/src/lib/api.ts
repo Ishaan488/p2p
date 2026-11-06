@@ -56,12 +56,34 @@ async function failure(res: Response, fallback: string): Promise<HttpError> {
 }
 
 // Used by the two calls that run before a session exists.
-async function postJSON(url: string, body: unknown, signal?: AbortSignal): Promise<any> {
-  // The body is sent without a JSON content type on purpose: it keeps the
-  // request "simple" so cross-origin calls skip preflight.
-  const res = await fetch(url, { method: 'POST', body: JSON.stringify(body), signal });
-  if (!res.ok) throw await failure(res, 'Request failed');
-  return res.json();
+async function postJSON(url: string, body: unknown, timeoutMs: number, externalSignal?: AbortSignal): Promise<any> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(new Error(`Network request timed out after ${timeoutMs}ms`)), timeoutMs);
+  let onAbort: (() => void) | undefined;
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      clearTimeout(timer);
+      ctrl.abort(externalSignal.reason);
+    } else {
+      onAbort = () => {
+        clearTimeout(timer);
+        ctrl.abort(externalSignal.reason);
+      };
+      externalSignal.addEventListener('abort', onAbort);
+    }
+  }
+  try {
+    // The body is sent without a JSON content type on purpose: it keeps the
+    // request "simple" so cross-origin calls skip preflight.
+    const res = await fetch(url, { method: 'POST', body: JSON.stringify(body), signal: ctrl.signal });
+    if (!res.ok) throw await failure(res, 'Request failed');
+    return res.json();
+  } finally {
+    clearTimeout(timer);
+    if (externalSignal && onAbort) {
+      externalSignal.removeEventListener('abort', onAbort);
+    }
+  }
 }
 
 // True when a request never got an answer (wrong address, firewall, Wi-Fi
@@ -70,13 +92,13 @@ export const isNetworkError = (err: unknown) => !(err instanceof HttpError);
 
 // Pairs with the PC at `host` using the secret from its QR code. The secret
 // itself is never sent: both sides derive the device key from it.
-export async function pairWithQr(host: string, secret: string, deviceId: string, deviceName: string, scheme = 'http', certFingerprint?: string): Promise<Pairing> {
+export async function pairWithQr(host: string, secret: string, deviceId: string, deviceName: string, scheme = 'http', certFingerprint?: string, signal?: AbortSignal): Promise<Pairing> {
   const key = deviceKeyFromCode(secret, deviceId);
   const res = await postJSON(`${scheme}://${host}/pair`, {
     deviceId,
     name: deviceName,
     mac: hmacHex(key, `pair\n${deviceId}\n${deviceName}`)
-  }, AbortSignal.timeout(REQUEST_TIMEOUT));
+  }, REQUEST_TIMEOUT, signal);
   const p = finishPairing(res, key, deviceId);
   p.scheme = scheme as 'http' | 'https';
   p.certFingerprint = certFingerprint;
@@ -85,13 +107,13 @@ export async function pairWithQr(host: string, secret: string, deviceId: string,
 
 // Pairs with the PC at `host` knowing only its address: this device picks its
 // own key, and the person at the PC approves the request in the terminal.
-export async function pairWithApproval(host: string, deviceId: string, deviceName: string, scheme = 'http'): Promise<Pairing> {
+export async function pairWithApproval(host: string, deviceId: string, deviceName: string, scheme = 'http', signal?: AbortSignal): Promise<Pairing> {
   const key = randomBytes(32);
   const res = await postJSON(`${scheme}://${host}/pair`, {
     deviceId,
     name: deviceName,
     key: bytesToHex(key)
-  }, AbortSignal.timeout(APPROVAL_TIMEOUT));
+  }, APPROVAL_TIMEOUT, signal);
   const p = finishPairing(res, key, deviceId);
   p.scheme = scheme as 'http' | 'https';
   return p;
@@ -146,7 +168,7 @@ export class ServerApi {
       const res = await postJSON(`${this.scheme}://${this.host}/hello`, {
         deviceId: pairing.deviceId,
         clientNonce: bytesToHex(clientNonce)
-      }, AbortSignal.timeout(REQUEST_TIMEOUT));
+      }, REQUEST_TIMEOUT);
       const key = sessionKey(hexToBytes(pairing.key), clientNonce, hexToBytes(res.serverNonce));
       if (res.proof !== hmacHex(key, 'server')) {
         throw new Error('The PC failed to prove its identity');

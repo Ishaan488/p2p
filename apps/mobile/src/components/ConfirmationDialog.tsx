@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { AlertTriangle, Trash2, Unlink, X } from 'lucide-react';
 import { backButtonManager } from '../lib/backButton';
 
@@ -25,19 +25,39 @@ export const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({
   onConfirm,
   onCancel
 }) => {
-  // Support Android physical back button and Esc key
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const onCancelRef = useRef(onCancel);
+  onCancelRef.current = onCancel;
+
+  // Support Android physical back button and focus trap
   useEffect(() => {
     if (!isOpen) return;
 
+    const prevFocus = document.activeElement as HTMLElement | null;
+
     const unregister = backButtonManager.push(() => {
-      onCancel();
+      onCancelRef.current();
       return true;
     });
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onCancel();
+      if (e.key === 'Tab' && dialogRef.current) {
+        const items = [
+          ...dialogRef.current.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          )
+        ].filter((el) => el.offsetParent !== null);
+        if (items.length === 0) return;
+        const first = items[0];
+        const last = items[items.length - 1];
+        const active = document.activeElement;
+        if (e.shiftKey && (active === first || !dialogRef.current.contains(active))) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && (active === last || !dialogRef.current.contains(active))) {
+          e.preventDefault();
+          first.focus();
+        }
       }
     };
 
@@ -46,8 +66,9 @@ export const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({
     return () => {
       unregister();
       window.removeEventListener('keydown', handleKeyDown);
+      prevFocus?.focus?.();
     };
-  }, [isOpen, onCancel]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -61,6 +82,7 @@ export const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({
       aria-describedby="dialog-desc"
     >
       <div
+        ref={dialogRef}
         className="dialog-card p2p-confirmation-dialog-card"
         onClick={(e) => e.stopPropagation()}
       >

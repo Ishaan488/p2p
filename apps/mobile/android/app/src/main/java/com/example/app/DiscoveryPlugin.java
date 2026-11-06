@@ -34,6 +34,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -71,6 +72,7 @@ public class DiscoveryPlugin extends Plugin {
     private volatile boolean wantDiscovery = false;
     private volatile boolean stopUdp = false;
     private final AtomicBoolean isResolvingNsd = new AtomicBoolean(false);
+    private final ConcurrentLinkedQueue<NsdServiceInfo> nsdResolveQueue = new ConcurrentLinkedQueue<>();
 
     @Override
     public void load() {
@@ -224,65 +226,8 @@ public class DiscoveryPlugin extends Plugin {
             public void onServiceFound(NsdServiceInfo serviceInfo) {
                 Log.d(TAG, "Found mDNS service: " + serviceInfo.getServiceName());
                 if (serviceInfo.getServiceType() != null && serviceInfo.getServiceType().contains("_p2plink._tcp")) {
-                    if (!isResolvingNsd.compareAndSet(false, true)) {
-                        // Skip if a resolve is currently in-flight to prevent FAILURE_ALREADY_ACTIVE
-                        return;
-                    }
-                    try {
-                        nsdManager.resolveService(serviceInfo, new NsdManager.ResolveListener() {
-                            @Override
-                            public void onResolveFailed(NsdServiceInfo serviceInfo, int errorCode) {
-                                isResolvingNsd.set(false);
-                                Log.w(TAG, "Resolve failed for " + serviceInfo.getServiceName() + ": " + errorCode);
-                            }
-
-                            @Override
-                            public void onServiceResolved(NsdServiceInfo resolved) {
-                                isResolvingNsd.set(false);
-                                InetAddress host = resolved.getHost();
-                                if (host == null) return;
-
-                                JSObject ret = new JSObject();
-                                ret.put("host", host.getHostAddress());
-                                ret.put("port", resolved.getPort());
-
-                                String scheme = "http";
-                                String certFP = "";
-                                String pcName = resolved.getServiceName();
-                                String pcId = "";
-
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                    Map<String, byte[]> attributes = resolved.getAttributes();
-                                    if (attributes != null) {
-                                        if (attributes.containsKey("scheme")) {
-                                            scheme = new String(attributes.get("scheme"), StandardCharsets.UTF_8);
-                                        }
-                                        if (attributes.containsKey("cert")) {
-                                            certFP = new String(attributes.get("cert"), StandardCharsets.UTF_8);
-                                        }
-                                        if (attributes.containsKey("name")) {
-                                            pcName = new String(attributes.get("name"), StandardCharsets.UTF_8);
-                                        }
-                                        if (attributes.containsKey("id")) {
-                                            pcId = new String(attributes.get("id"), StandardCharsets.UTF_8);
-                                        }
-                                    }
-                                }
-
-                                ret.put("scheme", scheme);
-                                ret.put("cert", certFP);
-                                ret.put("name", pcName);
-                                ret.put("serverName", pcName);
-                                ret.put("nsdName", resolved.getServiceName());
-                                if (!pcId.isEmpty()) ret.put("id", pcId);
-
-                                notifyListeners("onDeviceDiscovered", ret);
-                            }
-                        });
-                    } catch (Exception e) {
-                        isResolvingNsd.set(false);
-                        Log.w(TAG, "Error invoking resolveService: " + e.getMessage());
-                    }
+                    nsdResolveQueue.offer(serviceInfo);
+                    drainNsdResolveQueue();
                 }
             }
 
@@ -299,6 +244,79 @@ public class DiscoveryPlugin extends Plugin {
             nsdManager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener);
         } catch (Exception e) {
             Log.w(TAG, "Failed to start NSD discovery: " + e.getMessage());
+        }
+    }
+
+    private void drainNsdResolveQueue() {
+        if (nsdManager == null || !isDiscovering) return;
+        if (!isResolvingNsd.compareAndSet(false, true)) {
+            return;
+        }
+        NsdServiceInfo next = nsdResolveQueue.poll();
+        if (next == null) {
+            isResolvingNsd.set(false);
+            return;
+        }
+        try {
+            nsdManager.resolveService(next, new NsdManager.ResolveListener() {
+                @Override
+                public void onResolveFailed(NsdServiceInfo serviceInfo, int errorCode) {
+                    isResolvingNsd.set(false);
+                    Log.w(TAG, "Resolve failed for " + serviceInfo.getServiceName() + ": " + errorCode);
+                    drainNsdResolveQueue();
+                }
+
+                @Override
+                public void onServiceResolved(NsdServiceInfo resolved) {
+                    isResolvingNsd.set(false);
+                    try {
+                        InetAddress host = resolved.getHost();
+                        if (host != null) {
+                            JSObject ret = new JSObject();
+                            ret.put("host", host.getHostAddress());
+                            ret.put("port", resolved.getPort());
+
+                            String scheme = "http";
+                            String certFP = "";
+                            String pcName = resolved.getServiceName();
+                            String pcId = "";
+
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                                Map<String, byte[]> attributes = resolved.getAttributes();
+                                if (attributes != null) {
+                                    if (attributes.containsKey("scheme")) {
+                                        scheme = new String(attributes.get("scheme"), StandardCharsets.UTF_8);
+                                    }
+                                    if (attributes.containsKey("cert")) {
+                                        certFP = new String(attributes.get("cert"), StandardCharsets.UTF_8);
+                                    }
+                                    if (attributes.containsKey("name")) {
+                                        pcName = new String(attributes.get("name"), StandardCharsets.UTF_8);
+                                    }
+                                    if (attributes.containsKey("id")) {
+                                        pcId = new String(attributes.get("id"), StandardCharsets.UTF_8);
+                                    }
+                                }
+                            }
+
+                            ret.put("scheme", scheme);
+                            ret.put("cert", certFP);
+                            ret.put("name", pcName);
+                            ret.put("serverName", pcName);
+                            ret.put("nsdName", resolved.getServiceName());
+                            if (!pcId.isEmpty()) ret.put("id", pcId);
+
+                            notifyListeners("onDeviceDiscovered", ret);
+                        }
+                    } finally {
+                        drainNsdResolveQueue();
+                    }
+                }
+            });
+        } catch (Exception e) {
+            isResolvingNsd.set(false);
+            Log.w(TAG, "Error invoking resolveService: " + e.getMessage());
+            drainNsdResolveQueue();
         }
     }
 
@@ -632,6 +650,7 @@ public class DiscoveryPlugin extends Plugin {
         }
 
         isDiscovering = false;
+        nsdResolveQueue.clear();
         isResolvingNsd.set(false);
     }
 }

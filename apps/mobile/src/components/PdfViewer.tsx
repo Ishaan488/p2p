@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { FileText, ExternalLink, Download, X, Eye } from 'lucide-react';
 import { formatBytes } from '../lib/telemetry';
 import { backButtonManager } from '../lib/backButton';
@@ -18,15 +18,38 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   onDownload
 }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const modalRef = useRef<HTMLDivElement>(null);
   const isNative = Capacitor.isNativePlatform();
 
   useEffect(() => {
     if (!isOpen) return;
+    const prevFocus = document.activeElement as HTMLElement | null;
     const unregister = backButtonManager.push(() => {
       setIsOpen(false);
       return true;
     });
-    return unregister;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab' || !modalRef.current) return;
+      const focusable = modalRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), a[href], iframe, [tabindex]:not([tabindex="-1"])'
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      unregister();
+      window.removeEventListener('keydown', onKey);
+      prevFocus?.focus?.();
+    };
   }, [isOpen]);
 
   return (
@@ -73,8 +96,14 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       </div>
 
       {isOpen && (
-        <div className="pdf-modal-overlay" onClick={() => setIsOpen(false)} role="dialog" aria-modal="true">
-          <div className="pdf-modal-content" onClick={e => e.stopPropagation()}>
+        <div
+          className="pdf-modal-overlay"
+          onClick={() => setIsOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label={`PDF preview: ${filename}`}
+        >
+          <div ref={modalRef} className="pdf-modal-content" onClick={e => e.stopPropagation()}>
             <div className="pdf-modal-header">
               <div className="pdf-modal-title-group">
                 <FileText size={16} />
@@ -87,15 +116,28 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
                   rel="noreferrer"
                   className="icon-btn"
                   title="Open in new tab"
+                  aria-label="Open PDF in new tab"
                 >
                   <ExternalLink size={16} />
                 </a>
                 {onDownload && (
-                  <button type="button" className="icon-btn" onClick={onDownload} title="Save PDF">
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    onClick={onDownload}
+                    title="Save PDF"
+                    aria-label="Save PDF"
+                  >
                     <Download size={16} />
                   </button>
                 )}
-                <button type="button" className="icon-btn" onClick={() => setIsOpen(false)} title="Close">
+                <button
+                  type="button"
+                  className="icon-btn"
+                  onClick={() => setIsOpen(false)}
+                  title="Close"
+                  aria-label="Close PDF preview"
+                >
                   <X size={18} />
                 </button>
               </div>

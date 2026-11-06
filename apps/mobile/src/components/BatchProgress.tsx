@@ -119,7 +119,7 @@ export const BatchProgress: React.FC<BatchProgressProps> = ({
         .batch-hud-controls {
           display: flex;
           align-items: center;
-          gap: 0.4rem;
+          gap: 0.6rem;
           flex-shrink: 0;
         }
 
@@ -194,6 +194,7 @@ export const BatchProgress: React.FC<BatchProgressProps> = ({
         }
 
         .shimmer-bar-fill {
+          width: 100%;
           height: 100%;
           border-radius: 9999px;
           background: linear-gradient(
@@ -204,8 +205,9 @@ export const BatchProgress: React.FC<BatchProgressProps> = ({
             #8A73B8 100%
           );
           background-size: 200% 100%;
+          transform-origin: left center;
           animation: batchProgressShimmer 2.4s linear infinite;
-          transition: width 180ms ease-out;
+          transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
         }
 
         .shimmer-bar-fill.paused {
@@ -342,7 +344,7 @@ export const BatchProgress: React.FC<BatchProgressProps> = ({
         >
           <div
             className={`shimmer-bar-fill ${isPaused ? 'paused' : ''}`}
-            style={{ width: `${percent}%` }}
+            style={{ transform: `scaleX(${Math.max(0, Math.min(1, percent / 100))})` }}
           />
         </div>
         <span className="batch-percent-badge">{roundedPercent}%</span>

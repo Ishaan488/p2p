@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
   Sliders,
@@ -25,6 +25,10 @@ export interface PreferencesModalProps {
   clipboardSyncEnabled: boolean;
   sensitiveFilterEnabled: boolean;
   serverSettings: ServerSettings | null;
+  /** Connected PCs to choose from, when more than one is connected: the desktop settings apply to the chosen one. */
+  deviceChoices?: Array<{ id: string; name: string }>;
+  selectedDeviceId?: string | null;
+  onSelectDevice?: (id: string) => void;
   onClose: () => void;
   onSave: (prefs: {
     deviceAlias: string;
@@ -67,6 +71,9 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
   clipboardSyncEnabled,
   sensitiveFilterEnabled,
   serverSettings,
+  deviceChoices,
+  selectedDeviceId,
+  onSelectDevice,
   onClose,
   onSave
 }) => {
@@ -81,6 +88,31 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
   const [ctxMenu, setCtxMenu] = useState(serverSettings?.contextMenuEnabled ?? false);
   const [autostart, setAutostart] = useState(serverSettings?.autostartEnabled ?? false);
   const [saving, setSaving] = useState(false);
+  const [dragOffset, setDragOffset] = useState(0);
+  const touchStartY = useRef<number | null>(null);
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStartY.current = e.touches[0].clientY;
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (touchStartY.current === null) return;
+    const deltaY = e.touches[0].clientY - touchStartY.current;
+    if (deltaY > 0) {
+      setDragOffset(deltaY);
+    }
+  };
+
+  const handleTouchEnd = () => {
+    if (dragOffset > 75) {
+      onCloseRef.current();
+    }
+    touchStartY.current = null;
+    setDragOffset(0);
+  };
 
   useEffect(() => {
     if (isOpen) {
@@ -107,19 +139,36 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
     serverSettings
   ]);
 
-  // Support Android physical back button & Esc key
+  // Support Android physical back button & focus trap
   useEffect(() => {
     if (!isOpen) return;
 
+    const prevFocus = document.activeElement as HTMLElement | null;
+    setDragOffset(0);
+
     const unregister = backButtonManager.push(() => {
-      onClose();
+      onCloseRef.current();
       return true;
     });
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onClose();
+      if (e.key === 'Tab' && sheetRef.current) {
+        const items = [
+          ...sheetRef.current.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          )
+        ].filter((el) => el.offsetParent !== null);
+        if (items.length === 0) return;
+        const first = items[0];
+        const last = items[items.length - 1];
+        const active = document.activeElement;
+        if (e.shiftKey && (active === first || !sheetRef.current.contains(active))) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && (active === last || !sheetRef.current.contains(active))) {
+          e.preventDefault();
+          first.focus();
+        }
       }
     };
 
@@ -128,8 +177,9 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
     return () => {
       unregister();
       window.removeEventListener('keydown', handleKeyDown);
+      prevFocus?.focus?.();
     };
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -164,12 +214,29 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
       aria-labelledby="prefs-modal-title"
     >
       <div
+        ref={sheetRef}
         className="sheet-container prefs-sheet-container p2p-prefs-container"
         onClick={(e) => e.stopPropagation()}
+        style={{
+          transform: dragOffset > 0 ? `translateY(${dragOffset}px)` : undefined,
+          transition: dragOffset > 0 ? 'none' : undefined
+        }}
       >
-        <div className="sheet-drag-handle" />
+        <div
+          className="sheet-drag-handle"
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          onTouchCancel={handleTouchEnd}
+        />
 
-        <div className="sheet-header">
+        <div
+          className="sheet-header"
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          onTouchCancel={handleTouchEnd}
+        >
           <div className="sheet-header-left">
             <div className="sheet-icon-badge p2p-prefs-header-badge">
               <Sliders size={18} strokeWidth={2} />
@@ -232,6 +299,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
                 <button
                   type="button"
                   className={`prefs-option-chip p2p-chip-touch ${subDir === 'P2P Link' ? 'active' : ''}`}
+                  aria-pressed={subDir === 'P2P Link'}
                   onClick={() => setSubDir('P2P Link')}
                 >
                   <FolderDown size={13} />
@@ -240,6 +308,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
                 <button
                   type="button"
                   className={`prefs-option-chip p2p-chip-touch ${subDir === '' ? 'active' : ''}`}
+                  aria-pressed={subDir === ''}
                   onClick={() => setSubDir('')}
                 >
                   <HardDrive size={13} />
@@ -248,6 +317,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
               </div>
               <input
                 type="text"
+                aria-label="Custom downloads subfolder"
                 className="prefs-input p2p-input-touch"
                 value={subDir}
                 onChange={(e) => setSubDir(e.target.value)}
@@ -379,6 +449,27 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
                 {isConnected ? 'Active Link' : 'Offline'}
               </span>
             </div>
+
+            {deviceChoices && deviceChoices.length > 1 && (
+              <div className="p2p-prefs-field">
+                <label htmlFor="p2p-pc-choice" className="prefs-label">
+                  Settings for
+                </label>
+                <select
+                  id="p2p-pc-choice"
+                  className="prefs-input p2p-input-touch"
+                  value={selectedDeviceId ?? ''}
+                  onChange={(e) => onSelectDevice?.(e.target.value)}
+                >
+                  {deviceChoices.map(d => (
+                    <option key={d.id} value={d.id}>{d.name}</option>
+                  ))}
+                </select>
+                <span className="p2p-field-hint">
+                  Desktop options below apply to the device you pick here
+                </span>
+              </div>
+            )}
 
             {isConnected ? (
               <>
@@ -657,7 +748,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
         }
 
         .p2p-chip-touch {
-          min-height: 40px;
+          min-height: 44px;
           padding: 0.45rem 0.95rem;
           border-radius: var(--radius-full);
           font-size: 0.78rem;

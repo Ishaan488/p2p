@@ -46,21 +46,44 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({
   const [videoError, setVideoError] = useState('');
   const [bufferedPercent, setBufferedPercent] = useState(0);
 
-  // Hardware Back Button & Escape integration
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // Hardware Back Button & Focus Management
   useEffect(() => {
+    const prevFocus = document.activeElement as HTMLElement | null;
     const unregister = backButtonManager.push(() => {
-      onClose();
+      onCloseRef.current();
       return true;
     });
-    return unregister;
-  }, [onClose]);
+    return () => {
+      unregister();
+      prevFocus?.focus?.();
+    };
+  }, []);
 
-  // Keyboard controls
+  // Keyboard controls & Focus Trap
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
-      } else if (type === 'image') {
+      if (e.key === 'Tab' && rootRef.current) {
+        const focusable = rootRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusable.length > 0) {
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+          if (e.shiftKey && document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+          } else if (!e.shiftKey && document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+          }
+        }
+        return;
+      }
+      if (type === 'image') {
         if (e.key === '+' || e.key === '=') {
           setScale(s => Math.min(s + 0.35, 5));
         } else if (e.key === '-' || e.key === '_') {
@@ -88,7 +111,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [type, duration, onClose]);
+  }, [type, duration]);
 
   // Video Lifecycle
   useEffect(() => {
@@ -279,19 +302,31 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({
   };
 
   const handleShare = async () => {
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: filename,
-          url: src
-        });
-      } catch {}
-    }
+    if (!navigator.share) return;
+    try {
+      if (src.startsWith('blob:') || src.startsWith('data:')) {
+        const res = await fetch(src);
+        const blob = await res.blob();
+        const file = new File([blob], filename, { type: blob.type || (type === 'image' ? 'image/jpeg' : 'video/mp4') });
+        if (navigator.canShare?.({ files: [file] })) {
+          await navigator.share({ title: filename, files: [file] });
+          return;
+        }
+      }
+      await navigator.share({
+        title: filename,
+        url: src
+      });
+    } catch {}
   };
 
   return (
     <div
+      ref={rootRef}
       className="media-viewer-root"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Media viewer: ${filename}`}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
     >

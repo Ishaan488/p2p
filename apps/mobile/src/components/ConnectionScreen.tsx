@@ -1,5 +1,7 @@
-import React from 'react';
-import type { Pairing } from '../lib/api';
+import React, { useState } from 'react';
+import type { PeerView } from '../lib/peerManager';
+import { toLegacyStatus } from '../lib/peerPresentation';
+import { PeerRow } from './PeerRow';
 import { deviceKey, type DiscoveredDevice } from '../lib/discovery';
 import { BrandLogo } from './BrandLogo';
 import {
@@ -16,10 +18,13 @@ import {
 } from 'lucide-react';
 
 export interface ConnectionScreenProps {
+  /** 'standby': nothing is connected. 'add': adding another device while others may be connected. */
+  mode: 'standby' | 'add';
+  /** Overall state: connected if any device is. */
   status: 'connected' | 'disconnected' | 'connecting' | 'error';
   address: string;
   setAddress: (addr: string) => void;
-  pairing: Pairing | null;
+  peers: PeerView[];
   deviceName: string;
   setDeviceName: (name: string) => void;
   connectError: string;
@@ -30,11 +35,17 @@ export interface ConnectionScreenProps {
   setIsEditingIp: React.Dispatch<React.SetStateAction<boolean>>;
   discoveredDevices: DiscoveredDevice[];
   discoveryTip: string;
-  onQuickConnect: () => void;
+  onConnectPeer: (id: string) => void;
+  onDisconnectPeer: (id: string) => void;
+  onToggleAutoAccept: (id: string, value: boolean) => void;
   onManualConnect: (e: React.FormEvent) => void;
   onConnectDiscovered: (device: DiscoveredDevice) => void;
   onOpenPreferences: () => void;
-  onUnpairPrompt: () => void;
+  onUnpairPeer: (id: string) => void;
+  onStartAddDevice?: () => void;
+  pendingApproval?: { host: string; name: string } | null;
+  onCancelPairing?: () => void;
+  connectingDiscoveredKey?: string | null;
 }
 
 const MAX_LISTED_DEVICES = 50;
@@ -48,10 +59,11 @@ const MAX_LISTED_DEVICES = 50;
  * and 1-tap connection for Wi-Fi discovered devices.
  */
 export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
+  mode,
   status,
   address,
   setAddress,
-  pairing,
+  peers,
   deviceName,
   setDeviceName,
   connectError,
@@ -62,15 +74,32 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
   setIsEditingIp,
   discoveredDevices,
   discoveryTip,
-  onQuickConnect,
+  onConnectPeer,
+  onDisconnectPeer,
+  onToggleAutoAccept,
   onManualConnect,
   onConnectDiscovered,
   onOpenPreferences,
-  onUnpairPrompt
+  onUnpairPeer,
+  onStartAddDevice,
+  pendingApproval,
+  onCancelPairing,
+  connectingDiscoveredKey
 }) => {
+  const [expandedPeerId, setExpandedPeerId] = useState<string | null>(null);
+
+  // What to show: nothing paired / adding -> pairing card; one PC -> the familiar hero card; several -> a list.
+  const single = mode === 'standby' && peers.length === 1 ? peers[0] : null;
+  const many = mode === 'standby' && peers.length >= 2;
+  const showPairCard = mode === 'add' || peers.length === 0;
+  const heroStatus = single ? toLegacyStatus(single.status) : status;
+  const hostOf = (a: string) => a.replace(/^https?:\/\//, '').split('/')[0];
+  const pairedAddresses = new Set(peers.map(p => hostOf(p.address)));
+  const pairedIds = new Set(peers.map(p => p.id));
+
   // Discovered devices on LAN that aren't already represented by the active pairing address
   const allAvailable = discoveredDevices
-    .filter(d => !pairing || (`${d.host}:${d.port}` !== address && !(d.id && d.id === pairing.serverId)))
+    .filter(d => !(d.id && pairedIds.has(d.id)) && !pairedAddresses.has(`${d.host}:${d.port}`))
     .sort((a, b) => (a.serverName || a.name).localeCompare(b.serverName || b.name, undefined, { sensitivity: 'base' }) ||
       deviceKey(a).localeCompare(deviceKey(b)));
   // A busy network can expose many PCs; render a bounded, stable page of them.
@@ -78,22 +107,51 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
   const hiddenDeviceCount = allAvailable.length - availableDevices.length;
 
   const isPairedPcOnline = Boolean(
-    pairing && discoveredDevices.some(d =>
-      (`${d.host}:${d.port}` === address) || (Boolean(d.id) && d.id === pairing.serverId)
+    single && discoveredDevices.some(d =>
+      (`${d.host}:${d.port}` === hostOf(single.address)) || (Boolean(d.id) && d.id === single.id)
     )
   );
 
   const handleConnectDiscovered = (d: DiscoveredDevice) => {
-    const targetHost = `${d.host}:${d.port}`;
-    setAddress(targetHost);
-    try {
-      localStorage.setItem('p2p_address', targetHost);
-    } catch {}
+    setAddress(`${d.host}:${d.port}`);
     onConnectDiscovered(d);
   };
 
+  const handleAddDevice = () => {
+    if (onStartAddDevice) {
+      onStartAddDevice();
+    } else {
+      setIsScanning(true);
+    }
+  };
+
+  const renderErrorAlert = () => {
+    const errText = cameraError || connectError;
+    if (!errText) return null;
+    return (
+      <div className="connection-alert-box error" role="alert">
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', flex: 1, minWidth: 0 }}>
+          <AlertCircle size={14} className="alert-icon" style={{ marginTop: '2px', flexShrink: 0 }} />
+          <span style={{ flex: 1 }}>{errText}</span>
+        </div>
+        {!isEditingIp && (
+          <button
+            type="button"
+            className="alert-recovery-btn"
+            onClick={() => {
+              setIsScanning(false);
+              setIsEditingIp(true);
+            }}
+          >
+            Enter IP manually
+          </button>
+        )}
+      </div>
+    );
+  };
+
   const getStatusLabel = () => {
-    switch (status) {
+    switch (heroStatus) {
       case 'connecting':
         return 'Connecting';
       case 'error':
@@ -309,7 +367,7 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
           align-items: center;
           justify-content: center;
           gap: 0.45rem;
-          transition: all var(--transition-fast);
+          transition: transform var(--transition-fast), background var(--transition-fast), opacity var(--transition-fast);
         }
 
         .connect-btn-primary.connecting {
@@ -322,7 +380,7 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
           align-items: center;
           justify-content: center;
           flex-wrap: wrap;
-          gap: 0.35rem;
+          gap: 0.5rem;
           width: 100%;
         }
 
@@ -330,7 +388,8 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
           display: inline-flex;
           align-items: center;
           gap: 0.35rem;
-          padding: 0.38rem 0.65rem;
+          min-height: 40px;
+          padding: 0.42rem 0.75rem;
           border-radius: var(--radius-full);
           background: var(--surface-secondary);
           border: 1px solid var(--border-subtle);
@@ -338,8 +397,15 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
           font-size: 0.74rem;
           font-weight: 500;
           cursor: pointer;
-          transition: all var(--transition-fast);
+          transition: transform var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
           white-space: nowrap;
+          position: relative;
+        }
+
+        .action-pill-btn::after {
+          content: '';
+          position: absolute;
+          inset: -2px 0;
         }
 
         .action-pill-btn:hover,
@@ -435,8 +501,63 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
           border: 1px solid var(--border-subtle);
           border-radius: var(--radius-md);
           gap: 0.6rem;
-          transition: all var(--transition-fast);
+          transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
           box-shadow: var(--shadow-sm);
+        }
+
+        .pending-approval-banner {
+          width: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 0.75rem;
+          padding: 0.75rem 0.9rem;
+          background: var(--surface-elevated);
+          border: 1px solid var(--accent-border);
+          border-radius: var(--radius-md);
+          box-shadow: var(--shadow-sm);
+        }
+
+        .pending-approval-info {
+          display: flex;
+          align-items: flex-start;
+          gap: 0.6rem;
+          min-width: 0;
+          flex: 1;
+        }
+
+        .pending-approval-text {
+          display: flex;
+          flex-direction: column;
+          gap: 0.15rem;
+          min-width: 0;
+        }
+
+        .pending-approval-title {
+          font-size: 0.82rem;
+          font-weight: 600;
+          color: var(--text-primary);
+        }
+
+        .pending-approval-sub {
+          font-size: 0.73rem;
+          color: var(--text-secondary);
+          line-height: 1.35;
+        }
+
+        .alert-recovery-btn {
+          align-self: flex-start;
+          margin-top: 0.35rem;
+          min-height: 36px;
+          padding: 0.3rem 0.7rem;
+          border-radius: var(--radius-full);
+          background: var(--surface-elevated);
+          border: 1px solid var(--border-strong);
+          color: var(--text-primary);
+          font-size: 0.73rem;
+          font-weight: 600;
+          cursor: pointer;
+          white-space: nowrap;
         }
 
         .discovered-item-card:hover {
@@ -537,6 +658,32 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
       `}</style>
 
       <div className="connection-stage-compact">
+        {pendingApproval && (
+          <div className="pending-approval-banner" role="status" aria-live="polite">
+            <div className="pending-approval-info">
+              <Loader2 size={16} className="animate-spin" style={{ color: 'var(--accent)', marginTop: '2px', flexShrink: 0 }} />
+              <div className="pending-approval-text">
+                <span className="pending-approval-title">
+                  Waiting for approval on {pendingApproval.name}…
+                </span>
+                <span className="pending-approval-sub">
+                  Approve the pairing prompt on your computer ({pendingApproval.host}).
+                </span>
+              </div>
+            </div>
+            {onCancelPairing && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-compact"
+                style={{ minHeight: '44px', padding: '0 0.85rem', flexShrink: 0 }}
+                onClick={onCancelPairing}
+              >
+                Cancel
+              </button>
+            )}
+          </div>
+        )}
+
         {/* QR Scanner Card Mode */}
         {isScanning ? (
           <div className="scanner-card">
@@ -550,12 +697,7 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
             {/* Preserves exact #qr-reader DOM element for html5-qrcode */}
             <div id="qr-reader" className="qr-viewport" />
 
-            {cameraError && (
-              <div className="connection-alert-box error" role="alert">
-                <AlertCircle size={14} className="alert-icon" />
-                <span>{cameraError}</span>
-              </div>
-            )}
+            {renderErrorAlert()}
 
             <button
               type="button"
@@ -579,35 +721,56 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
                 </div>
 
                 <div className="discovered-list">
-                  {availableDevices.map(d => (
-                    <div key={deviceKey(d)} className="discovered-item-card">
-                      <div className="discovered-item-info">
-                        <div className="discovered-item-icon">
-                          <Laptop size={16} strokeWidth={1.8} />
+                  {availableDevices.map(d => {
+                    const key = deviceKey(d);
+                    const hostPort = `${d.host}:${d.port}`;
+                    const isApprovingThis = pendingApproval?.host === hostPort;
+                    const isConnectingThis = connectingDiscoveredKey === key || isApprovingThis;
+                    const isBusy = d.state === 'appearing' || isConnectingThis || Boolean(pendingApproval);
+                    return (
+                      <div key={key} className="discovered-item-card">
+                        <div className="discovered-item-info">
+                          <div className="discovered-item-icon">
+                            <Laptop size={16} strokeWidth={1.8} />
+                          </div>
+                          <div className="discovered-item-details">
+                            <span className="discovered-item-name">{d.serverName || d.name}</span>
+                            <span className="discovered-item-addr">{hostPort}</span>
+                          </div>
                         </div>
-                        <div className="discovered-item-details">
-                          <span className="discovered-item-name">{d.serverName || d.name}</span>
-                          <span className="discovered-item-addr">{d.host}:{d.port}</span>
-                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-compact"
+                          onClick={() => handleConnectDiscovered(d)}
+                          disabled={isBusy}
+                          aria-busy={d.state === 'appearing' || isConnectingThis}
+                          title={
+                            d.state === 'appearing'
+                              ? 'Checking that this PC is reachable…'
+                              : isApprovingThis
+                              ? 'Waiting for approval on PC…'
+                              : `Connect to ${d.serverName || d.name}`
+                          }
+                        >
+                          {d.state === 'appearing' ? (
+                            <>
+                              <Loader2 size={12} className="animate-spin" /> Checking…
+                            </>
+                          ) : isApprovingThis ? (
+                            <>
+                              <Loader2 size={12} className="animate-spin" /> Approve on PC…
+                            </>
+                          ) : isConnectingThis ? (
+                            <>
+                              <Loader2 size={12} className="animate-spin" /> Connecting…
+                            </>
+                          ) : (
+                            'Connect'
+                          )}
+                        </button>
                       </div>
-                      <button
-                        type="button"
-                        className="btn btn-primary btn-compact"
-                        onClick={() => handleConnectDiscovered(d)}
-                        disabled={d.state === 'appearing'}
-                        aria-busy={d.state === 'appearing'}
-                        title={d.state === 'appearing' ? 'Checking that this PC is reachable…' : `Connect to ${d.serverName || d.name}`}
-                      >
-                        {d.state === 'appearing' ? (
-                          <>
-                            <Loader2 size={12} className="animate-spin" /> Checking…
-                          </>
-                        ) : (
-                          'Connect'
-                        )}
-                      </button>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
                 {hiddenDeviceCount > 0 && (
                   <p className="discovered-more-note">
@@ -615,40 +778,106 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
                   </p>
                 )}
               </section>
-            ) : status !== 'connecting' && !pairing && (
+            ) : status !== 'connecting' && showPairCard && (
               <div className="discovery-searching-pill" role="status">
                 <Loader2 size={12} className="animate-spin discovery-spinner" />
                 <span>Searching local Wi-Fi...</span>
               </div>
             )}
 
-            {/* Main Continuity Card (Paired or Unpaired) */}
-            {pairing ? (
+            {/* Several paired PCs: a calm list instead of one big card */}
+            {many && (
+              <section className="standby-devices" aria-label="Your devices">
+                <h2 className="standby-devices-title">Your devices</h2>
+                <p className="standby-devices-sub">Connect to one or several at once.</p>
+
+                {renderErrorAlert()}
+
+                <ul className="peer-list">
+                  {peers.map(peer => (
+                    <PeerRow
+                      key={peer.id}
+                      peer={peer}
+                      variant="standby"
+                      expanded={expandedPeerId === peer.id}
+                      onToggleExpand={() => setExpandedPeerId(id => (id === peer.id ? null : peer.id))}
+                      onConnect={() => onConnectPeer(peer.id)}
+                      onDisconnect={() => onDisconnectPeer(peer.id)}
+                      onRemove={() => onUnpairPeer(peer.id)}
+                      onToggleAutoAccept={v => onToggleAutoAccept(peer.id, v)}
+                      onPairAgain={handleAddDevice}
+                    />
+                  ))}
+                </ul>
+
+                <div className="standby-add-strip">
+                  <button type="button" onClick={handleAddDevice} className="action-pill-btn">
+                    <QrCode size={13} />
+                    <span>Add device</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsEditingIp(v => !v)}
+                    className={`action-pill-btn ${isEditingIp ? 'active' : ''}`}
+                    aria-expanded={isEditingIp}
+                  >
+                    <Edit3 size={13} />
+                    <span>{isEditingIp ? 'Hide address' : 'Enter address'}</span>
+                  </button>
+                  <button type="button" onClick={onOpenPreferences} className="action-pill-btn">
+                    <Sliders size={13} />
+                    <span>Settings</span>
+                  </button>
+                </div>
+
+                {isEditingIp && (
+                  <div className="inline-ip-wrapper">
+                    <form onSubmit={onManualConnect} className="inline-ip-form">
+                      <input
+                        type="text"
+                        className="form-input form-input-mono"
+                        value={address}
+                        onChange={e => setAddress(e.target.value)}
+                        placeholder="192.168.1.15:8080"
+                        autoFocus
+                        aria-label="IP address and port of the device to add"
+                      />
+                      <button type="submit" className="btn btn-primary" disabled={status === 'connecting'}>
+                        Add
+                      </button>
+                    </form>
+                  </div>
+                )}
+              </section>
+            )}
+
+            {/* One paired PC: the familiar card. Nothing paired, or adding: the pairing card. */}
+            {many ? null : single ? (
               <div className="continuity-card-compact">
                 {/* Compact Concentric Ring & Avatar */}
                 <div className="continuity-ring-compact">
-                  <div className={`continuity-icon-compact ${status === 'connecting' ? 'pulsing' : ''}`}>
+                  <div className={`continuity-icon-compact ${heroStatus === 'connecting' ? 'pulsing' : ''}`}>
                     <Laptop size={22} strokeWidth={1.8} />
                   </div>
-                  <span className={`continuity-status-dot-badge ${status}`} />
+                  <span className={`continuity-status-dot-badge ${heroStatus}`} />
                 </div>
 
                 {/* Primary Device Name (20px, 600 weight) */}
-                <h2 className="device-name-primary" title={pairing.serverName || 'Desktop PC'}>
-                  {pairing.serverName || 'Desktop PC'}
+                <h2 className="device-name-primary" title={single.name}>
+                  {single.name}
                 </h2>
 
                 {/* Prominent Semantic Status Pill */}
-                <div className={`device-status-pill ${status}`}>
-                  <span className={`status-indicator-dot ${status === 'connecting' ? 'pulse' : ''}`} />
+                <div className={`device-status-pill ${heroStatus}`} role="status" aria-live="polite">
+                  <span className={`status-indicator-dot ${heroStatus === 'connecting' ? 'pulse' : ''}`} />
                   <span>{getStatusLabel()}</span>
                 </div>
 
                 {/* Secondary Meta Row */}
                 <div className="device-meta-row">
-                  <span className="mono-text">{address || 'Local Wi-Fi'}</span>
+                  <span className="mono-text">{hostOf(single.address) || 'Local Wi-Fi'}</span>
                   <span className="meta-dot">·</span>
-                  <span>{pairing.deviceName || 'Mobile Device'}</span>
+                  <span>{single.deviceName || 'Mobile Device'}</span>
                   {isPairedPcOnline && (
                     <>
                       <span className="meta-dot">·</span>
@@ -658,21 +887,16 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
                 </div>
 
                 {/* Alerts / Connection Errors */}
-                {(cameraError || connectError) && (
-                  <div className="connection-alert-box error" role="alert">
-                    <AlertCircle size={14} className="alert-icon" />
-                    <span>{cameraError || connectError}</span>
-                  </div>
-                )}
+                {renderErrorAlert()}
 
                 {/* Primary Connect Button */}
                 <button
                   type="button"
-                  onClick={onQuickConnect}
-                  disabled={status === 'connecting'}
-                  className={`btn btn-primary connect-btn-primary ${status === 'connecting' ? 'connecting' : ''}`}
+                  onClick={() => onConnectPeer(single.id)}
+                  disabled={heroStatus === 'connecting'}
+                  className={`btn btn-primary connect-btn-primary ${heroStatus === 'connecting' ? 'connecting' : ''}`}
                 >
-                  {status === 'connecting' ? (
+                  {heroStatus === 'connecting' ? (
                     <>
                       <Loader2 size={16} className="animate-spin" />
                       <span>Connecting...</span>
@@ -689,12 +913,12 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
                 <div className="secondary-actions-strip" role="toolbar" aria-label="Device actions">
                   <button
                     type="button"
-                    onClick={() => setIsScanning(true)}
+                    onClick={handleAddDevice}
                     className="action-pill-btn"
-                    title="Scan Desktop QR Code"
+                    title="Add another device"
                   >
                     <QrCode size={13} />
-                    <span>Scan QR</span>
+                    <span>Add device</span>
                   </button>
 
                   <button
@@ -720,7 +944,7 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
 
                   <button
                     type="button"
-                    onClick={onUnpairPrompt}
+                    onClick={() => onUnpairPeer(single.id)}
                     className="action-pill-btn danger"
                     title="Unpair from this computer"
                   >
@@ -745,7 +969,7 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
                       <button
                         type="submit"
                         className="btn btn-primary"
-                        disabled={status === 'connecting'}
+                        disabled={heroStatus === 'connecting'}
                       >
                         Save
                       </button>
@@ -753,7 +977,7 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
                   </div>
                 )}
               </div>
-            ) : (
+            ) : showPairCard ? (
               <div className="continuity-card-compact">
                 {/* Brand Logo Avatar */}
                 <div className="continuity-ring-compact">
@@ -762,17 +986,14 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
                   </div>
                 </div>
 
-                <h2 className="device-name-primary">Connect to Desktop</h2>
+                <h2 className="device-name-primary">{mode === 'add' ? 'Add a device' : 'Connect to Desktop'}</h2>
                 <p className="continuity-subtitle" style={{ fontSize: '0.82rem', marginBottom: '1.1rem' }}>
-                  Scan the QR code displayed on your computer to pair securely over local Wi-Fi.
+                  {mode === 'add'
+                    ? 'Scan the QR code shown on the other computer. Your other devices stay connected.'
+                    : 'Scan the QR code displayed on your computer to pair securely over local Wi-Fi.'}
                 </p>
 
-                {(cameraError || connectError) && (
-                  <div className="connection-alert-box error" role="alert">
-                    <AlertCircle size={14} className="alert-icon" />
-                    <span>{cameraError || connectError}</span>
-                  </div>
-                )}
+                {renderErrorAlert()}
 
                 {/* Primary Action: QR Scan */}
                 <button
@@ -840,10 +1061,10 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
                   </div>
                 )}
               </div>
-            )}
+            ) : null}
 
             {/* Discovery Hint when no devices found */}
-            {!pairing && discoveryTip && availableDevices.length === 0 && (
+            {showPairCard && discoveryTip && availableDevices.length === 0 && (
               <p className="discovery-caption" style={{ textAlign: 'center', marginTop: '0.5rem', fontSize: '0.74rem' }}>{discoveryTip}</p>
             )}
           </>

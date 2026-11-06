@@ -92,7 +92,7 @@ export type MediaKind = 'image' | 'audio' | 'video' | 'pdf' | 'code' | 'other';
 
 export function getMediaKind(filename: string): MediaKind {
   const ext = filename.split('.').pop()?.toLowerCase() || '';
-  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico', 'avif'].includes(ext)) {
+  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico', 'avif', 'heic', 'heif'].includes(ext)) {
     return 'image';
   }
   if (['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac', 'opus', 'wma'].includes(ext)) {

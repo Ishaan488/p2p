@@ -1,0 +1,319 @@
+/* ==========================================================================
+   Multi-device: header switcher, devices sheet, peer rows, send-to chip.
+   Uses the design tokens from index.css.
+   ========================================================================== */
+
+/* Header: the PC name doubles as the device switcher. */
+.device-switcher {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  padding: 0.15rem 0.35rem 0.15rem 0;
+  margin: 0;
+  border-radius: var(--radius-md);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 100ms ease, background var(--transition-fast);
+}
+.device-switcher:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.device-switcher:active { background: var(--surface-secondary); transform: scale(0.98); }
+.device-switcher .brand-title-row { min-width: 0; }
+.device-switcher .brand-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 11.5rem;
+}
+.switcher-more {
+  flex-shrink: 0;
+  font-size: 0.64rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0.18rem 0.4rem;
+  border-radius: var(--radius-full);
+  background: var(--accent-subtle);
+  color: var(--accent);
+  border: 1px solid var(--accent-border);
+}
+.switcher-chevron { color: var(--text-tertiary); flex-shrink: 0; }
+
+/* Devices sheet */
+.p2p-devices-sheet { max-height: min(86vh, 640px); gap: 0.6rem; }
+.p2p-devices-heading { min-width: 0; }
+.p2p-devices-title { margin: 0; font: var(--text-section); color: var(--text-primary); }
+.p2p-devices-hint { margin: 0.15rem 0 0; font: var(--text-metadata); color: var(--text-secondary); }
+.p2p-devices-scroll {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 0 -0.2rem;
+  padding: 0 0.2rem;
+  min-height: 0;
+}
+.p2p-devices-section-title {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0 0 0.35rem;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.p2p-devices-note { margin: 0; font: var(--text-metadata); color: var(--text-secondary); text-align: center; }
+.p2p-devices-primary,
+.p2p-devices-add { flex-shrink: 0; }
+
+/* Peer rows (sheet + standby list) */
+.peer-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+.peer-row {
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  transition: border-color var(--transition-fast), background var(--transition-fast), transform 120ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.peer-row.expanded { border-color: var(--accent-border); }
+.peer-row-main { display: flex; align-items: center; gap: 0.5rem; padding-right: 0.7rem; }
+.peer-row-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.7rem 0 0.7rem 0.8rem;
+  min-height: 56px;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 120ms ease;
+}
+.peer-row-info:active { background: var(--surface-hover); }
+div.peer-row-info { cursor: default; }
+.peer-row-info:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--radius-md); }
+.peer-avatar {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 11px;
+  background: var(--surface-secondary);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  transition: transform 140ms var(--ease-spring), color var(--transition-fast), background var(--transition-fast);
+}
+.peer-row-info:active .peer-avatar { transform: scale(0.94); }
+.peer-row.tone-ok .peer-avatar { color: var(--accent); }
+.peer-status-dot {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--surface);
+  background: var(--text-tertiary);
+}
+.peer-status-dot.ok { background: var(--success); }
+.peer-status-dot.busy { background: var(--warning); animation: p2p-pulse 1.4s ease-in-out infinite; }
+.peer-status-dot.warn { background: var(--error); }
+@keyframes p2p-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+.peer-text { display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 0.1rem; }
+.peer-row-name {
+  font: var(--text-button);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.peer-sub {
+  font: var(--text-metadata);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.peer-chevron { color: var(--text-tertiary); flex-shrink: 0; transition: transform var(--transition-fast); }
+.peer-row.expanded .peer-chevron { transform: rotate(180deg); }
+.peer-action { display: flex; align-items: center; flex-shrink: 0; min-width: 44px; justify-content: flex-end; }
+.peer-busy-icon { color: var(--text-secondary); }
+.peer-state-pill {
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0.2rem 0.55rem;
+  border-radius: var(--radius-full);
+  background: var(--accent-subtle);
+  color: var(--accent);
+  border: 1px solid var(--accent-border);
+}
+.peer-state-pill.ok { color: var(--success); }
+.peer-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.65rem 0.8rem 0.75rem;
+  border-top: 1px solid var(--border-subtle);
+  animation: p2p-fade-in 160ms ease-out;
+}
+@keyframes p2p-fade-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+.peer-error { margin: 0; font: var(--text-metadata); color: var(--text-secondary); }
+.peer-detail-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+.peer-detail-label { font: var(--text-supporting); color: var(--text-primary); }
+.peer-detail-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.peer-text-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 44px;
+  padding: 0 0.8rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface-secondary);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font: var(--text-supporting);
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 100ms ease, background var(--transition-fast), border-color var(--transition-fast);
+}
+.peer-text-btn:active { background: var(--border-subtle); transform: scale(0.96); }
+.peer-text-btn.danger { color: var(--error); }
+.peer-text-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Switch */
+.p2p-switch {
+  position: relative;
+  width: 46px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-secondary);
+  cursor: pointer;
+  padding: 0;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+  -webkit-tap-highlight-color: transparent;
+}
+/* 44px touch target without enlarging the visual */
+.p2p-switch::after { content: ''; position: absolute; inset: -8px -4px; }
+.p2p-switch.on { background: var(--accent); border-color: var(--accent); }
+.p2p-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--text-primary);
+  transition: transform 220ms var(--ease-spring), width 150ms ease;
+}
+.p2p-switch.on .p2p-switch-knob { transform: translateX(18px); background: var(--surface); }
+.p2p-switch:active:not(:disabled) .p2p-switch-knob { width: 25px; }
+.p2p-switch:disabled { opacity: 0.5; cursor: not-allowed; }
+.p2p-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+/* "Sending to" chip above the action buttons */
+.send-target-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 100%;
+  min-height: 38px;
+  padding: 0.25rem 0.75rem 0.25rem 0.65rem;
+  border-radius: var(--radius-full);
+  background: var(--surface-secondary);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font: var(--text-metadata);
+  cursor: pointer;
+  position: relative;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 100ms ease, background var(--transition-fast), border-color var(--transition-fast);
+}
+.send-target-chip::after {
+  content: '';
+  position: absolute;
+  inset: -3px 0;
+}
+.send-target-chip strong { color: var(--text-primary); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.send-target-chip:active { background: var(--border-subtle); transform: scale(0.96); }
+.send-target-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.send-target-chip.warn { border-color: var(--warning); color: var(--warning); background: transparent; }
+.send-target-chip.warn strong { color: var(--warning); }
+
+/* Which PC a card belongs to (only shown when several PCs have history) */
+.peer-tag {
+  display: inline-flex;
+  align-items: center;
+  max-width: 9rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: var(--radius-full);
+  background: var(--surface-secondary);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 0.66rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.peer-filter {
+  appearance: none;
+  -webkit-appearance: none;
+  min-height: 38px;
+  max-width: 9.5rem;
+  padding: 0 1.6rem 0 0.7rem;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-secondary) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23827C8D' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 0.6rem center;
+  color: var(--text-secondary);
+  font: var(--text-metadata);
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+.peer-filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* "Your devices" list on the standby screen */
+.standby-devices { width: 100%; display: flex; flex-direction: column; gap: 0.5rem; animation: stageEnter 280ms var(--ease-spring); }
+.standby-devices-title { margin: 0; font: var(--text-major-section); color: var(--text-primary); }
+.standby-devices-sub { margin: 0; font: var(--text-supporting); color: var(--text-secondary); }
+.standby-add-strip { display: flex; gap: 0.4rem; flex-wrap: wrap; justify-content: center; }
+
+@media (prefers-reduced-motion: reduce) {
+  .peer-status-dot.busy, .peer-details, .p2p-switch-knob, .peer-chevron { animation: none; transition: none; }
+}
+
+/* A share that is waiting for a device to connect */
+.pending-share-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0.4rem 1.1rem 0;
+  padding: 0.35rem 0.4rem 0.35rem 0.8rem;
+  border-radius: var(--radius-md);
+  background: var(--accent-subtle);
+  border: 1px solid var(--accent-border);
+  color: var(--text-primary);
+  font: var(--text-supporting);
+}

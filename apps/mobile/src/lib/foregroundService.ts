@@ -18,14 +18,15 @@ export async function startTransferForeground(title?: string, text?: string): Pr
   if (!Capacitor.isNativePlatform()) return;
   try {
     if (!isServiceRunning) {
-      isServiceRunning = true;
-      lastClientUpdate = Date.now();
       await ForegroundService.start({
         title: title || 'P2P Link Transfer',
         text: text || 'Transfer in progress (screen off safe)'
       });
+      isServiceRunning = true;
+      lastClientUpdate = Date.now();
     }
   } catch (e) {
+    isServiceRunning = false;
     console.debug('Foreground service start notice:', e);
   }
 }

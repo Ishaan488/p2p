@@ -147,6 +147,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
             value={currentTime}
             onChange={handleSeek}
             className="audio-scrubber"
+            aria-label={`Seek ${filename}`}
             style={{
               background: `linear-gradient(to right, var(--accent) ${percent}%, var(--border-strong) ${percent}%)`
             }}

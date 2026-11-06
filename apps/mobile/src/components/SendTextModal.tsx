@@ -1,29 +1,63 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, X, Clipboard as ClipboardIcon, Check, FileText, CornerDownLeft, RotateCcw } from 'lucide-react';
 import { Clipboard } from '@capacitor/clipboard';
+import { Capacitor } from '@capacitor/core';
 import { backButtonManager } from '../lib/backButton';
 
 export interface SendTextModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSend: (text: string) => void;
+  targetSummary?: string;
 }
 
 export const SendTextModal: React.FC<SendTextModalProps> = ({
   isOpen,
   onClose,
-  onSend
+  onSend,
+  targetSummary
 }) => {
   const [text, setText] = useState('');
   const [hasPasted, setHasPasted] = useState(false);
+  const [dragOffset, setDragOffset] = useState(0);
+  const touchStartY = useRef<number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
-  // Auto-focus textarea when sheet opens & register Android back button + Esc key
+  const isTouchOrNative =
+    Capacitor.isNativePlatform() ||
+    (typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStartY.current = e.touches[0].clientY;
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (touchStartY.current === null) return;
+    const deltaY = e.touches[0].clientY - touchStartY.current;
+    if (deltaY > 0) {
+      setDragOffset(deltaY);
+    }
+  };
+
+  const handleTouchEnd = () => {
+    if (dragOffset > 75) {
+      onCloseRef.current();
+    }
+    touchStartY.current = null;
+    setDragOffset(0);
+  };
+
+  // Auto-focus textarea when sheet opens & register Android back button + focus trap
   useEffect(() => {
     if (!isOpen) return;
 
+    const prevFocus = document.activeElement as HTMLElement | null;
     setText('');
     setHasPasted(false);
+    setDragOffset(0);
 
     // Auto focus with a small delay for sheet slide-up animation
     const timer = setTimeout(() => {
@@ -31,14 +65,28 @@ export const SendTextModal: React.FC<SendTextModalProps> = ({
     }, 140);
 
     const unregister = backButtonManager.push(() => {
-      onClose();
+      onCloseRef.current();
       return true;
     });
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onClose();
+      if (e.key === 'Tab' && sheetRef.current) {
+        const items = [
+          ...sheetRef.current.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), textarea:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          )
+        ].filter((el) => el.offsetParent !== null);
+        if (items.length === 0) return;
+        const first = items[0];
+        const last = items[items.length - 1];
+        const active = document.activeElement;
+        if (e.shiftKey && (active === first || !sheetRef.current.contains(active))) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && (active === last || !sheetRef.current.contains(active))) {
+          e.preventDefault();
+          first.focus();
+        }
       }
     };
 
@@ -48,8 +96,9 @@ export const SendTextModal: React.FC<SendTextModalProps> = ({
       clearTimeout(timer);
       unregister();
       window.removeEventListener('keydown', handleKeyDown);
+      prevFocus?.focus?.();
     };
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -119,19 +168,38 @@ export const SendTextModal: React.FC<SendTextModalProps> = ({
       aria-labelledby="sendtext-title"
     >
       <div
+        ref={sheetRef}
         className="sheet-container p2p-sendtext-container"
         onClick={(e) => e.stopPropagation()}
+        style={{
+          transform: dragOffset > 0 ? `translateY(${dragOffset}px)` : undefined,
+          transition: dragOffset > 0 ? 'none' : undefined
+        }}
       >
-        <div className="sheet-drag-handle" />
+        <div
+          className="sheet-drag-handle"
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          onTouchCancel={handleTouchEnd}
+        />
 
-        <div className="sheet-header">
+        <div
+          className="sheet-header"
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          onTouchCancel={handleTouchEnd}
+        >
           <div className="sheet-header-left">
             <div className="sheet-icon-badge p2p-sendtext-badge">
               <FileText size={18} strokeWidth={2} />
             </div>
             <div>
               <h3 id="sendtext-title" className="sheet-title">Send Text or Link</h3>
-              <p className="sheet-subtitle">Instant encrypted transfer to desktop</p>
+              <p className="sheet-subtitle">
+                {targetSummary ? `Sending to ${targetSummary}` : 'Instant encrypted transfer'}
+              </p>
             </div>
           </div>
           <button
@@ -198,10 +266,12 @@ export const SendTextModal: React.FC<SendTextModalProps> = ({
             </div>
           </div>
 
-          <div className="p2p-shortcut-hint">
-            <CornerDownLeft size={12} className="p2p-hint-icon" />
-            <span>Tip: Press <strong>Ctrl + Enter</strong> to send</span>
-          </div>
+          {!isTouchOrNative && (
+            <div className="p2p-shortcut-hint">
+              <CornerDownLeft size={12} className="p2p-hint-icon" />
+              <span>Tip: Press <strong>Ctrl + Enter</strong> to send</span>
+            </div>
+          )}
 
           <div className="sheet-actions p2p-sendtext-actions">
             <button
@@ -217,7 +287,7 @@ export const SendTextModal: React.FC<SendTextModalProps> = ({
               disabled={!trimmedText}
             >
               <Send size={15} strokeWidth={2} />
-              <span>Send to Desktop</span>
+              <span>{targetSummary ? `Send to ${targetSummary}` : 'Send'}</span>
             </button>
           </div>
         </form>
@@ -322,6 +392,12 @@ export const SendTextModal: React.FC<SendTextModalProps> = ({
           transition: color var(--transition-fast), background var(--transition-fast);
         }
 
+        .p2p-textarea-clear-btn::after {
+          content: '';
+          position: absolute;
+          inset: -6px;
+        }
+
         .p2p-textarea-clear-btn:hover {
           color: var(--text-primary);
           background: var(--surface-elevated);
@@ -343,7 +419,7 @@ export const SendTextModal: React.FC<SendTextModalProps> = ({
           border: 1px solid var(--border-subtle);
           border-radius: var(--radius-full);
           padding: 0 0.85rem;
-          min-height: 40px;
+          min-height: 44px;
           color: var(--text-primary);
           font-size: 0.78rem;
           font-weight: 600;

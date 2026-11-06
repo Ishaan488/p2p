@@ -1,4 +1,6 @@
 import React, { useMemo } from 'react';
+import { Capacitor } from '@capacitor/core';
+import { chipLabel, describeTargets } from '../lib/peers';
 import {
   Plus,
   FileText,
@@ -7,7 +9,8 @@ import {
   Music,
   FolderUp,
   ClipboardPaste,
-  Lock
+  Lock,
+  ChevronDown
 } from 'lucide-react';
 
 export type FileCategoryFilter = 'all' | 'image' | 'video' | 'audio' | 'docs' | 'folder';
@@ -16,73 +19,81 @@ export interface TransferActionPanelProps {
   onOpenFilePicker: (accept?: string, isFolder?: boolean) => void;
   onOpenSendText: () => void;
   onQuickSendClipboard?: () => void;
-  targetDeviceName?: string;
+  /** Display names of the devices that will receive what is sent. */
+  targetNames: string[];
+  /** More than one device is paired: the recipients can be changed from here. */
+  canPickTargets: boolean;
+  onPickTargets: () => void;
 }
 
 export const TransferActionPanel: React.FC<TransferActionPanelProps> = ({
   onOpenFilePicker,
   onOpenSendText,
   onQuickSendClipboard,
-  targetDeviceName
+  targetNames,
+  canPickTargets,
+  onPickTargets
 }) => {
-  // Resolve active recipient desktop or peer name with graceful fallback to saved pairing
-  const resolvedTarget = useMemo(() => {
-    if (targetDeviceName?.trim()) {
-      return targetDeviceName.trim();
-    }
-    try {
-      const pairing = JSON.parse(localStorage.getItem('p2p_pairing') || 'null');
-      if (pairing?.serverName?.trim()) {
-        return pairing.serverName.trim();
-      }
-    } catch {
-      // Ignore parse errors and fallback
-    }
-    return 'Desktop PC';
-  }, [targetDeviceName]);
+  const noTargets = targetNames.length === 0;
+  const resolvedTarget = chipLabel(targetNames);
+
+  const supportsFolderPicker = useMemo(() => {
+    if (Capacitor.isNativePlatform()) return false;
+    if (typeof window === 'undefined' || typeof document === 'undefined') return false;
+    if (window.matchMedia?.('(pointer: coarse)').matches) return false;
+    if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) return false;
+    const input = document.createElement('input');
+    return 'webkitdirectory' in input;
+  }, []);
 
   // Direct categories surfaced immediately without requiring hidden filter menus
-  const categories = useMemo(() => [
-    {
-      id: 'photos',
-      label: 'Photos',
-      icon: Image,
-      title: 'Send photos, images & graphics',
-      onClick: () => onOpenFilePicker('image/*', false)
-    },
-    {
-      id: 'videos',
-      label: 'Videos',
-      icon: Film,
-      title: 'Send video recordings & media clips',
-      onClick: () => onOpenFilePicker('video/*', false)
-    },
-    {
-      id: 'audio',
-      label: 'Audio',
-      icon: Music,
-      title: 'Send songs, voice memos & audio tracks',
-      onClick: () => onOpenFilePicker('audio/*', false)
-    },
-    {
-      id: 'docs',
-      label: 'Docs',
-      icon: FileText,
-      title: 'Send documents, PDFs, sheets & archives',
-      onClick: () =>
-        onOpenFilePicker(
-          '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.csv,.json,.zip,.rar,.7z',
-          false
-        )
-    },
-    {
-      id: 'folder',
-      label: 'Folder',
-      icon: FolderUp,
-      title: 'Send an entire folder or directory structure',
-      onClick: () => onOpenFilePicker(undefined, true)
-    },
-    {
+  const categories = useMemo(() => {
+    const items = [
+      {
+        id: 'photos',
+        label: 'Photos',
+        icon: Image,
+        title: 'Send photos, images & graphics',
+        onClick: () => onOpenFilePicker('image/*', false)
+      },
+      {
+        id: 'videos',
+        label: 'Videos',
+        icon: Film,
+        title: 'Send video recordings & media clips',
+        onClick: () => onOpenFilePicker('video/*', false)
+      },
+      {
+        id: 'audio',
+        label: 'Audio',
+        icon: Music,
+        title: 'Send songs, voice memos & audio tracks',
+        onClick: () => onOpenFilePicker('audio/*', false)
+      },
+      {
+        id: 'docs',
+        label: 'Docs',
+        icon: FileText,
+        title: 'Send documents, PDFs, sheets & archives',
+        onClick: () =>
+          onOpenFilePicker(
+            '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.csv,.json,.zip,.rar,.7z',
+            false
+          )
+      }
+    ];
+
+    if (supportsFolderPicker) {
+      items.push({
+        id: 'folder',
+        label: 'Folder',
+        icon: FolderUp,
+        title: 'Send an entire folder or directory structure',
+        onClick: () => onOpenFilePicker(undefined, true)
+      });
+    }
+
+    items.push({
       id: 'paste',
       label: 'Paste & Send',
       icon: ClipboardPaste,
@@ -94,8 +105,10 @@ export const TransferActionPanel: React.FC<TransferActionPanelProps> = ({
           onOpenSendText();
         }
       }
-    }
-  ], [onOpenFilePicker, onOpenSendText, onQuickSendClipboard]);
+    });
+
+    return items;
+  }, [onOpenFilePicker, onOpenSendText, onQuickSendClipboard, supportsFolderPicker]);
 
   return (
     <footer
@@ -326,12 +339,28 @@ export const TransferActionPanel: React.FC<TransferActionPanelProps> = ({
       `}</style>
 
       {/* Destination Target Feedback */}
-      <div className="tap-target-banner" aria-label={`Sending to ${resolvedTarget} (End-to-end encrypted)`}>
+      <div className="tap-target-banner">
         <div className="tap-target-left">
-          <span className="tap-pulse-dot" aria-hidden="true" />
-          <span className="tap-target-text">
-            Sending to <strong className="tap-target-name">{resolvedTarget}</strong>
-          </span>
+          {canPickTargets ? (
+            <button
+              type="button"
+              className={`send-target-chip ${noTargets ? 'warn' : ''}`}
+              onClick={onPickTargets}
+              aria-label={noTargets ? 'No device selected. Choose where to send.' : `Sending to ${describeTargets(targetNames)}. Change recipients.`}
+            >
+              <span className="tap-pulse-dot" aria-hidden="true" />
+              <span>{noTargets ? 'Pick a device' : 'Sending to'}</span>
+              {!noTargets && <strong>{resolvedTarget}</strong>}
+              <ChevronDown size={13} aria-hidden="true" />
+            </button>
+          ) : (
+            <>
+              <span className="tap-pulse-dot" aria-hidden="true" />
+              <span className="tap-target-text" aria-label={`Sending to ${resolvedTarget} (End-to-end encrypted)`}>
+                Sending to <strong className="tap-target-name">{resolvedTarget}</strong>
+              </span>
+            </>
+          )}
         </div>
         <div className="tap-target-badge" title="End-to-End Encrypted Direct Transfer">
           <Lock size={11} strokeWidth={2.4} aria-hidden="true" />

@@ -43,6 +43,8 @@ export interface TransferItem {
   file?: {
     filename: string;
     transferId: string;
+    /** Key of the stored preview copy; shared by every recipient of one sent file. */
+    cacheKey?: string;
     totalSize: number;
     totalChunks: number;
     chunkSize: number;
@@ -67,6 +69,11 @@ export interface TransferItem {
   timestamp: number;
   isClipboard?: boolean;
   isPending?: boolean;
+  /** The PC this was sent to / received from, and its name at the time (survives unpairing). */
+  peerId?: string;
+  peerName?: string;
+  /** For text sent to several PCs at once: one card, every recipient. */
+  peerIds?: string[];
 }
 
 export interface TransferCardProps {
@@ -84,6 +91,8 @@ export interface TransferCardProps {
   onCancelUpload: (id: string, transferId: string) => void;
   onTogglePriority?: (id: string) => void;
   onToast: (text: string, type?: 'info' | 'success' | 'warning') => void;
+  /** Shown as a small tag when transfers with several PCs share the list. */
+  peerLabel?: string;
 }
 
 function getFileExtension(filename: string): string {
@@ -147,7 +156,8 @@ export const TransferCard: React.FC<TransferCardProps> = ({
   onResumeUpload,
   onCancelUpload,
   onTogglePriority,
-  onToast
+  onToast,
+  peerLabel
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [justCopied, setJustCopied] = useState(false);
@@ -174,7 +184,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
 
   const hasVisualMedia = !imageFailed && (isImageFile || isVideoFile) && !!(file?.blobUrl || file?.thumbnailUrl);
   const hasRichEmbed =
-    (!!file?.blobUrl && file.mediaKind === 'audio') ||
+    (!!file?.blobUrl && (file.mediaKind === 'audio' || file.mediaKind === 'pdf')) ||
     !!file?.snippet;
 
   const isTextLong = !!item.text && item.text.length > 240;
@@ -233,6 +243,12 @@ export const TransferCard: React.FC<TransferCardProps> = ({
         <span>{isSent ? 'Sent' : 'Received'}</span>
       </span>
 
+      {peerLabel && (
+        <span className="peer-tag" title={`${isSent ? 'To' : 'From'} ${peerLabel}`}>
+          {isSent ? 'to' : 'from'}&nbsp;{peerLabel}
+        </span>
+      )}
+
       {extraText && (
         <span
           style={{
@@ -278,136 +294,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
   );
 
   return (
-    <article
-      className={`transfer-card ${isDeleting ? 'deleting' : ''}`}
-      style={{
-        background: 'var(--surface)',
-        border: '1px solid var(--border-subtle)',
-        borderRadius: 'var(--radius-md)',
-        padding: '0.75rem 0.85rem',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '0.55rem',
-        boxShadow: 'var(--shadow-sm)',
-        overflow: 'hidden',
-        position: 'relative'
-      }}
-    >
-      <style>{`
-        .transfer-card {
-          background: var(--surface);
-          border: 1px solid var(--border-subtle);
-          border-radius: var(--radius-md);
-          padding: 0.75rem 0.85rem;
-          display: flex;
-          flex-direction: column;
-          gap: 0.55rem;
-          box-shadow: var(--shadow-sm);
-          overflow: hidden;
-          position: relative;
-          transition: transform var(--transition-fast, 150ms ease), opacity var(--transition-fast, 150ms ease);
-          animation: cardSlideIn 220ms var(--ease-spring, cubic-bezier(0.16, 1, 0.3, 1));
-        }
-        .transfer-card.deleting {
-          opacity: 0;
-          transform: scale(0.96);
-        }
-        .card-pill-btn {
-          display: inline-flex;
-          align-items: center;
-          gap: 0.3rem;
-          height: 28px;
-          padding: 0 0.65rem;
-          border-radius: var(--radius-full, 9999px);
-          background: var(--surface-secondary);
-          border: 1px solid var(--border-subtle);
-          color: var(--text-primary);
-          font-size: 0.72rem;
-          font-weight: 600;
-          font-variant-numeric: tabular-nums;
-          text-decoration: none;
-          cursor: pointer;
-          transition: transform var(--transition-fast, 150ms ease), background var(--transition-fast, 150ms ease), border-color var(--transition-fast, 150ms ease);
-          white-space: nowrap;
-          user-select: none;
-          -webkit-user-select: none;
-        }
-        .card-pill-btn:hover:not(:disabled) {
-          background: var(--surface-hover);
-          border-color: var(--border-strong);
-        }
-        .card-pill-btn:active:not(:disabled) {
-          transform: scale(0.96);
-        }
-        .card-pill-btn:disabled {
-          opacity: 0.5;
-          cursor: not-allowed;
-        }
-        .card-pill-primary {
-          background: var(--btn-primary-bg) !important;
-          color: var(--btn-primary-text) !important;
-          border-color: transparent !important;
-        }
-        .card-pill-primary:hover:not(:disabled) {
-          background: var(--btn-primary-hover) !important;
-        }
-        .card-icon-only-btn {
-          width: 28px;
-          height: 28px;
-          border-radius: var(--radius-full, 9999px);
-          background: transparent;
-          border: none;
-          color: var(--text-tertiary);
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          cursor: pointer;
-          transition: var(--transition-fast, 150ms ease);
-          flex-shrink: 0;
-        }
-        .card-icon-only-btn:hover,
-        .card-icon-only-btn:active {
-          background: var(--error-subtle);
-          color: var(--error);
-        }
-        .media-stage-box:hover .video-play-circle,
-        .media-stage-box:active .video-play-circle {
-          transform: scale(1.08);
-          background: var(--accent) !important;
-          color: #17161D !important;
-        }
-        .approval-btn:active {
-          transform: scale(0.97);
-        }
-        .progress-ctrl-btn:active {
-          transform: scale(0.92);
-        }
-        .progress-ctrl-btn:hover {
-          color: var(--text-primary);
-          border-color: var(--text-tertiary);
-        }
-        .progress-cancel:hover {
-          color: var(--error) !important;
-          background: var(--error-subtle) !important;
-          border-color: var(--error-border) !important;
-        }
-        @media (max-width: 360px) {
-          .transfer-card {
-            padding: 0.65rem 0.72rem;
-            gap: 0.5rem;
-          }
-          .card-pill-btn {
-            height: 26px;
-            padding: 0 0.5rem;
-            font-size: 0.7rem;
-            gap: 0.22rem;
-          }
-          .card-actions-group {
-            gap: 0.25rem !important;
-          }
-        }
-      `}</style>
-
+    <article className={`transfer-card ${isDeleting ? 'deleting' : ''}`}>
       {/* =========================================================
           1. TEXT OR LINK SNIPPET CARD (Single Clean Surface)
           ========================================================= */}
@@ -439,7 +326,8 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                   fontWeight: 600,
                   cursor: 'pointer',
                   alignSelf: 'flex-start',
-                  padding: 0
+                  padding: '0.35rem 0',
+                  minHeight: '36px'
                 }}
               >
                 {isExpanded ? 'Show less' : 'Read full text'}
@@ -463,7 +351,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
               {renderDirectionMeta(detectedUrl ? 'Link' : `${item.text.length} chars`)}
             </div>
 
-            <div className="card-actions-group" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}>
+            <div className="card-actions-group" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
               {detectedUrl && (
                 <a
                   href={detectedUrl}
@@ -567,7 +455,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
             className="approval-actions"
             style={{
               display: 'flex',
-              gap: '0.4rem',
+              gap: '0.5rem',
               paddingTop: '0.2rem',
               alignItems: 'center'
             }}
@@ -578,7 +466,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
               onClick={() => onRejectApproval(item.id, file)}
               style={{
                 flex: 1,
-                height: '34px',
+                minHeight: '44px',
                 borderRadius: '8px',
                 fontSize: '0.75rem',
                 fontWeight: 600,
@@ -590,7 +478,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                 background: 'var(--error-subtle)',
                 color: 'var(--error)',
                 border: '1px solid var(--error-border)',
-                transition: 'var(--transition-fast)'
+                transition: 'transform 100ms ease, background 150ms ease, border-color 150ms ease'
               }}
             >
               <X size={13} />
@@ -602,7 +490,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
               onClick={() => onAcceptApproval(item.id, file)}
               style={{
                 flex: 1,
-                height: '34px',
+                minHeight: '44px',
                 borderRadius: '8px',
                 fontSize: '0.75rem',
                 fontWeight: 600,
@@ -614,7 +502,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                 background: 'var(--btn-primary-bg)',
                 color: 'var(--btn-primary-text)',
                 border: 'none',
-                transition: 'var(--transition-fast)'
+                transition: 'transform 100ms ease, background 150ms ease'
               }}
             >
               <Check size={13} strokeWidth={2.5} />
@@ -626,7 +514,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
               onClick={() => onAlwaysTrustApproval(item.id, file)}
               style={{
                 flex: 1.1,
-                height: '34px',
+                minHeight: '44px',
                 borderRadius: '8px',
                 fontSize: '0.75rem',
                 fontWeight: 600,
@@ -638,7 +526,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                 background: 'var(--surface-secondary)',
                 border: '1px solid var(--accent-border)',
                 color: 'var(--accent)',
-                transition: 'var(--transition-fast)'
+                transition: 'transform 100ms ease, background 150ms ease, border-color 150ms ease'
               }}
             >
               <ShieldCheck size={13} />
@@ -656,6 +544,9 @@ export const TransferCard: React.FC<TransferCardProps> = ({
           {isImageFile ? (
             <div
               className="media-stage-box"
+              role="button"
+              tabIndex={0}
+              aria-label={`Preview ${file.filename}`}
               style={{
                 width: '100%',
                 aspectRatio: '16 / 9',
@@ -677,8 +568,21 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                   src,
                   filename: file.filename,
                   fileSize: file.totalSize,
-                  onDownload: () => onDownload(item.id, file, true)
+                  onDownload: !isSent ? () => onDownload(item.id, file, true) : undefined
                 });
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  const src = file.blobUrl || file.thumbnailUrl!;
+                  onOpenMedia({
+                    type: 'image',
+                    src,
+                    filename: file.filename,
+                    fileSize: file.totalSize,
+                    onDownload: !isSent ? () => onDownload(item.id, file, true) : undefined
+                  });
+                }
               }}
             >
               <img
@@ -719,6 +623,9 @@ export const TransferCard: React.FC<TransferCardProps> = ({
           ) : (
             <div
               className="media-stage-box video-stage"
+              role="button"
+              tabIndex={0}
+              aria-label={`Preview ${file.filename}`}
               style={{
                 width: '100%',
                 aspectRatio: '16 / 9',
@@ -741,12 +648,30 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                     src: file.blobUrl,
                     filename: file.filename,
                     fileSize: file.totalSize,
-                    onDownload: () => onDownload(item.id, file, true)
+                    onDownload: !isSent ? () => onDownload(item.id, file, true) : undefined
                   });
                 } else if (isSent) {
                   previewUnavailable();
                 } else {
                   onDownload(item.id, file, false);
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  if (file.blobUrl) {
+                    onOpenMedia({
+                      type: 'video',
+                      src: file.blobUrl,
+                      filename: file.filename,
+                      fileSize: file.totalSize,
+                      onDownload: !isSent ? () => onDownload(item.id, file, true) : undefined
+                    });
+                  } else if (isSent) {
+                    previewUnavailable();
+                  } else {
+                    onDownload(item.id, file, false);
+                  }
                 }
               }}
             >
@@ -857,7 +782,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                 {file.filename}
               </span>
 
-              <div className="card-actions-group" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}>
+              <div className="card-actions-group" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
                 <button
                   type="button"
                   className="card-pill-btn"
@@ -869,7 +794,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                         src,
                         filename: file.filename,
                         fileSize: file.totalSize,
-                        onDownload: () => onDownload(item.id, file, true)
+                        onDownload: !isSent ? () => onDownload(item.id, file, true) : undefined
                       });
                     } else if (isVideoFile) {
                       if (file.blobUrl) {
@@ -878,7 +803,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                           src: file.blobUrl,
                           filename: file.filename,
                           fileSize: file.totalSize,
-                          onDownload: () => onDownload(item.id, file, true)
+                          onDownload: !isSent ? () => onDownload(item.id, file, true) : undefined
                         });
                       } else if (isSent) {
                         previewUnavailable();
@@ -893,22 +818,24 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                   <span>Preview</span>
                 </button>
 
-                <button
-                  type="button"
-                  className="card-pill-btn card-pill-primary"
-                  onClick={() => onDownload(item.id, file, true)}
-                  disabled={file.isDownloading || file.status === 'saving'}
-                  title="Save file"
-                >
-                  <Download size={13} />
-                  <span>
-                    {file.status === 'saving'
-                      ? `Saving ${Math.round(file.progress || 0)}%`
-                      : file.isDownloading
-                      ? `${Math.round(file.progress || 0)}%`
-                      : 'Save'}
-                  </span>
-                </button>
+                {!isSent && (
+                  <button
+                    type="button"
+                    className="card-pill-btn card-pill-primary"
+                    onClick={() => onDownload(item.id, file, true)}
+                    disabled={file.isDownloading || file.status === 'saving'}
+                    title="Save file"
+                  >
+                    <Download size={13} />
+                    <span>
+                      {file.status === 'saving'
+                        ? `Saving ${Math.round(file.progress || 0)}%`
+                        : file.isDownloading
+                        ? `${Math.round(file.progress || 0)}%`
+                        : 'Save'}
+                    </span>
+                  </button>
+                )}
 
                 <button
                   type="button"
@@ -966,17 +893,19 @@ export const TransferCard: React.FC<TransferCardProps> = ({
               {renderDirectionMeta(`${formatBytes(file.totalSize)} · ${fileExt}`)}
             </div>
 
-            <div className="card-actions-group" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}>
-              <button
-                type="button"
-                className="card-pill-btn card-pill-primary"
-                onClick={() => onDownload(item.id, file, true)}
-                disabled={file.isDownloading}
-                title="Save file"
-              >
-                <Download size={13} />
-                <span>{file.isDownloading ? `${Math.round(file.progress || 0)}%` : 'Save'}</span>
-              </button>
+            <div className="card-actions-group" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
+              {!isSent && (
+                <button
+                  type="button"
+                  className="card-pill-btn card-pill-primary"
+                  onClick={() => onDownload(item.id, file, true)}
+                  disabled={file.isDownloading}
+                  title="Save file"
+                >
+                  <Download size={13} />
+                  <span>{file.isDownloading ? `${Math.round(file.progress || 0)}%` : 'Save'}</span>
+                </button>
+              )}
               <button
                 type="button"
                 className="card-icon-only-btn"
@@ -1003,12 +932,14 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                 src={file.blobUrl}
                 filename={file.filename}
                 fileSize={file.totalSize}
+                onDownload={!isSent ? () => onDownload(item.id, file, true) : undefined}
               />
             ) : file.blobUrl && file.mediaKind === 'pdf' ? (
               <PdfViewer
                 src={file.blobUrl}
                 filename={file.filename}
                 fileSize={file.totalSize}
+                onDownload={!isSent ? () => onDownload(item.id, file, true) : undefined}
               />
             ) : file.snippet ? (
               <CodeViewer
@@ -1017,6 +948,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                 fullContent={file.fullContent}
                 totalLines={file.totalLines}
                 fileSize={file.totalSize}
+                onDownload={!isSent ? () => onDownload(item.id, file, true) : undefined}
                 onCopyNotice={onToast}
               />
             ) : null}
@@ -1100,7 +1032,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: '0.35rem',
+                gap: '0.5rem',
                 flexShrink: 0
               }}
             >
@@ -1132,7 +1064,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                                 src: file.blobUrl,
                                 filename: file.filename,
                                 fileSize: file.totalSize,
-                                onDownload: () => onDownload(item.id, file, true)
+                                onDownload: !isSent ? () => onDownload(item.id, file, true) : undefined
                               });
                             } else if (isSent) {
                               previewUnavailable();
@@ -1204,6 +1136,11 @@ export const TransferCard: React.FC<TransferCardProps> = ({
         <div className="progress-container" style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', paddingTop: '0.25rem' }}>
           <div
             className="progress-bar-track"
+            role="progressbar"
+            aria-valuenow={Math.round(file.progress || 0)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label={`${file.filename} transfer progress`}
             style={{
               height: '4px',
               background: 'var(--surface-secondary)',
@@ -1214,6 +1151,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
             <div
               className="progress-bar-indicator"
               style={{
+                width: '100%',
                 height: '100%',
                 background: file.status === 'saving'
                   ? 'var(--success)'
@@ -1223,8 +1161,9 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                   ? 'var(--warning)'
                   : 'var(--error)',
                 borderRadius: 'var(--radius-full, 9999px)',
-                transition: 'width 140ms linear',
-                width: `${Math.min(100, file.progress || 0)}%`
+                transformOrigin: 'left center',
+                transition: 'transform 140ms cubic-bezier(0.16, 1, 0.3, 1)',
+                transform: `scaleX(${Math.max(0, Math.min(1, (file.progress || 0) / 100))})`
               }}
             />
           </div>
@@ -1247,6 +1186,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
           >
             <span
               className="progress-status-label"
+              role="status"
               style={{
                 whiteSpace: 'nowrap',
                 overflow: 'hidden',
@@ -1275,7 +1215,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
               )}
             </span>
 
-            <div className="progress-controls" style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexShrink: 0 }}>
+            <div className="progress-controls" style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', flexShrink: 0 }}>
               {!file.isDownloading && file.status !== 'saving' && (
                 <button
                   type="button"
@@ -1287,8 +1227,8 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                     background: 'var(--surface-secondary)',
                     border: '1px solid var(--border-subtle)',
                     color: 'var(--accent)',
-                    width: '22px',
-                    height: '22px',
+                    width: '32px',
+                    height: '32px',
                     borderRadius: '50%',
                     display: 'flex',
                     alignItems: 'center',
@@ -1296,7 +1236,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                     cursor: 'pointer'
                   }}
                 >
-                  <RotateCcw size={11} />
+                  <RotateCcw size={13} />
                 </button>
               )}
               {file.status !== 'saving' && (
@@ -1310,8 +1250,8 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                     background: 'var(--surface-secondary)',
                     border: '1px solid var(--border-subtle)',
                     color: 'var(--text-secondary)',
-                    width: '22px',
-                    height: '22px',
+                    width: '32px',
+                    height: '32px',
                     borderRadius: '50%',
                     display: 'flex',
                     alignItems: 'center',
@@ -1319,7 +1259,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                     cursor: 'pointer'
                   }}
                 >
-                  <X size={11} />
+                  <X size={13} />
                 </button>
               )}
             </div>
@@ -1332,6 +1272,11 @@ export const TransferCard: React.FC<TransferCardProps> = ({
           {file.status !== 'canceled' && (
             <div
               className="progress-bar-track"
+              role="progressbar"
+              aria-valuenow={Math.round(file.progress || 0)}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-label={`${file.filename} transfer progress`}
               style={{
                 height: '4px',
                 background: 'var(--surface-secondary)',
@@ -1342,6 +1287,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
               <div
                 className="progress-bar-indicator"
                 style={{
+                  width: '100%',
                   height: '100%',
                   background: file.status === 'error'
                     ? 'var(--error)'
@@ -1349,8 +1295,9 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                     ? 'var(--warning)'
                     : 'var(--accent)',
                   borderRadius: 'var(--radius-full, 9999px)',
-                  transition: 'width 140ms linear',
-                  width: `${Math.min(100, file.progress || 0)}%`
+                  transformOrigin: 'left center',
+                  transition: 'transform 140ms cubic-bezier(0.16, 1, 0.3, 1)',
+                  transform: `scaleX(${Math.max(0, Math.min(1, (file.progress || 0) / 100))})`
                 }}
               />
             </div>
@@ -1371,6 +1318,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
           >
             <span
               className="progress-status-label"
+              role="status"
               style={{
                 whiteSpace: 'nowrap',
                 overflow: 'hidden',
@@ -1397,7 +1345,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
               {file.status === 'error' && (file.error || 'Transfer failed')}
             </span>
 
-            <div className="progress-controls" style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexShrink: 0 }}>
+            <div className="progress-controls" style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', flexShrink: 0 }}>
               {(file.status === 'queued' || file.status === 'paused') && onTogglePriority && (
                 <button
                   type="button"
@@ -1405,12 +1353,13 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                   onClick={() => onTogglePriority(item.id)}
                   title={file.priority === 'high' ? 'High Priority (Tap to reset)' : 'Prioritize in queue'}
                   aria-label="Prioritize transfer"
+                  aria-pressed={file.priority === 'high'}
                   style={{
                     background: file.priority === 'high' ? 'var(--accent)' : 'var(--surface-secondary)',
                     borderColor: file.priority === 'high' ? 'var(--accent)' : 'var(--border-subtle)',
                     color: file.priority === 'high' ? '#17161D' : 'var(--text-secondary)',
-                    width: '22px',
-                    height: '22px',
+                    width: '32px',
+                    height: '32px',
                     borderRadius: '50%',
                     display: 'flex',
                     alignItems: 'center',
@@ -1419,7 +1368,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                     border: '1px solid var(--border-subtle)'
                   }}
                 >
-                  <ArrowUp size={11} strokeWidth={2.5} />
+                  <ArrowUp size={13} strokeWidth={2.5} />
                 </button>
               )}
               {file.status === 'uploading' && (
@@ -1433,8 +1382,8 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                     background: 'var(--surface-secondary)',
                     border: '1px solid var(--border-subtle)',
                     color: 'var(--text-secondary)',
-                    width: '22px',
-                    height: '22px',
+                    width: '32px',
+                    height: '32px',
                     borderRadius: '50%',
                     display: 'flex',
                     alignItems: 'center',
@@ -1442,7 +1391,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                     cursor: 'pointer'
                   }}
                 >
-                  <Pause size={11} />
+                  <Pause size={13} />
                 </button>
               )}
               {(file.status === 'paused' || file.status === 'error' || file.status === 'interrupted') && (
@@ -1456,8 +1405,8 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                     background: 'var(--surface-secondary)',
                     border: '1px solid var(--border-subtle)',
                     color: 'var(--accent)',
-                    width: '22px',
-                    height: '22px',
+                    width: '32px',
+                    height: '32px',
                     borderRadius: '50%',
                     display: 'flex',
                     alignItems: 'center',
@@ -1465,7 +1414,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                     cursor: 'pointer'
                   }}
                 >
-                  {file.status === 'error' ? <RotateCcw size={11} /> : <Play size={11} />}
+                  {file.status === 'error' ? <RotateCcw size={13} /> : <Play size={13} />}
                 </button>
               )}
               {file.status !== 'canceled' && file.status !== 'done' && (
@@ -1479,8 +1428,8 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                     background: 'var(--surface-secondary)',
                     border: '1px solid var(--border-subtle)',
                     color: 'var(--text-secondary)',
-                    width: '22px',
-                    height: '22px',
+                    width: '32px',
+                    height: '32px',
                     borderRadius: '50%',
                     display: 'flex',
                     alignItems: 'center',
@@ -1488,7 +1437,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
                     cursor: 'pointer'
                   }}
                 >
-                  <X size={11} />
+                  <X size={13} />
                 </button>
               )}
             </div>
@@ -1497,6 +1446,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
           {file.error && (
             <div
               className="transfer-error-notice"
+              role="alert"
               style={{
                 fontSize: '0.73rem',
                 color: 'var(--error)',

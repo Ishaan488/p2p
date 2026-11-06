@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Copy, Check, Maximize2, Download, X, Code2 } from 'lucide-react';
 import { getLanguageLabel, formatBytes } from '../lib/telemetry';
 import { backButtonManager } from '../lib/backButton';
@@ -25,14 +25,37 @@ export const CodeViewer: React.FC<CodeViewerProps> = ({
 }) => {
   const [copied, setCopied] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const modalRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!isModalOpen) return;
+    const prevFocus = document.activeElement as HTMLElement | null;
     const unregister = backButtonManager.push(() => {
       setIsModalOpen(false);
       return true;
     });
-    return unregister;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab' || !modalRef.current) return;
+      const focusable = modalRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      unregister();
+      window.removeEventListener('keydown', onKey);
+      prevFocus?.focus?.();
+    };
   }, [isModalOpen]);
 
   const contentToCopy = fullContent || snippet;
@@ -120,8 +143,14 @@ export const CodeViewer: React.FC<CodeViewerProps> = ({
       </div>
 
       {isModalOpen && (
-        <div className="code-modal-overlay" onClick={() => setIsModalOpen(false)} role="dialog" aria-modal="true">
-          <div className="code-modal-content" onClick={e => e.stopPropagation()}>
+        <div
+          className="code-modal-overlay"
+          onClick={() => setIsModalOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Code viewer: ${filename}`}
+        >
+          <div ref={modalRef} className="code-modal-content" onClick={e => e.stopPropagation()}>
             <div className="code-modal-header">
               <div className="code-modal-title">
                 <Code2 size={16} />
@@ -136,11 +165,23 @@ export const CodeViewer: React.FC<CodeViewerProps> = ({
                   <span>{copied ? 'Copied' : 'Copy All'}</span>
                 </button>
                 {onDownload && (
-                  <button type="button" className="icon-btn" onClick={onDownload} title="Save File">
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    onClick={onDownload}
+                    title="Save File"
+                    aria-label="Save File"
+                  >
                     <Download size={16} />
                   </button>
                 )}
-                <button type="button" className="icon-btn" onClick={() => setIsModalOpen(false)} title="Close">
+                <button
+                  type="button"
+                  className="icon-btn"
+                  onClick={() => setIsModalOpen(false)}
+                  title="Close"
+                  aria-label="Close code viewer"
+                >
                   <X size={18} />
                 </button>
               </div>
