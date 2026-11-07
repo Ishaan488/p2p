@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, X, Clipboard as ClipboardIcon, Check, FileText, CornerDownLeft, RotateCcw } from 'lucide-react';
+import { Send, Clipboard as ClipboardIcon, Check, X } from 'lucide-react';
 import { Clipboard } from '@capacitor/clipboard';
-import { Capacitor } from '@capacitor/core';
-import { backButtonManager } from '../lib/backButton';
+import { Sheet } from './Sheet';
 
 export interface SendTextModalProps {
   isOpen: boolean;
@@ -11,526 +10,90 @@ export interface SendTextModalProps {
   targetSummary?: string;
 }
 
-export const SendTextModal: React.FC<SendTextModalProps> = ({
-  isOpen,
-  onClose,
-  onSend,
-  targetSummary
-}) => {
+/** Send text or a link: one field, paste shortcut, and a single clear send action. */
+export const SendTextModal: React.FC<SendTextModalProps> = ({ isOpen, onClose, onSend, targetSummary }) => {
   const [text, setText] = useState('');
-  const [hasPasted, setHasPasted] = useState(false);
-  const [dragOffset, setDragOffset] = useState(0);
-  const touchStartY = useRef<number | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const sheetRef = useRef<HTMLDivElement>(null);
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
+  const [pasted, setPasted] = useState(false);
+  const [pasteFailed, setPasteFailed] = useState(false);
+  const ref = useRef<HTMLTextAreaElement>(null);
 
-  const isTouchOrNative =
-    Capacitor.isNativePlatform() ||
-    (typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches);
-
-  const handleTouchStart = (e: React.TouchEvent) => {
-    touchStartY.current = e.touches[0].clientY;
-  };
-
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (touchStartY.current === null) return;
-    const deltaY = e.touches[0].clientY - touchStartY.current;
-    if (deltaY > 0) {
-      setDragOffset(deltaY);
-    }
-  };
-
-  const handleTouchEnd = () => {
-    if (dragOffset > 75) {
-      onCloseRef.current();
-    }
-    touchStartY.current = null;
-    setDragOffset(0);
-  };
-
-  // Auto-focus textarea when sheet opens & register Android back button + focus trap
   useEffect(() => {
     if (!isOpen) return;
-
-    const prevFocus = document.activeElement as HTMLElement | null;
     setText('');
-    setHasPasted(false);
-    setDragOffset(0);
-
-    // Auto focus with a small delay for sheet slide-up animation
-    const timer = setTimeout(() => {
-      textareaRef.current?.focus();
-    }, 140);
-
-    const unregister = backButtonManager.push(() => {
-      onCloseRef.current();
-      return true;
-    });
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Tab' && sheetRef.current) {
-        const items = [
-          ...sheetRef.current.querySelectorAll<HTMLElement>(
-            'button:not([disabled]), textarea:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'
-          )
-        ].filter((el) => el.offsetParent !== null);
-        if (items.length === 0) return;
-        const first = items[0];
-        const last = items[items.length - 1];
-        const active = document.activeElement;
-        if (e.shiftKey && (active === first || !sheetRef.current.contains(active))) {
-          e.preventDefault();
-          last.focus();
-        } else if (!e.shiftKey && (active === last || !sheetRef.current.contains(active))) {
-          e.preventDefault();
-          first.focus();
-        }
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-
-    return () => {
-      clearTimeout(timer);
-      unregister();
-      window.removeEventListener('keydown', handleKeyDown);
-      prevFocus?.focus?.();
-    };
+    setPasted(false);
+    setPasteFailed(false);
+    const t = setTimeout(() => ref.current?.focus(), 260);
+    return () => clearTimeout(t);
   }, [isOpen]);
 
-  if (!isOpen) return null;
+  const append = (value: string) => {
+    setText(prev => (prev ? `${prev}\n${value}` : value));
+    setPasted(true);
+    setPasteFailed(false);
+    setTimeout(() => setPasted(false), 1600);
+  };
 
-  const handlePaste = async () => {
+  const paste = async () => {
     try {
       const { value } = await Clipboard.read();
-      if (value) {
-        setText((prev) => (prev ? `${prev}\n${value}` : value));
-        triggerPastedFeedback();
-        return;
-      }
+      if (value) return append(value);
     } catch {
-      // Fallback to browser clipboard API
-      if (navigator.clipboard?.readText) {
-        try {
-          const val = await navigator.clipboard.readText();
-          if (val) {
-            setText((prev) => (prev ? `${prev}\n${val}` : val));
-            triggerPastedFeedback();
-            return;
-          }
-        } catch {
-          // Clipboard read denied or not available
-        }
-      }
+      try {
+        const v = await navigator.clipboard?.readText?.();
+        if (v) return append(v);
+      } catch { /* denied */ }
     }
+    setPasteFailed(true);
   };
 
-  const triggerPastedFeedback = () => {
-    setHasPasted(true);
-    setTimeout(() => {
-      setHasPasted(false);
-    }, 1800);
-  };
-
-  const handleClear = () => {
-    setText('');
-    textareaRef.current?.focus();
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = text.trim();
+  const trimmed = text.trim();
+  const submit = () => {
     if (!trimmed) return;
     onSend(trimmed);
     onClose();
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      e.preventDefault();
-      handleSubmit(e);
-    }
-  };
-
-  const trimmedText = text.trim();
-  const charCount = text.length;
-  const wordCount = trimmedText ? trimmedText.split(/\s+/).length : 0;
-  const lineCount = trimmedText ? trimmedText.split('\n').length : 0;
-
   return (
-    <div
-      className="sheet-backdrop p2p-sendtext-backdrop"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="sendtext-title"
+    <Sheet
+      open={isOpen}
+      onClose={onClose}
+      title="Send text or link"
+      description={targetSummary ? `To ${targetSummary}` : 'Sent instantly and encrypted'}
+      footer={
+        <button type="button" className="btn btn-primary btn-block" onClick={submit} disabled={!trimmed}>
+          <Send size={16} />
+          {targetSummary ? `Send to ${targetSummary}` : 'Send'}
+        </button>
+      }
     >
-      <div
-        ref={sheetRef}
-        className="sheet-container p2p-sendtext-container"
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          transform: dragOffset > 0 ? `translateY(${dragOffset}px)` : undefined,
-          transition: dragOffset > 0 ? 'none' : undefined
-        }}
-      >
-        <div
-          className="sheet-drag-handle"
-          onTouchStart={handleTouchStart}
-          onTouchMove={handleTouchMove}
-          onTouchEnd={handleTouchEnd}
-          onTouchCancel={handleTouchEnd}
-        />
-
-        <div
-          className="sheet-header"
-          onTouchStart={handleTouchStart}
-          onTouchMove={handleTouchMove}
-          onTouchEnd={handleTouchEnd}
-          onTouchCancel={handleTouchEnd}
-        >
-          <div className="sheet-header-left">
-            <div className="sheet-icon-badge p2p-sendtext-badge">
-              <FileText size={18} strokeWidth={2} />
-            </div>
-            <div>
-              <h3 id="sendtext-title" className="sheet-title">Send Text or Link</h3>
-              <p className="sheet-subtitle">
-                {targetSummary ? `Sending to ${targetSummary}` : 'Instant encrypted transfer'}
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            className="sheet-close-btn p2p-touch-target"
-            onClick={onClose}
-            aria-label="Close"
-          >
-            <X size={18} />
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="sheet-body p2p-sendtext-body">
-          <div className="textarea-container p2p-textarea-wrapper">
-            <textarea
-              ref={textareaRef}
-              className="sheet-textarea p2p-styled-textarea"
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Type or paste text, URLs, code snippets, or notes..."
-              rows={5}
-              aria-label="Text message content"
-            />
-            {trimmedText.length > 0 && (
-              <button
-                type="button"
-                className="p2p-textarea-clear-btn p2p-touch-target"
-                onClick={handleClear}
-                title="Clear text"
-                aria-label="Clear text"
-              >
-                <RotateCcw size={14} />
-              </button>
-            )}
-          </div>
-
-          <div className="sheet-meta-row p2p-sendtext-meta">
-            <button
-              type="button"
-              className={`sheet-paste-btn p2p-paste-action ${hasPasted ? 'p2p-paste-success' : ''}`}
-              onClick={handlePaste}
-              aria-label="Paste from clipboard"
-            >
-              {hasPasted ? (
-                <>
-                  <Check size={14} strokeWidth={2.5} />
-                  <span>Pasted!</span>
-                </>
-              ) : (
-                <>
-                  <ClipboardIcon size={14} strokeWidth={2} />
-                  <span>Paste from clipboard</span>
-                </>
-              )}
+      <div className="field">
+        <div style={{ position: 'relative' }}>
+          <textarea
+            ref={ref}
+            className="input"
+            style={{ minHeight: 132, paddingRight: 44 }}
+            value={text}
+            onChange={e => setText(e.target.value)}
+            onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); submit(); } }}
+            placeholder="Type or paste text, a link or a note"
+            rows={5}
+            aria-label="Message"
+          />
+          {trimmed && (
+            <button type="button" className="icon-btn" style={{ position: 'absolute', top: 2, right: 0 }} onClick={() => { setText(''); ref.current?.focus(); }} aria-label="Clear">
+              <X size={18} />
             </button>
-
-            <div className="p2p-counter-pill" title={`${lineCount} lines`}>
-              <span className="p2p-counter-words">
-                {wordCount} {wordCount === 1 ? 'word' : 'words'}
-              </span>
-              <span className="p2p-counter-dot">•</span>
-              <span className="p2p-counter-chars">{charCount} chars</span>
-            </div>
-          </div>
-
-          {!isTouchOrNative && (
-            <div className="p2p-shortcut-hint">
-              <CornerDownLeft size={12} className="p2p-hint-icon" />
-              <span>Tip: Press <strong>Ctrl + Enter</strong> to send</span>
-            </div>
           )}
-
-          <div className="sheet-actions p2p-sendtext-actions">
-            <button
-              type="button"
-              className="sheet-btn sheet-btn-secondary p2p-action-btn"
-              onClick={onClose}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="sheet-btn sheet-btn-primary p2p-action-btn p2p-btn-send"
-              disabled={!trimmedText}
-            >
-              <Send size={15} strokeWidth={2} />
-              <span>{targetSummary ? `Send to ${targetSummary}` : 'Send'}</span>
-            </button>
-          </div>
-        </form>
+        </div>
+        <div className="send-text-meta">
+          <button type="button" className={`link-btn${pasted ? ' is-done' : ''}`} onClick={paste}>
+            {pasted ? <Check size={14} /> : <ClipboardIcon size={14} />}
+            {pasted ? 'Pasted' : 'Paste from clipboard'}
+          </button>
+          <span className="t-meta">{text.length} characters</span>
+        </div>
+        {pasteFailed && <span className="field-hint" role="status">Nothing to paste, or clipboard access was denied.</span>}
       </div>
-
-      <style>{`
-        .p2p-sendtext-backdrop {
-          position: fixed;
-          inset: 0;
-          background: var(--backdrop-scrim);
-          backdrop-filter: blur(8px);
-          -webkit-backdrop-filter: blur(8px);
-          z-index: 100;
-          display: flex;
-          align-items: flex-end;
-          justify-content: center;
-        }
-
-        .p2p-sendtext-container {
-          width: 100%;
-          max-width: 560px;
-          background: var(--surface-elevated);
-          border-top: 1px solid var(--border-strong);
-          border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-          padding: 0.85rem 1.25rem;
-          padding-bottom: calc(1.25rem + env(safe-area-inset-bottom));
-          display: flex;
-          flex-direction: column;
-          gap: 0.85rem;
-          box-shadow: var(--shadow-lg);
-          animation: p2pSheetSlideUp 240ms var(--ease-spring);
-        }
-
-        @keyframes p2pSheetSlideUp {
-          from {
-            transform: translateY(100%);
-          }
-          to {
-            transform: translateY(0);
-          }
-        }
-
-        .p2p-sendtext-badge {
-          background: var(--accent-subtle);
-          color: var(--accent);
-          border: 1px solid var(--accent-border);
-        }
-
-        .p2p-touch-target {
-          min-width: 44px;
-          min-height: 44px;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-        }
-
-        .p2p-sendtext-body {
-          display: flex;
-          flex-direction: column;
-          gap: 0.75rem;
-        }
-
-        .p2p-textarea-wrapper {
-          position: relative;
-          width: 100%;
-        }
-
-        .p2p-styled-textarea {
-          width: 100%;
-          background: var(--surface-secondary);
-          border: 1px solid var(--border-subtle);
-          border-radius: var(--radius-md);
-          color: var(--text-primary);
-          font-family: var(--font-sans);
-          font-size: 0.92rem;
-          line-height: 1.5;
-          padding: 0.85rem 2.5rem 0.85rem 0.85rem;
-          resize: vertical;
-          min-height: 130px;
-          outline: none;
-          transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
-        }
-
-        .p2p-styled-textarea:focus {
-          border-color: var(--accent);
-          box-shadow: 0 0 0 3px var(--accent-subtle);
-        }
-
-        .p2p-textarea-clear-btn {
-          position: absolute;
-          top: 6px;
-          right: 6px;
-          background: var(--surface-hover);
-          border: 1px solid var(--border-subtle);
-          color: var(--text-tertiary);
-          border-radius: var(--radius-full);
-          width: 32px;
-          height: 32px;
-          min-width: 32px;
-          min-height: 32px;
-          cursor: pointer;
-          transition: color var(--transition-fast), background var(--transition-fast);
-        }
-
-        .p2p-textarea-clear-btn::after {
-          content: '';
-          position: absolute;
-          inset: -6px;
-        }
-
-        .p2p-textarea-clear-btn:hover {
-          color: var(--text-primary);
-          background: var(--surface-elevated);
-        }
-
-        .p2p-sendtext-meta {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 0.5rem;
-          flex-wrap: wrap;
-        }
-
-        .p2p-paste-action {
-          display: inline-flex;
-          align-items: center;
-          gap: 0.45rem;
-          background: var(--surface-secondary);
-          border: 1px solid var(--border-subtle);
-          border-radius: var(--radius-full);
-          padding: 0 0.85rem;
-          min-height: 44px;
-          color: var(--text-primary);
-          font-size: 0.78rem;
-          font-weight: 600;
-          cursor: pointer;
-          transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
-        }
-
-        .p2p-paste-action:hover {
-          background: var(--surface-hover);
-          border-color: var(--border-strong);
-        }
-
-        .p2p-paste-success {
-          background: var(--success-subtle);
-          color: var(--success);
-          border-color: var(--success-border);
-        }
-
-        .p2p-counter-pill {
-          display: inline-flex;
-          align-items: center;
-          gap: 0.35rem;
-          padding: 0.35rem 0.75rem;
-          border-radius: var(--radius-full);
-          background: var(--surface-secondary);
-          border: 1px solid var(--border-subtle);
-          font-size: 0.72rem;
-          font-variant-numeric: tabular-nums;
-          color: var(--text-secondary);
-        }
-
-        .p2p-counter-words {
-          font-weight: 600;
-          color: var(--text-primary);
-        }
-
-        .p2p-counter-dot {
-          color: var(--text-tertiary);
-          font-size: 0.65rem;
-        }
-
-        .p2p-counter-chars {
-          color: var(--text-tertiary);
-        }
-
-        .p2p-shortcut-hint {
-          display: flex;
-          align-items: center;
-          gap: 0.4rem;
-          font-size: 0.71rem;
-          color: var(--text-tertiary);
-          padding-left: 0.2rem;
-        }
-
-        .p2p-hint-icon {
-          opacity: 0.7;
-        }
-
-        .p2p-sendtext-actions {
-          display: flex;
-          gap: 0.65rem;
-          margin-top: 0.25rem;
-        }
-
-        .p2p-action-btn {
-          flex: 1;
-          min-height: 44px;
-          border-radius: var(--radius-full);
-          font-size: 0.88rem;
-          font-weight: 600;
-          cursor: pointer;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          gap: 0.45rem;
-          transition: background var(--transition-fast), opacity var(--transition-fast), transform var(--transition-fast);
-          border: 1px solid transparent;
-        }
-
-        .p2p-action-btn:active {
-          transform: scale(0.985);
-        }
-
-        .p2p-btn-send {
-          background: var(--btn-primary-bg);
-          color: var(--btn-primary-text);
-        }
-
-        .p2p-btn-send:hover:not(:disabled) {
-          background: var(--btn-primary-hover);
-        }
-
-        .p2p-btn-send:disabled {
-          opacity: 0.38;
-          cursor: not-allowed;
-          transform: none;
-        }
-
-        @media (max-width: 360px) {
-          .p2p-sendtext-container {
-            padding: 0.75rem 0.95rem;
-          }
-          .p2p-sendtext-meta {
-            flex-direction: column;
-            align-items: flex-start;
-          }
-          .p2p-counter-pill {
-            align-self: flex-end;
-          }
-        }
-      `}</style>
-    </div>
+    </Sheet>
   );
 };

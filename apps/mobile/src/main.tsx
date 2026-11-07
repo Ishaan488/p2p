@@ -1,8 +1,13 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.tsx'
-import './index.css'
-import './devices.css'
+import '@fontsource-variable/inter'
+import './styles/tokens.css'
+import './styles/compat.css'
+import './styles/base.css'
+import './styles/ui.css'
+import './styles/media.css'
+import './styles/screens.css'
 
 // Ensure any stale ServiceWorker caches in WebView are purged immediately
 if ('serviceWorker' in navigator) {

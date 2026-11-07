@@ -1,0 +1,114 @@
+/* ==========================================================================
+   P2P Link design tokens
+   Monochromatic charcoal. Colour appears only where it carries meaning
+   (success, warning, error). One 4px spacing grid, one radius scale.
+   ========================================================================== */
+
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Surfaces: separated by brightness, not borders */
+  --bg: #101010;            /* app background */
+  --surface-1: #181818;     /* primary surface */
+  --surface-2: #202020;     /* secondary surface */
+  --surface-3: #292929;     /* elevated surface (sheets) */
+  --surface-4: #303030;     /* interactive surface (pressed / hover) */
+
+  --divider: #343434;       /* subtle divider */
+  --divider-strong: #454545;
+
+  --text-1: #F1F1F1;        /* primary */
+  --text-2: #A5A5A5;        /* secondary */
+  --text-3: #777777;        /* tertiary */
+  --text-disabled: #555555;
+
+  --action-bg: #E5E5E5;     /* primary action */
+  --action-text: #151515;
+  --action-bg-pressed: #CFCFCF;
+
+  --success: #79C9A2;
+  --warning: #DDBB75;
+  --error: #E97878;
+
+  --scrim: rgba(0, 0, 0, 0.62);
+  --shadow-sheet: 0 -12px 40px rgba(0, 0, 0, 0.55);
+  --focus: #F1F1F1;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #F3F3F3;
+  --surface-1: #FFFFFF;
+  --surface-2: #EEEEEE;
+  --surface-3: #FFFFFF;
+  --surface-4: #E4E4E4;
+
+  --divider: #E2E2E2;
+  --divider-strong: #CFCFCF;
+
+  --text-1: #151515;
+  --text-2: #5E5E5E;
+  --text-3: #8A8A8A;
+  --text-disabled: #B4B4B4;
+
+  --action-bg: #1B1B1B;
+  --action-text: #F5F5F5;
+  --action-bg-pressed: #333333;
+
+  --success: #2E8B62;
+  --warning: #98741F;
+  --error: #C44A4A;
+
+  --scrim: rgba(0, 0, 0, 0.38);
+  --shadow-sheet: 0 -10px 34px rgba(0, 0, 0, 0.16);
+  --focus: #151515;
+}
+
+:root {
+  /* Spacing: 4px grid */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --s-10: 40px;
+
+  /* Radius */
+  --r-sm: 8px;      /* small controls */
+  --r-input: 12px;  /* inputs */
+  --r-btn: 12px;    /* buttons */
+  --r-media: 12px;  /* media previews */
+  --r-group: 16px;  /* grouped surfaces */
+  --r-sheet: 24px;  /* bottom sheet top corners */
+  --r-full: 999px;
+
+  /* Typography */
+  --font: 'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --fs-title: 24px;
+  --fs-heading: 15px;
+  --fs-body: 15px;
+  --fs-label: 14px;
+  --fs-support: 12px;
+  --fs-meta: 11px;
+
+  /* Touch + layout */
+  --touch: 44px;
+  --icon: 20px;
+  --icon-sm: 16px;
+  --content-max: 560px;
+
+  /* Motion */
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --t-fast: 120ms;
+  --t-med: 220ms;
+
+  /* Safe areas (Android gesture bar / display cutout) */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+}

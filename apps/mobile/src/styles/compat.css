@@ -1,0 +1,43 @@
+/* Legacy token aliases so the retained viewer CSS (media.css) follows the new theme. */
+:root {
+  --bg-app: var(--bg);
+  --surface: var(--surface-1);
+  --surface-secondary: var(--surface-2);
+  --surface-elevated: var(--surface-3);
+  --surface-hover: var(--surface-4);
+  --surface-glass: color-mix(in srgb, var(--bg) 94%, transparent);
+  --surface-card: var(--surface-1);
+  --border-subtle: var(--divider);
+  --border-strong: var(--divider-strong);
+  --text-primary: var(--text-1);
+  --text-secondary: var(--text-2);
+  --text-tertiary: var(--text-3);
+  --accent: var(--text-1);
+  --accent-subtle: var(--surface-2);
+  --accent-border: var(--divider-strong);
+  --btn-primary-bg: var(--action-bg);
+  --btn-primary-text: var(--action-text);
+  --btn-primary-hover: var(--action-bg-pressed);
+  --btn-primary-pressed: var(--action-bg-pressed);
+  --btn-secondary-bg: var(--surface-2);
+  --btn-secondary-text: var(--text-1);
+  --btn-secondary-border: var(--divider);
+  --btn-secondary-hover: var(--surface-4);
+  --error-subtle: color-mix(in srgb, var(--error) 14%, transparent);
+  --error-border: color-mix(in srgb, var(--error) 30%, transparent);
+  --success-subtle: color-mix(in srgb, var(--success) 14%, transparent);
+  --success-border: color-mix(in srgb, var(--success) 30%, transparent);
+  --warning-subtle: color-mix(in srgb, var(--warning) 14%, transparent);
+  --warning-border: color-mix(in srgb, var(--warning) 30%, transparent);
+  --backdrop-scrim: var(--scrim);
+  --transition-fast: var(--t-fast) var(--ease);
+  --transition-normal: var(--t-med) var(--ease);
+  --ease-spring: var(--ease);
+  --radius-xs: 4px; --radius-sm: 8px; --radius-md: 12px; --radius-lg: 16px; --radius-full: 999px;
+  --font-sans: var(--font);
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,.35); --shadow-md: 0 4px 16px rgba(0,0,0,.45); --shadow-lg: 0 12px 32px rgba(0,0,0,.6);
+  --focus-ring: 0 0 0 2px var(--focus);
+  --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 20px;
+  --opacity-disabled: 0.4;
+}

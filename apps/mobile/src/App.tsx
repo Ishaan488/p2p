@@ -26,10 +26,12 @@ import {
 } from './lib/uploads';
 import {
   LogOut,
-  Trash2, UploadCloud, Lock,
+  Trash2, UploadCloud, Settings, Loader2, ChevronRight, Plus,
   ShieldCheck, ShieldAlert, Unlink, MoreVertical,
-  Sun, Moon, Monitor, Sliders, ChevronDown, ArrowLeft, Laptop, X
+  ChevronDown, Laptop, X
 } from 'lucide-react';
+import { Sheet } from './components/Sheet';
+import { StateView, Switch } from './components/ui';
 import { BrandLogo } from './components/BrandLogo';
 import { checkPendingShare, onSharedData, NativeSharedFile } from './lib/shareTarget';
 import { Capacitor } from '@capacitor/core';
@@ -772,6 +774,15 @@ export default function App() {
     }
   };
 
+  // Hardware back button cancels pending pairing request
+  useEffect(() => {
+    if (!pendingApproval) return;
+    return backButtonManager.push(() => {
+      cancelPairing();
+      return true;
+    });
+  }, [pendingApproval]);
+
   // Pairs with a new PC (QR secret, or approval on the PC) and connects. Resolves with the failure, if any,
   // so callers can react; the error text has already been set for it.
   const pairAndConnect = async (
@@ -1323,35 +1334,50 @@ export default function App() {
       return true;
     });
 
-    const html5QrCode = new Html5Qrcode('qr-reader');
-    html5QrCode.start(
-      { facingMode: 'environment' },
-      { fps: 10, qrbox: { width: 250, height: 250 } },
-      (decodedText) => {
-        html5QrCode.stop().catch(() => { });
+    let html5QrCode: Html5Qrcode | null = null;
+    try {
+      const qrEl = document.getElementById('qr-reader');
+      if (!qrEl) {
+        console.warn('qr-reader element not found in DOM');
         setIsScanning(false);
-        const link = parsePairingLink(decodedText);
-        if (link.code) {
-          pairAndConnect(link.host, link.code, link.scheme, link.cert);
-        } else {
-          pairAndConnect(link.host);
-        }
-      },
-      () => { }
-    ).catch(err => {
-      console.error('Camera error', err);
-      setCameraError(
-        Capacitor.isNativePlatform()
-          ? 'Camera permission was denied. Enable Camera access in Android App Settings, or connect via IP address below.'
-          : 'Camera access was denied or unavailable. Allow camera permission in your browser, or connect via IP address below.'
-      );
+        setIsEditingIp(true);
+        return;
+      }
+
+      html5QrCode = new Html5Qrcode('qr-reader');
+      html5QrCode.start(
+        { facingMode: 'environment' },
+        { fps: 10, qrbox: { width: 250, height: 250 } },
+        (decodedText) => {
+          html5QrCode?.stop().catch(() => { });
+          setIsScanning(false);
+          const link = parsePairingLink(decodedText);
+          if (link.code) {
+            pairAndConnect(link.host, link.code, link.scheme, link.cert);
+          } else {
+            pairAndConnect(link.host);
+          }
+        },
+        () => { }
+      ).catch(err => {
+        console.error('Camera error', err);
+        setCameraError(
+          Capacitor.isNativePlatform()
+            ? 'Camera permission was denied. Enable Camera access in Android App Settings, or connect via IP address below.'
+            : 'Camera access was denied or unavailable. Allow camera permission in your browser, or connect via IP address below.'
+        );
+        setIsScanning(false);
+        setIsEditingIp(true);
+      });
+    } catch (err) {
+      console.error('Failed to init QR scanner', err);
       setIsScanning(false);
       setIsEditingIp(true);
-    });
+    }
 
     return () => {
       unregisterBack();
-      if (html5QrCode.isScanning) {
+      if (html5QrCode && html5QrCode.isScanning) {
         html5QrCode.stop().catch(() => { });
       }
     };
@@ -1359,7 +1385,10 @@ export default function App() {
 
   const handleConnect = async (e: React.FormEvent) => {
     e.preventDefault();
-    const raw = address.trim().replace(/^https?:\/\//, '').split('/')[0];
+    let raw = address.trim().replace(/^https?:\/\//, '').split('/')[0];
+    if (raw && !raw.includes(':')) {
+      raw = `${raw}:8080`;
+    }
     if (!raw || raw === 'localhost:8080' || raw === 'localhost' || raw.startsWith('127.0.0.1')) {
       if (Capacitor.isNativePlatform()) {
         setConnectError('Please enter your desktop LAN IP address (e.g. 192.168.1.15:8080) or tap "Scan QR Code".');
@@ -1367,6 +1396,7 @@ export default function App() {
       }
     }
     if (!raw) return;
+    setAddress(raw);
     // "Change IP" on the card of the one paired PC edits where to find it; anywhere else this adds a new device.
     const only = !isAddingDevice && snap.peers.length === 1 ? snap.peers[0] : null;
     if (only) {
@@ -1806,79 +1836,14 @@ export default function App() {
   // ==========================================
   if (snap.connected.length === 0 || isAddingDevice) {
     return (
-      <div className="app-container">
+      <div className="app">
         <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
-        {/* Minimalist Compact Header */}
-        <header className="app-header">
-          <div className="header-brand">
-            {isAddingDevice ? (
-              <>
-                <button
-                  type="button"
-                  className="header-action-btn"
-                  onClick={() => {
-                    setIsAddingDevice(false);
-                    setIsScanning(false);
-                    setIsEditingIp(false);
-                    setConnectError('');
-                  }}
-                  aria-label="Back"
-                >
-                  <ArrowLeft size={18} />
-                </button>
-                <span className="brand-name">Add device</span>
-              </>
-            ) : (
-              <>
-                <div className="brand-icon-box">
-                  <BrandLogo size={18} connected={false} />
-                </div>
-                <span className="brand-name">P2P Link</span>
-              </>
-            )}
-          </div>
-
-          <div className="header-right-cluster">
-            <div className="header-status-pill" role="status" aria-live="polite">
-              <span className={`status-dot ${status}`} aria-hidden="true" />
-              <span className="status-label">
-                {status === 'connecting' ? 'Connecting' : status === 'error' ? 'Offline' : 'Standby'}
-              </span>
-            </div>
-
-            <button
-              type="button"
-              className="header-action-btn"
-              onClick={() => setIsPrefsOpen(true)}
-              title="Transfer & Device Settings"
-              aria-label="Settings"
-            >
-              <Sliders size={16} />
-            </button>
-
-            <button
-              type="button"
-              className="header-action-btn"
-              onClick={() => {
-                const next = theme === 'dark' ? 'light' : theme === 'light' ? 'system' : 'dark';
-                setTheme(next);
-                showToast(`Theme: ${next.charAt(0).toUpperCase() + next.slice(1)}`, 'info');
-              }}
-              title={`Theme: ${theme}`}
-              aria-label="Toggle theme"
-            >
-              {theme === 'light' ? <Sun size={17} /> : theme === 'dark' ? <Moon size={17} /> : <Monitor size={17} />}
-            </button>
-          </div>
-        </header>
-
-        {/* Connection Setup Content */}
         {pendingShare && (
-          <div className="pending-share-bar" role="status">
+          <div className="pending-share" role="status">
             <span>Waiting to send {describeShare(pendingShare)}. Connect to a device.</span>
-            <button type="button" className="header-action-btn" onClick={discardShare} aria-label="Discard what was shared">
-              <X size={15} />
+            <button type="button" className="icon-btn icon-btn-sm" onClick={discardShare} aria-label="Discard what was shared">
+              <X size={16} />
             </button>
           </div>
         )}
@@ -1914,11 +1879,19 @@ export default function App() {
           pendingApproval={pendingApproval ? { host: pendingApproval.host, name: pendingApproval.name } : null}
           onCancelPairing={cancelPairing}
           connectingDiscoveredKey={connectingDiscoveredKey}
+          onBack={() => {
+            setIsAddingDevice(false);
+            setIsScanning(false);
+            setIsEditingIp(false);
+            setConnectError('');
+          }}
         />
 
         <PreferencesModal
           isOpen={isPrefsOpen}
           isConnected={false}
+          theme={theme}
+          onSetTheme={setTheme}
           deviceName={focused?.deviceName || deviceName}
           pcName={focused?.name || 'Desktop PC'}
           downloadSubDir={downloadSubDir}
@@ -1945,12 +1918,13 @@ export default function App() {
     );
   }
 
+
   // ==========================================
   // VIEW: Connected Transfer Activity Workspace
   // ==========================================
   return (
     <div
-      className="app-container"
+      className="app"
       onDragEnter={handleDragEnter}
       onDragOver={e => { if (hasFiles(e)) e.preventDefault(); }}
       onDragLeave={handleDragLeave}
@@ -1958,7 +1932,6 @@ export default function App() {
     >
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
-      {/* Dedicated Full-Screen Immersive Media Viewer */}
       {activeMedia && (
         <MediaViewer
           type={activeMedia.type}
@@ -1970,297 +1943,80 @@ export default function App() {
         />
       )}
 
-      {/* Full-Window Drag & Drop Overlay */}
       {isDragging && (
         <div className="drop-target-overlay">
-          <UploadCloud size={40} className="drop-icon" />
-          <span className="drop-primary-text">Drop files to transfer</span>
-          <span className="drop-sub-text">Direct end-to-end encrypted transfer</span>
+          <UploadCloud size={36} />
+          <span className="drop-primary-text">Drop to send</span>
+          <span className="drop-sub-text">Encrypted, directly to your devices</span>
         </div>
       )}
 
-      {/* 1. Unified Minimalist Header */}
-      <header className="app-header">
+      {/* Header: the active computer; tap to switch or manage devices */}
+      <header className="top-bar workspace-bar">
         <button
           type="button"
-          className="device-switcher header-brand"
+          className="device-switcher"
           onClick={() => openDevices('manage')}
           aria-haspopup="dialog"
           aria-label={`${focused?.name || 'Desktop PC'}${snap.connected.length > 1 ? `, and ${snap.connected.length - 1} more` : ''}. Open devices.`}
         >
-          <div className="brand-icon-box connected">
-            <BrandLogo size={18} connected={true} />
-          </div>
-          <div className="brand-text-box">
-            <div className="brand-title-row">
-              <span className="brand-name">{focused?.name || 'Desktop PC'}</span>
+          <span className="device-switcher-text">
+            <span className="device-switcher-name">
+              <span className="truncate">{focused?.name || 'Desktop PC'}</span>
               {snap.connected.length > 1 && <span className="switcher-more">+{snap.connected.length - 1}</span>}
-              <ChevronDown size={14} className="switcher-chevron" aria-hidden="true" />
-              <span className="security-badge" title="End-to-End Encrypted">
-                <Lock size={9} />
-                <span>E2EE</span>
-              </span>
-            </div>
-            <div className="brand-peer-row">
-              <span className="peer-live-dot" />
-              <span className="peer-name">
-                {snap.connected.length > 1
-                  ? `${snap.connected.length} devices connected`
-                  : `Connected · ${focused?.deviceName || deviceName}`}
-              </span>
-            </div>
-          </div>
+              <ChevronDown size={16} aria-hidden="true" />
+            </span>
+            <span className="device-switcher-sub">
+              <span className="dot ok" />
+              {snap.connected.length > 1 ? `${snap.connected.length} devices connected` : 'Connected'}
+            </span>
+          </span>
         </button>
-
-        <div className="header-right-cluster">
-          <button
-            type="button"
-            className="header-action-btn"
-            onClick={() => {
-              const next = theme === 'dark' ? 'light' : theme === 'light' ? 'system' : 'dark';
-              setTheme(next);
-              showToast(`Theme: ${next.charAt(0).toUpperCase() + next.slice(1)}`, 'info');
-            }}
-            title={`Theme: ${theme}`}
-            aria-label="Toggle theme"
-          >
-            {theme === 'light' ? <Sun size={17} /> : theme === 'dark' ? <Moon size={17} /> : <Monitor size={17} />}
-          </button>
-
-          <div className="header-actions-box">
-            <button
-              type="button"
-              onClick={() => setIsMenuOpen(o => !o)}
-              className="header-action-btn"
-              title="Options"
-              aria-label="Menu"
-              aria-expanded={isMenuOpen}
-              aria-haspopup="menu"
-            >
-              <MoreVertical size={18} />
-            </button>
-
-            {isMenuOpen && (
-              <>
-                <div className="menu-scrim" onClick={() => setIsMenuOpen(false)} />
-                <div className="overflow-menu-dropdown" role="menu">
-                  <div className="menu-group-header">SESSION & PREFERENCES</div>
-                  <button
-                    type="button"
-                    className="menu-item"
-                    onClick={() => {
-                      setIsMenuOpen(false);
-                      openDevices('manage');
-                    }}
-                  >
-                    <Laptop size={15} />
-                    <span>Devices{snap.peers.length > 1 ? ` (${snap.connected.length}/${snap.peers.length})` : ''}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="menu-item"
-                    onClick={() => {
-                      setIsMenuOpen(false);
-                      setIsPrefsOpen(true);
-                    }}
-                  >
-                    <Sliders size={15} />
-                    <span>Transfer & Device Settings</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="menu-item"
-                    onClick={() => {
-                      if (!focused) return;
-                      const next = !focused.autoAccept;
-                      peerManager.setAutoAccept(focused.id, next);
-                      showToast(next ? `Auto-accept from ${focused.name} on` : `Manual approval for ${focused.name}`, 'info');
-                      setIsMenuOpen(false);
-                    }}
-                  >
-                    {focused?.autoAccept !== false ? <ShieldCheck size={15} color="var(--accent)" /> : <ShieldAlert size={15} />}
-                    <span>
-                      {snap.peers.length > 1 ? `Auto-Accept (${focused?.name}): ` : 'Auto-Accept Files: '}
-                      {focused?.autoAccept !== false ? 'On' : 'Off'}
-                    </span>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="menu-item"
-                    onClick={() => {
-                      setIsMenuOpen(false);
-                      disconnectAll();
-                    }}
-                  >
-                    <LogOut size={15} />
-                    <span>{snap.connected.length > 1 ? 'Disconnect All' : 'Disconnect'}</span>
-                  </button>
-
-                  <div className="menu-group-header">APPEARANCE</div>
-                  <div className="theme-toggle-row">
-                    <button
-                      type="button"
-                      className={`theme-toggle-btn ${theme === 'light' ? 'active' : ''}`}
-                      aria-pressed={theme === 'light'}
-                      onClick={() => setTheme('light')}
-                    >
-                      <Sun size={13} />
-                      <span>Light</span>
-                    </button>
-                    <button
-                      type="button"
-                      className={`theme-toggle-btn ${theme === 'dark' ? 'active' : ''}`}
-                      aria-pressed={theme === 'dark'}
-                      onClick={() => setTheme('dark')}
-                    >
-                      <Moon size={13} />
-                      <span>Dark</span>
-                    </button>
-                    <button
-                      type="button"
-                      className={`theme-toggle-btn ${theme === 'system' ? 'active' : ''}`}
-                      aria-pressed={theme === 'system'}
-                      onClick={() => setTheme('system')}
-                    >
-                      <Monitor size={13} />
-                      <span>Auto</span>
-                    </button>
-                  </div>
-
-                  {messages.length > 0 && (
-                    <>
-                      <div className="menu-separator" />
-                      <button
-                        type="button"
-                        className="menu-item"
-                        onClick={() => {
-                          setIsMenuOpen(false);
-                          setConfirmDialog({
-                            isOpen: true,
-                            title: 'Clear Transfer List?',
-                            message: 'Saved files in your Downloads folder will remain untouched.',
-                            confirmLabel: 'Clear List',
-                            variant: 'danger',
-                            icon: 'trash',
-                            onConfirm: () => {
-                              setConfirmDialog(prev => ({ ...prev, isOpen: false }));
-                              const toClear = messagesRef.current.filter(m => !uploads.has(m.id));
-                              toClear.forEach(item => {
-                                purgeItemCache(item);
-                                void deleteBlobFromCache(item.id);
-                              });
-                              setMessages(prev => prev.filter(m => uploads.has(m.id)));
-                              showToast('Transfers cleared', 'info');
-                            }
-                          });
-                        }}
-                      >
-                        <Trash2 size={15} />
-                        <span>Clear History</span>
-                      </button>
-                    </>
-                  )}
-
-                  <div className="menu-separator" />
-
-                  <button
-                    type="button"
-                    className="menu-item menu-item-danger"
-                    onClick={() => {
-                      setIsMenuOpen(false);
-                      if (focused) unpairPeer(focused.id);
-                    }}
-                  >
-                    <Unlink size={15} />
-                    <span>{snap.peers.length > 1 && focused ? `Remove ${focused.name}` : 'Unpair Desktop'}</span>
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
+        <button type="button" className="icon-btn" onClick={() => setIsPrefsOpen(true)} aria-label="Settings"><Settings size={20} /></button>
+        <button type="button" className="icon-btn" onClick={() => setIsMenuOpen(true)} aria-label="More" aria-haspopup="dialog"><MoreVertical size={20} /></button>
       </header>
 
-      {/* Persistent Pending Pairing Approval Banner (when adding a second device from DevicesSheet) */}
       {pendingApproval && (
-        <div className="pending-share-bar" role="status" aria-live="polite">
-          <span>Waiting for approval on {pendingApproval.name}…</span>
-          <button
-            type="button"
-            className="card-pill-btn secondary"
-            onClick={cancelPairing}
-            aria-label="Cancel pairing request"
-          >
-            Cancel
-          </button>
+        <div className="notice" role="status" style={{ alignItems: 'center' }}>
+          <Loader2 size={18} className="spin notice-icon" style={{ marginTop: 0 }} />
+          <div className="notice-main">
+            <div className="notice-title">Waiting for {pendingApproval.name}</div>
+            <div>Approve this phone on that computer.</div>
+          </div>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={cancelPairing}>Cancel</button>
         </div>
       )}
 
-      {/* 2. Compact Filter Bar (Only visible when transfers exist) */}
       {messages.length > 0 && (
-        <div className="workspace-filter-strip">
-          <div className="pill-tabs-group">
-            <button
-              type="button"
-              className={`pill-tab ${filter === 'all' ? 'active' : ''}`}
-              aria-pressed={filter === 'all'}
-              onClick={() => setFilter('all')}
-            >
-              <span>All</span>
-              <span className="pill-tab-count">{peerMessages.length}</span>
-            </button>
-            <button
-              type="button"
-              className={`pill-tab ${filter === 'received' ? 'active' : ''}`}
-              aria-pressed={filter === 'received'}
-              onClick={() => setFilter('received')}
-            >
-              <span>Received</span>
-              {peerMessages.some(m => m.sender === 'other') && (
-                <span className="pill-tab-count">{peerMessages.filter(m => m.sender === 'other').length}</span>
-              )}
-            </button>
-            <button
-              type="button"
-              className={`pill-tab ${filter === 'sent' ? 'active' : ''}`}
-              aria-pressed={filter === 'sent'}
-              onClick={() => setFilter('sent')}
-            >
-              <span>Sent</span>
-              {peerMessages.some(m => m.sender === 'me') && (
-                <span className="pill-tab-count">{peerMessages.filter(m => m.sender === 'me').length}</span>
-              )}
-            </button>
+        <nav className="filter-bar" aria-label="Filter transfers">
+          <div className="segmented" role="group">
+            {([['all', 'All'], ['received', 'Received'], ['sent', 'Sent']] as const).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                className={`segmented-item${filter === key ? ' active' : ''}`}
+                aria-pressed={filter === key}
+                onClick={() => setFilter(key)}
+              >
+                {label}
+              </button>
+            ))}
           </div>
-
           {snap.peers.length >= 2 && (
-            <select
-              className="peer-filter"
-              value={peerFilter}
-              onChange={e => setPeerFilter(e.target.value)}
-              aria-label="Show transfers with"
-            >
+            <select className="peer-filter" value={peerFilter} onChange={e => setPeerFilter(e.target.value)} aria-label="Filter by device">
               <option value="all">All devices</option>
-              {snap.peers.map(p => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
+              {snap.peers.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           )}
-        </div>
+        </nav>
       )}
 
-      {/* 3. Main Transfer Activity Stream */}
       <main
         ref={scrollAreaRef}
         onScroll={e => {
-          if (e.currentTarget.scrollTop <= 80 && hasUnseenActivity) {
-            setHasUnseenActivity(false);
-          }
+          if (e.currentTarget.scrollTop <= 80 && hasUnseenActivity) setHasUnseenActivity(false);
         }}
-        className={`activity-scroll-area ${filteredMessages.length === 0 ? 'is-empty' : ''}`}
+        className={`scroll feed${filteredMessages.length === 0 ? ' is-empty' : ''}`}
       >
         {hasUnseenActivity && (
           <button
@@ -2271,7 +2027,7 @@ export default function App() {
               setHasUnseenActivity(false);
             }}
           >
-            ↑ New transfer
+            New transfer
           </button>
         )}
 
@@ -2290,66 +2046,35 @@ export default function App() {
           />
         )}
 
-        {/* Minimal Centered Empty State */}
         {filteredMessages.length === 0 && (
-          <div className="minimal-empty-stage">
-            <div className="empty-orbit-ring">
-              <div className="empty-core-icon">
-                <BrandLogo size={28} connected={true} />
-              </div>
-            </div>
-            <h3 className="empty-title">
-              {messages.length === 0
-                ? 'Ready to Transfer'
-                : filter === 'all'
-                  ? 'No Matching Transfers'
-                  : `No ${filter === 'received' ? 'Received' : 'Sent'} Transfers`}
-            </h3>
-            <p className="empty-description">
-              {messages.length === 0
-                ? 'Send files, photos, videos, or text directly over local Wi-Fi.'
-                : peerFilter !== 'all'
-                  ? `No ${filter === 'all' ? '' : `${filter} `}transfers with ${nameOfPeer(peerFilter)} yet.`
-                  : `No ${filter} transfers in your session history yet.`}
-            </p>
+          <StateView
+            icon={<BrandLogo size={36} connected={true} />}
+            title={messages.length === 0 ? 'Ready to send' : filter === 'all' ? 'Nothing matches' : `No ${filter} transfers`}
+            body={messages.length === 0
+              ? 'Send files, photos or text straight over your Wi‑Fi.'
+              : peerFilter !== 'all'
+                ? `No ${filter === 'all' ? '' : `${filter} `}transfers with ${nameOfPeer(peerFilter)} yet.`
+                : `No ${filter} transfers yet.`}
+          >
             {messages.length === 0 ? (
-              <button
-                type="button"
-                className="card-pill-btn primary"
-                style={{ marginTop: '0.6rem', minHeight: '44px', padding: '0 1.15rem' }}
-                onClick={() => handleOpenFilePicker()}
-              >
-                <UploadCloud size={15} />
-                <span>Send Files</span>
+              <button type="button" className="btn btn-primary" onClick={() => handleOpenFilePicker()}>
+                <UploadCloud size={16} /> Send files
               </button>
             ) : (
-              <button
-                type="button"
-                className="card-pill-btn secondary"
-                style={{ marginTop: '0.6rem', minHeight: '44px', padding: '0 1.1rem' }}
-                onClick={() => {
-                  setFilter('all');
-                  setPeerFilter('all');
-                }}
-              >
-                <span>Show all transfers</span>
+              <button type="button" className="btn btn-secondary" onClick={() => { setFilter('all'); setPeerFilter('all'); }}>
+                Show everything
               </button>
             )}
-          </div>
+          </StateView>
         )}
 
-        {/* Date Grouped Activity Feed */}
         {dateGroupOrder.map(group => {
           const groupItems = groupedMessages[group];
           if (!groupItems || groupItems.length === 0) return null;
-
           return (
-            <section key={group} className="date-group-section">
-              <div className="date-section-header">
-                <span>{group}</span>
-              </div>
-
-              <div className="date-group-cards">
+            <section key={group} className="date-group">
+              <h2 className="date-group-title">{group}</h2>
+              <div className="date-group-items">
                 {groupItems.map(item => (
                   <TransferCard
                     key={item.id}
@@ -2469,6 +2194,8 @@ export default function App() {
       <PreferencesModal
         isOpen={isPrefsOpen}
         isConnected={true}
+        theme={theme}
+        onSetTheme={setTheme}
         deviceChoices={snap.connected.map(p => ({ id: p.id, name: p.name }))}
         selectedDeviceId={focused?.id ?? null}
         onSelectDevice={id => peerManager.setFocused(id)}
@@ -2490,8 +2217,14 @@ export default function App() {
         mode={devicesMode}
         pickSubject={pendingShare ? describeShare(pendingShare) : undefined}
         peers={snap.peers}
+        focusedId={focused?.id}
         nearby={nearbyDevices}
         onClose={closeDevices}
+        onSetFocused={id => {
+          peerManager.setFocused(id);
+          const p = snap.peers.find(peer => peer.id === id);
+          showToast(`Active device: ${p?.name || 'Desktop'}`, 'info');
+        }}
         onToggleTarget={(id, selected) => peerManager.setExcluded(id, !selected)}
         onConnect={id => { void connectPeer(id); }}
         onDisconnect={disconnectPeer}
@@ -2515,6 +2248,71 @@ export default function App() {
         }}
       />
 
+      {/* Session menu */}
+      <Sheet open={isMenuOpen} onClose={() => setIsMenuOpen(false)} title="Menu" flush>
+        <ul className="rows">
+          <li><button type="button" className="row" onClick={() => { setIsMenuOpen(false); openDevices('manage'); }}>
+            <Laptop size={20} className="row-icon" />
+            <span className="row-main"><span className="row-title">Devices</span>
+              <span className="row-sub">{snap.connected.length} connected{snap.peers.length > snap.connected.length ? ` · ${snap.peers.length} saved` : ''}</span></span>
+            <ChevronRight size={16} className="row-chevron" />
+          </button></li>
+          <li><button type="button" className="row" onClick={() => { setIsMenuOpen(false); setIsAddingDevice(true); }}>
+            <Plus size={20} className="row-icon" />
+            <span className="row-main"><span className="row-title">Add another device</span></span>
+          </button></li>
+          <li className="row">
+            {focused?.autoAccept !== false ? <ShieldCheck size={20} className="row-icon" /> : <ShieldAlert size={20} className="row-icon" />}
+            <span className="row-main">
+              <span className="row-title">Accept files automatically</span>
+              <span className="row-sub">{snap.peers.length > 1 && focused ? `From ${focused.name}` : 'Skip the approval prompt'}</span>
+            </span>
+            <Switch
+              checked={focused?.autoAccept !== false}
+              label="Accept files automatically"
+              onChange={next => {
+                if (!focused) return;
+                peerManager.setAutoAccept(focused.id, next);
+                showToast(next ? `Auto-accept from ${focused.name} on` : `Manual approval for ${focused.name}`, 'info');
+              }}
+            />
+          </li>
+          {messages.length > 0 && (
+            <li><button type="button" className="row" onClick={() => {
+              setIsMenuOpen(false);
+              setConfirmDialog({
+                isOpen: true,
+                title: 'Clear transfer list?',
+                message: 'Files already saved to Downloads stay where they are.',
+                confirmLabel: 'Clear list',
+                variant: 'danger',
+                icon: 'trash',
+                onConfirm: () => {
+                  setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+                  const toClear = messagesRef.current.filter(m => !uploads.has(m.id));
+                  toClear.forEach(item => {
+                    purgeItemCache(item);
+                    void deleteBlobFromCache(item.id);
+                  });
+                  setMessages(prev => prev.filter(m => uploads.has(m.id)));
+                  showToast('Transfers cleared', 'info');
+                },
+              });
+            }}>
+              <Trash2 size={20} className="row-icon" />
+              <span className="row-main"><span className="row-title">Clear transfer list</span></span>
+            </button></li>
+          )}
+          <li><button type="button" className="row" onClick={() => { setIsMenuOpen(false); disconnectAll(); }}>
+            <LogOut size={20} className="row-icon" />
+            <span className="row-main"><span className="row-title">{snap.connected.length > 1 ? 'Disconnect all' : 'Disconnect'}</span></span>
+          </button></li>
+          <li><button type="button" className="row is-destructive" onClick={() => { setIsMenuOpen(false); if (focused) unpairPeer(focused.id); }}>
+            <Unlink size={20} className="row-icon" />
+            <span className="row-main"><span className="row-title">{snap.peers.length > 1 && focused ? `Forget ${focused.name}` : 'Forget this computer'}</span></span>
+          </button></li>
+        </ul>
+      </Sheet>
       {/* 8. Native Confirmation Dialog */}
       <ConfirmationDialog
         isOpen={confirmDialog.isOpen}
