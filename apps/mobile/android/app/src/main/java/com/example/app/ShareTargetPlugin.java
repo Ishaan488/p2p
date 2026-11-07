@@ -30,7 +30,8 @@ import java.util.concurrent.ConcurrentHashMap;
 @CapacitorPlugin(name = "ShareTarget")
 public class ShareTargetPlugin extends Plugin {
     private static JSObject pendingShare = null;
-    private final Map<String, File> spooledCacheFiles = new ConcurrentHashMap<>();
+    // Shared (static) so metadata resolution at intent time and chunk reads later see the same copies.
+    private static final Map<String, File> spooledCacheFiles = new ConcurrentHashMap<>();
 
     @Override
     public void load() {
@@ -46,7 +47,7 @@ public class ShareTargetPlugin extends Plugin {
             if (spoolDir.exists() && spoolDir.isDirectory()) {
                 File[] files = spoolDir.listFiles();
                 if (files != null) {
-                    long cutoff = System.currentTimeMillis() - 3600_000L; // 1 hour
+                    long cutoff = System.currentTimeMillis() - 24 * 3600_000L; // 24 hours
                     for (File f : files) {
                         if (f.lastModified() < cutoff) {
                             f.delete();
@@ -57,23 +58,69 @@ public class ShareTargetPlugin extends Plugin {
         } catch (Exception ignored) {}
     }
 
+    private static final String EXTRA_SHARE_CONSUMED = "com.example.app.SHARE_CONSUMED";
+
+    private static Long getLongOption(PluginCall call, String name) {
+        if (call == null || call.getData() == null || !call.getData().has(name) || call.getData().isNull(name)) {
+            return null;
+        }
+        Object value = call.getData().opt(name);
+        if (value instanceof Number) {
+            return ((Number) value).longValue();
+        }
+        if (value instanceof String) {
+            try {
+                return Long.parseLong(((String) value).trim());
+            } catch (NumberFormatException ignored) {}
+        }
+        return null;
+    }
+
+    private static Integer getIntOption(PluginCall call, String name) {
+        if (call == null || call.getData() == null || !call.getData().has(name) || call.getData().isNull(name)) {
+            return null;
+        }
+        Object value = call.getData().opt(name);
+        if (value instanceof Number) {
+            return ((Number) value).intValue();
+        }
+        if (value instanceof String) {
+            try {
+                return Integer.parseInt(((String) value).trim());
+            } catch (NumberFormatException ignored) {}
+        }
+        return null;
+    }
+
     public static void handleIncomingIntent(Context context, Intent intent) {
-        if (intent == null) return;
+        if (intent == null || intent.getBooleanExtra(EXTRA_SHARE_CONSUMED, false)) return;
         String action = intent.getAction();
         if (Intent.ACTION_SEND.equals(action) || Intent.ACTION_SEND_MULTIPLE.equals(action)) {
+            intent.putExtra(EXTRA_SHARE_CONSUMED, true);
             pendingShare = processIntent(context, intent);
         }
     }
 
+    @Override
+    protected void handleOnNewIntent(Intent intent) {
+        super.handleOnNewIntent(intent);
+        onNewIntent(intent);
+    }
+
     public void onNewIntent(Intent intent) {
         Context context = getContext();
-        if (intent == null || context == null) return;
+        if (intent == null || context == null || intent.getBooleanExtra(EXTRA_SHARE_CONSUMED, false)) return;
         String action = intent.getAction();
         if (Intent.ACTION_SEND.equals(action) || Intent.ACTION_SEND_MULTIPLE.equals(action)) {
+            intent.putExtra(EXTRA_SHARE_CONSUMED, true);
             JSObject data = processIntent(context, intent);
             if (data != null) {
-                pendingShare = data;
-                notifyListeners("sharedData", data, true);
+                if (hasListeners("sharedData")) {
+                    pendingShare = null;
+                    notifyListeners("sharedData", data, false);
+                } else {
+                    pendingShare = data;
+                }
             }
         }
     }
@@ -101,6 +148,9 @@ public class ShareTargetPlugin extends Plugin {
                 result.put("text", text);
             }
             Uri streamUri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+            if (streamUri == null && intent.getClipData() != null && intent.getClipData().getItemCount() > 0) {
+                streamUri = intent.getClipData().getItemAt(0).getUri();
+            }
             if (streamUri != null) {
                 try {
                     final int takeFlags = intent.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION);
@@ -164,13 +214,21 @@ public class ShareTargetPlugin extends Plugin {
                 mimeType = "application/octet-stream";
             }
 
-            // If size was not available via Cursor, query ParcelFileDescriptor stat
-            if (size <= 0) {
-                try (ParcelFileDescriptor pfd = resolver.openFileDescriptor(uri, "r")) {
-                    if (pfd != null) {
-                        long statSize = pfd.getStatSize();
-                        if (statSize > 0) size = statSize;
-                    }
+            // The size a provider reports in its cursor is not always the size of the bytes it streams
+            // (edited images, re-encoded media, cloud providers). A seekable file descriptor knows the real
+            // length, so it wins. If there is none (a pipe), copy the stream into the app cache once and use
+            // the length of that copy, so what is announced is exactly what will be sent.
+            long statSize = -1;
+            try (ParcelFileDescriptor pfd = resolver.openFileDescriptor(uri, "r")) {
+                if (pfd != null) statSize = pfd.getStatSize();
+            } catch (Exception ignored) {}
+
+            if (statSize > 0) {
+                size = statSize;
+            } else {
+                try {
+                    File spooled = getOrCreateSpooledFile(context, uri);
+                    if (spooled.length() > 0) size = spooled.length();
                 } catch (Exception ignored) {}
             }
 
@@ -196,8 +254,8 @@ public class ShareTargetPlugin extends Plugin {
     @PluginMethod
     public void readChunk(PluginCall call) {
         String uriString = call.getString("uri");
-        Long offsetObj = call.getLong("offset");
-        Integer lengthObj = call.getInt("length");
+        Long offsetObj = getLongOption(call, "offset");
+        Integer lengthObj = getIntOption(call, "length");
 
         long offset = (offsetObj != null) ? offsetObj : 0L;
         int length = (lengthObj != null) ? lengthObj : 1024 * 1024;
@@ -266,7 +324,7 @@ public class ShareTargetPlugin extends Plugin {
         }
     }
 
-    private synchronized File getOrCreateSpooledFile(Context context, Uri uri) throws IOException {
+    private static synchronized File getOrCreateSpooledFile(Context context, Uri uri) throws IOException {
         String key = uri.toString();
         File existing = spooledCacheFiles.get(key);
         if (existing != null && existing.exists()) {
@@ -293,9 +351,11 @@ public class ShareTargetPlugin extends Plugin {
                 out.write(buf, 0, read);
             }
             out.flush();
+            out.getFD().sync();
         }
 
         spooledCacheFiles.put(key, tempSpool);
+        spooledCacheFiles.put(tempSpool.getAbsolutePath(), tempSpool);
         return tempSpool;
     }
 
@@ -321,12 +381,59 @@ public class ShareTargetPlugin extends Plugin {
         }
     }
 
+
+    /**
+     * Copies a shared content:// file into app-private storage with a plain InputStream (the one way every
+     * provider supports) and reports the copy's exact size. Transfers then read this local copy, so they
+     * do not depend on the sending app's file descriptor, its reported size or its URI permission lasting.
+     * Runs off the main thread; large files are copied in 64 KiB steps.
+     */
+    @PluginMethod
+    public void stageSharedFile(final PluginCall call) {
+        final String uriString = call.getString("uri");
+        if (uriString == null || uriString.trim().isEmpty()) {
+            call.reject("uri is required");
+            return;
+        }
+        new Thread(() -> {
+            try {
+                Uri uri = Uri.parse(uriString);
+                Context ctx = getContext();
+                File out = getOrCreateSpooledFile(ctx, uri);
+                long total = out.length();
+                if (total <= 0) {
+                    spooledCacheFiles.remove(uriString);
+                    spooledCacheFiles.remove(out.getAbsolutePath());
+                    out.delete();
+                    call.reject("Shared file was empty or copy was incomplete");
+                    return;
+                }
+                JSObject ret = new JSObject();
+                ret.put("path", out.getAbsolutePath());
+                ret.put("size", total);
+                call.resolve(ret);
+            } catch (Exception e) {
+                call.reject("Failed to stage shared file: " + e.getMessage(), e);
+            }
+        }).start();
+    }
+
     @PluginMethod
     public void releaseSharedUri(PluginCall call) {
         String uriString = call.getString("uri");
-        if (uriString != null) {
+        if (uriString != null && uriString.startsWith("/")) {
+            spooledCacheFiles.remove(uriString);
+            // A staged copy: delete it, but only if it really lives in our spool directory.
+            try {
+                File f = new File(uriString).getCanonicalFile();
+                spooledCacheFiles.values().removeIf(val -> val != null && val.getAbsolutePath().equals(f.getAbsolutePath()));
+                File spoolDir = new File(getContext().getCacheDir(), "shared_spool").getCanonicalFile();
+                if (f.getPath().startsWith(spoolDir.getPath() + File.separator)) f.delete();
+            } catch (Exception ignored) {}
+        } else if (uriString != null) {
             File spooled = spooledCacheFiles.remove(uriString);
             if (spooled != null && spooled.exists()) {
+                spooledCacheFiles.remove(spooled.getAbsolutePath());
                 spooled.delete();
             }
         }

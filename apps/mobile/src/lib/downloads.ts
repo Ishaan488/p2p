@@ -2,6 +2,8 @@ import { registerPlugin, Capacitor } from '@capacitor/core';
 import { ServerApi } from './api';
 import { SpeedTracker, calculateEta } from './telemetry';
 import { playTransferSuccessChime } from './audio';
+import { mimeFor } from './mime';
+import { chunkLayout } from './chunkLayout';
 import { startTransferForeground, stopTransferForeground, updateTransferForeground } from './foregroundService';
 
 const PARALLEL_CHUNKS = 4;
@@ -28,6 +30,8 @@ export interface DownloadInfo {
   transferId: string;
   totalChunks: number;
   totalSize: number;
+  /** Chunk size the PC announced; needed to place chunks at the right offsets. */
+  chunkSize?: number;
 }
 
 interface FileSaverPlugin {
@@ -42,6 +46,7 @@ interface FileSaverPlugin {
     filename: string;
     mimeType?: string;
     subDir?: string;
+    resume?: boolean;
   }): Promise<{ success: boolean; fileId: string }>;
   writeChunk(options: {
     fileId: string;
@@ -198,12 +203,15 @@ export async function downloadEncrypted(
   api: ServerApi,
   info: DownloadInfo,
   onProgress: (receivedBytes: number, speed?: number, eta?: string) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  filename?: string
 ): Promise<Blob> {
+  const type = filename ? mimeFor(filename) : '';
+  const blobLayout = chunkLayout(info.totalSize, info.totalChunks, info.chunkSize);
   if (info.totalChunks === 0 || info.totalSize === 0) {
     onProgress(0, 0, 'Done');
     playTransferSuccessChime();
-    return new Blob([]);
+    return new Blob([], { type });
   }
 
   // Reuse already downloaded chunks if resuming an interrupted session
@@ -256,6 +264,9 @@ export async function downloadEncrypted(
         }
       }
       if (!chunk) throw new Error('Chunk download failed');
+      if (chunk.length !== blobLayout.lengthOf(index)) {
+        throw new Error(`Chunk ${index} has the wrong size (${chunk.length}, expected ${blobLayout.lengthOf(index)})`);
+      }
       parts[index] = new Blob([chunk as BlobPart]);
       received += chunk.length;
 
@@ -289,7 +300,7 @@ export async function downloadEncrypted(
   if (received !== info.totalSize) throw new Error('Downloaded size does not match');
   downloadChunksCache.delete(info.transferId);
   playTransferSuccessChime();
-  return new Blob(parts as Blob[]);
+  return new Blob(parts as Blob[], { type });
 }
 
 function formatBytes(bytes: number): string {
@@ -331,8 +342,9 @@ export async function saveToDeviceDownloads(
       await FileSaver.startSaveFile({
         fileId,
         filename,
-        mimeType: mimeType || blob.type || 'application/octet-stream',
-        subDir
+        mimeType: mimeType || blob.type || mimeFor(filename) || 'application/octet-stream',
+        subDir,
+        resume: false
       });
 
       // Stream in 2MB slices — zero memory pressure even for 1GB+ files!
@@ -391,22 +403,22 @@ export async function downloadDirectToDisk(
   const fileId = `dl_${info.transferId}`;
   const subDir = options.subDir !== undefined ? options.subDir : getDownloadSubDir();
 
+  const layout = chunkLayout(info.totalSize, info.totalChunks, info.chunkSize);
+  const completed = loadChunkBitmap(info.transferId, info.totalChunks);
+  const hasProgress = completed.some(v => v === 1);
+
   await FileSaver.startSaveFile({
     fileId,
     filename: options.filename,
-    mimeType: options.mimeType || 'application/octet-stream',
-    subDir
+    mimeType: options.mimeType || mimeFor(options.filename) || 'application/octet-stream',
+    subDir,
+    resume: hasProgress
   });
-
-  const chunkSize = Math.ceil(info.totalSize / info.totalChunks);
-  const completed = loadChunkBitmap(info.transferId, info.totalChunks);
 
   let receivedBytes = 0;
   for (let i = 0; i < info.totalChunks; i++) {
     if (completed[i]) {
-      const isLast = i === info.totalChunks - 1;
-      const expectedChunkLen = isLast ? (info.totalSize - i * chunkSize) : chunkSize;
-      receivedBytes += expectedChunkLen;
+      receivedBytes += layout.lengthOf(i);
     }
   }
 
@@ -445,8 +457,11 @@ export async function downloadDirectToDisk(
         }
       }
       if (!chunk) throw new Error('Chunk download failed');
+      if (chunk.length !== layout.lengthOf(index)) {
+        throw new Error(`Chunk ${index} has the wrong size (${chunk.length}, expected ${layout.lengthOf(index)})`);
+      }
 
-      const offset = index * chunkSize;
+      const offset = layout.offsetOf(index);
       const base64Chunk = uint8ArrayToBase64(chunk);
       await FileSaver.writeChunk({ fileId, offset, base64Chunk });
 

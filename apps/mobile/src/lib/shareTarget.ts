@@ -20,6 +20,7 @@ interface ShareTargetPlugin {
   getPendingShare(): Promise<SharedDataPayload>;
   readChunk(options: { uri: string; offset: number; length: number }): Promise<{ base64Data: string; bytesRead: number }>;
   releaseSharedUri(options: { uri: string }): Promise<{ released: boolean }>;
+  stageSharedFile(options: { uri: string }): Promise<{ path: string; size: number }>;
   addListener(eventName: 'sharedData', listenerFunc: (data: SharedDataPayload) => void): Promise<PluginListenerHandle>;
 }
 
@@ -37,6 +38,23 @@ export async function releaseSharedUri(uri: string): Promise<void> {
     await ShareTarget.releaseSharedUri({ uri });
   } catch (e) {
     console.debug('Failed to release shared uri:', e);
+  }
+}
+
+/**
+ * Copies a shared file into app storage and returns the local copy with its exact size. Sending from that
+ * copy avoids every quirk of reading straight from another app's provider. Returns null if staging fails
+ * (the caller may then fall back to reading the original URI).
+ */
+export async function stageSharedFile(item: SharedFileItem): Promise<SharedFileItem | null> {
+  if (!Capacitor.isNativePlatform() || !item.uri || !item.uri.startsWith('content://')) return item;
+  try {
+    const res = await ShareTarget.stageSharedFile({ uri: item.uri });
+    if (!res.path || !(res.size > 0)) return null;
+    return { ...item, uri: res.path, path: res.path, size: res.size };
+  } catch (e) {
+    console.debug('stageSharedFile failed:', e);
+    return null;
   }
 }
 
@@ -96,7 +114,14 @@ export class NativeSharedFile {
   }
 
   async slice(start: number, end: number): Promise<Uint8Array> {
-    const length = Math.max(0, end - start);
-    return readSharedChunk(this.uri, start, length);
+    const length = Math.max(0, Math.min(end, this.size) - start);
+    // The native side can return fewer bytes than asked (provider hiccup); retry before giving up so a
+    // short read never turns into a silently truncated file.
+    let last: Uint8Array = new Uint8Array(0);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      last = await readSharedChunk(this.uri, start, length);
+      if (last.length === length) return last;
+    }
+    throw new Error(`Short read from shared file at offset ${start}: expected ${length}, got ${last.length}`);
   }
 }

@@ -1,3 +1,4 @@
+import { mimeFor } from './mime';
 import { HttpError, ServerApi } from './api';
 import { SpeedTracker, calculateEta } from './telemetry';
 import { playTransferSuccessChime } from './audio';
@@ -147,6 +148,7 @@ export interface UploadableFile {
   readonly name: string;
   readonly size: number;
   readonly lastModified?: number;
+  readonly type?: string;
   slice(start: number, end: number): Blob | Uint8Array | Promise<Blob | Uint8Array>;
 }
 
@@ -168,11 +170,15 @@ export async function materializeToBlob(file: File | UploadableFile, maxBytes: n
   try {
     const step = 1 << 20; // 1 MiB per bridge round-trip
     const parts: BlobPart[] = [];
+    let total = 0;
     for (let offset = 0; offset < file.size; offset += step) {
       const chunk = await file.slice(offset, Math.min(offset + step, file.size));
+      total += chunk instanceof Uint8Array ? chunk.length : chunk.size;
       parts.push(chunk instanceof Uint8Array ? (chunk as BlobPart) : chunk);
     }
-    return new Blob(parts);
+    // A short read would make a truncated preview; better no preview than a half image.
+    if (total !== file.size) return null;
+    return new Blob(parts, { type: mimeFor(file.name, file.type) });
   } catch (err) {
     console.debug('materializeToBlob failed:', err);
     return null;
@@ -282,6 +288,9 @@ export class Upload {
             this.speed = 0;
             this.eta = 'Instant (Dedup)';
             this.setStatus('done');
+            if ('uri' in this.file && typeof (this.file as any).uri === 'string') {
+              releaseSharedUri((this.file as any).uri);
+            }
             await removePendingUpload(this.transferId);
             playTransferSuccessChime();
             return;
@@ -418,6 +427,11 @@ export class Upload {
     const start = index * this.chunkSize;
     const rawChunk = this.file.slice(start, start + this.chunkLength(index));
     const chunk = rawChunk instanceof Promise ? await rawChunk : rawChunk;
+    // Never send a short chunk: the receiver would assemble a truncated file that looks complete.
+    const got = chunk instanceof Uint8Array ? chunk.length : chunk.size;
+    if (got !== this.chunkLength(index)) {
+      throw new Error(`Could not read the whole file (chunk ${index}: expected ${this.chunkLength(index)} bytes, got ${got}). Try sharing it again.`);
+    }
     for (let attempt = 1; ; attempt++) {
       try {
         await this.api.uploadChunk(this.transferId, index, chunk, signal);

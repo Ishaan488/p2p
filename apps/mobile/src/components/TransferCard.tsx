@@ -150,7 +150,8 @@ export const TransferCard: React.FC<TransferCardProps> = ({
 
   const isImageFile = !!file && (file.mediaKind === 'image' || /\.(jpg|jpeg|png|gif|webp|svg|bmp|heic|avif)$/i.test(file.filename));
   const isVideoFile = !!file && (file.mediaKind === 'video' || /\.(mp4|mkv|mov|webm|avi|m4v|3gp)$/i.test(file.filename));
-  const hasVisualMedia = !imageFailed && (isImageFile || isVideoFile) && !!(file?.blobUrl || file?.thumbnailUrl);
+  const thumbSrc = isVideoFile ? file?.thumbnailUrl : (file?.blobUrl || file?.thumbnailUrl);
+  const hasVisualMedia = !imageFailed && ((isImageFile && !!thumbSrc) || (isVideoFile && !!thumbSrc && !!file?.blobUrl));
   const hasRichEmbed = (!!file?.blobUrl && (file.mediaKind === 'audio' || file.mediaKind === 'pdf')) || !!file?.snippet;
 
   const isTextLong = !!item.text && item.text.length > 180;
@@ -275,7 +276,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
             onClick={openMedia}
             onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openMedia(); } }}
           >
-            <img src={file.blobUrl || file.thumbnailUrl} alt="" loading="lazy" onError={() => setImageFailed(true)} />
+            <img src={thumbSrc} alt="" loading="lazy" onError={() => setImageFailed(true)} />
             {isVideoFile && <span className="feed-thumb-play"><Play size={14} fill="currentColor" /></span>}
           </div>
           <div className="feed-file-main">
@@ -361,6 +362,9 @@ export const TransferCard: React.FC<TransferCardProps> = ({
         <ul className="rows detail-actions">
           {item.text && !file && (
             <li><button type="button" className="row" onClick={() => { handleCopy(); setDetailsOpen(false); }}><Copy size={20} className="row-icon" /><span className="row-main"><span className="row-title">Copy</span></span></button></li>
+          )}
+          {file && (isImageFile || isVideoFile) && (file.blobUrl || file.thumbnailUrl) && (
+            <li><button type="button" className="row" onClick={() => { setDetailsOpen(false); openMedia(); }}><Play size={20} className="row-icon" /><span className="row-main"><span className="row-title">{isVideoFile ? 'Play video' : 'View image'}</span></span></button></li>
           )}
           {file && !isSent && !file.isPendingApproval && (
             <li><button type="button" className="row" onClick={() => { setDetailsOpen(false); onDownload(item.id, file, true); }}><Download size={20} className="row-icon" /><span className="row-main"><span className="row-title">Save to Downloads</span></span></button></li>

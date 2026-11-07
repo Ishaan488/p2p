@@ -33,7 +33,7 @@ import {
 import { Sheet } from './components/Sheet';
 import { StateView, Switch } from './components/ui';
 import { BrandLogo } from './components/BrandLogo';
-import { checkPendingShare, onSharedData, NativeSharedFile } from './lib/shareTarget';
+import { checkPendingShare, onSharedData, NativeSharedFile, stageSharedFile } from './lib/shareTarget';
 import { Capacitor } from '@capacitor/core';
 import { Html5Qrcode } from 'html5-qrcode';
 import { Clipboard } from '@capacitor/clipboard';
@@ -479,6 +479,8 @@ export default function App() {
             const isImg = m.file.mediaKind === 'image' || isImageFilename(m.file.filename);
             if (!thumb && isImg) {
               thumb = await generateThumbnailDataUrl(cached);
+            } else if (!thumb && m.file.mediaKind === 'video') {
+              thumb = await generateVideoThumbnailDataUrl(cached);
             }
             updateFile(m.id, { blobUrl: url, thumbnailUrl: thumb || m.file.thumbnailUrl });
           }
@@ -930,12 +932,24 @@ export default function App() {
     }
   };
 
-  const handleIncomingShare = (data: { text?: string; files?: Array<{ name: string; size: number; mimeType: string; path?: string; uri?: string }> }) => {
+  const handleIncomingShare = async (data: { text?: string; files?: Array<{ name: string; size: number; mimeType: string; path?: string; uri?: string }> }) => {
     if (!data) return;
-    const files = (data.files ?? []).filter(f => f.uri || f.path).map(f => new NativeSharedFile(f));
+    const candidates = (data.files ?? []).filter(f => f.uri || f.path);
     const text = data.text?.trim() ? data.text : undefined;
+    if (!text && candidates.length === 0) return;
+    if (candidates.length > 0) showToast(`Preparing ${candidates.length} shared file${candidates.length > 1 ? 's' : ''}`, 'info');
+
+    // Copy each shared file into app storage first, so what is sent is exactly what is on disk.
+    const files: NativeSharedFile[] = [];
+    let failed = 0;
+    for (const item of candidates) {
+      const staged = await stageSharedFile(item) ?? (item.size > 0 ? item : null);
+      if (staged && staged.size > 0) files.push(new NativeSharedFile(staged));
+      else failed++;
+    }
+    if (failed > 0) showToast(`Couldn't read ${failed} shared file${failed > 1 ? 's' : ''}. Try sharing again.`, 'warning');
     if (!text && files.length === 0) return;
-    if (files.length > 0) showToast(`Receiving ${files.length} shared file${files.length > 1 ? 's' : ''}`, 'info');
+
     const existing = pendingShareRef.current;
     const share: PendingShare = existing
       ? { text: text ?? existing.text, files: [...existing.files, ...files] }
@@ -995,7 +1009,7 @@ export default function App() {
             )
           );
 
-          if (existingIdx !== -1) {
+          if (existingIdx !== -1 && prev[existingIdx].file?.status !== 'done') {
             const existing = prev[existingIdx];
             const cachedBytes = getCachedDownloadBytes(transferId, totalSize, totalChunks) ||
               (existing.file?.progress ? (existing.file.progress / 100) * totalSize : 0);
@@ -1030,6 +1044,18 @@ export default function App() {
             return next;
           }
 
+          // If the same file was already completed earlier and the user is sending it again, start a fresh transfer
+          let basePrev = prev;
+          if (existingIdx !== -1) {
+            const old = prev[existingIdx];
+            if (old.file?.blobUrl) {
+              try { URL.revokeObjectURL(old.file.blobUrl); } catch {}
+            }
+            clearDownloadCache(transferId);
+            deleteBlobFromCache(transferId).catch(() => {});
+            basePrev = prev.filter((_, idx) => idx !== existingIdx);
+          }
+
           // Brand new transfer
           const cachedBytes = getCachedDownloadBytes(transferId, totalSize, totalChunks);
           const initialProgress = totalSize > 0 ? (cachedBytes / totalSize) * 100 : 0;
@@ -1045,7 +1071,7 @@ export default function App() {
             isPendingApproval: !trust
           };
 
-          const next: TransferItem[] = [...prev, {
+          const next: TransferItem[] = [...basePrev, {
             id: itemId,
             file: fileInfo,
             sender: 'other' as const,
@@ -1209,14 +1235,17 @@ export default function App() {
     try {
       const isSmallPreviewableOnNative =
         (file.mediaKind === 'code' && file.totalSize < 512 * 1024) ||
-        ((file.mediaKind === 'audio' || file.mediaKind === 'pdf') && file.totalSize < 15 * 1024 * 1024);
+        ((file.mediaKind === 'audio' || file.mediaKind === 'pdf') && file.totalSize < 15 * 1024 * 1024) ||
+        (file.mediaKind === 'image' && file.totalSize < 25 * 1024 * 1024) ||
+        (file.mediaKind === 'video' && file.totalSize < 50 * 1024 * 1024);
 
       if (saveToDisk && Capacitor.isNativePlatform() && !isSmallPreviewableOnNative) {
         const targetLabel = downloadSubDir ? `Downloads/${downloadSubDir}` : 'Downloads';
         const res = await downloadDirectToDisk(api, {
           transferId: file.transferId,
           totalChunks: file.totalChunks,
-          totalSize: file.totalSize
+          totalSize: file.totalSize,
+          chunkSize: file.chunkSize
         }, {
           filename: file.filename,
           subDir: downloadSubDir
@@ -1238,11 +1267,12 @@ export default function App() {
       const blob = await downloadEncrypted(api, {
         transferId: file.transferId,
         totalChunks: file.totalChunks,
-        totalSize: file.totalSize
+        totalSize: file.totalSize,
+        chunkSize: file.chunkSize
       }, (received, speed, eta) => {
         const pct = file.totalSize > 0 ? (received / file.totalSize) * 100 : 100;
         updateFile(id, { progress: pct, speed, eta, status: 'downloading' });
-      }, abortCtrl.signal);
+      }, abortCtrl.signal, file.filename);
 
       activeDownloads.delete(id);
 
@@ -1576,11 +1606,14 @@ export default function App() {
     let fullContent: string | undefined = undefined;
     let totalLines: number | undefined = undefined;
 
+    let materializedBlob: Blob | null = null;
+
     // Builds ONE local preview (thumbnail, inline player, code snippet) for all recipients - including a file
     // shared in from Android's share sheet, which arrives as a NativeSharedFile rather than a real Blob/File.
     if (kind === 'image' && file.size < 50 * 1024 * 1024) {
       const blob = await materializeToBlob(file, 50 * 1024 * 1024);
       if (blob) {
+        materializedBlob = blob;
         blobUrl = URL.createObjectURL(blob);
         thumbnailUrl = await generateThumbnailDataUrl(blob);
         saveBlobToCache(baseId, blob);
@@ -1588,6 +1621,7 @@ export default function App() {
     } else if ((kind === 'audio' || kind === 'video' || kind === 'pdf') && file.size < 120 * 1024 * 1024) {
       const blob = await materializeToBlob(file, 120 * 1024 * 1024);
       if (blob) {
+        materializedBlob = blob;
         blobUrl = URL.createObjectURL(blob);
         if (kind === 'video') {
           thumbnailUrl = await generateVideoThumbnailDataUrl(blob);
@@ -1597,12 +1631,21 @@ export default function App() {
     } else if (kind === 'code' && file.size < 1024 * 1024) {
       const blob = await materializeToBlob(file, 1024 * 1024);
       if (blob) {
+        materializedBlob = blob;
         const extracted = await extractTextSnippet(blob);
         snippet = extracted.snippet;
         fullContent = extracted.fullContent;
         totalLines = extracted.totalLines;
       }
     }
+
+    const persistableFile =
+      !(file instanceof Blob) && materializedBlob
+        ? new File([materializedBlob], file.name, {
+            type: materializedBlob.type || file.type || 'application/octet-stream',
+            lastModified: file.lastModified || Date.now()
+          })
+        : file;
 
     for (const peer of fresh) {
       const peerApi = apiFor(peer.id);
@@ -1614,7 +1657,7 @@ export default function App() {
       const msgId = `msg-${transferId}`;
 
       // Persist pending upload metadata & blob for cold restart recovery (FR 19, NFR 16); one stored copy per file.
-      savePendingUpload(transferId, msgId, file, priority, { peerId: peer.id, blobKey: baseId }).catch(() => {});
+      savePendingUpload(transferId, msgId, persistableFile, priority, { peerId: peer.id, blobKey: baseId }).catch(() => {});
 
       const upload = new Upload(peerApi, file, transferId, p => {
         const progress = p.status === 'queued' ? {} : { progress: p.totalBytes ? (p.sentBytes / p.totalBytes) * 100 : 100 };

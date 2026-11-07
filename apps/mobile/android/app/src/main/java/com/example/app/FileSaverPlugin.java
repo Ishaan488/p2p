@@ -57,6 +57,27 @@ public class FileSaverPlugin extends Plugin {
         return cleaned.replaceAll("[<>:\"|?*]", "_");
     }
 
+    /**
+     * Capacitor's PluginCall.getLong() only checks `value instanceof Long`, which returns null whenever
+     * org.json.JSONObject parses a JS number fitting in 32-bit int (< 2 GiB) as java.lang.Integer.
+     * This helper extracts any numeric or string representation accurately as a 64-bit Long.
+     */
+    private static Long getLongOption(PluginCall call, String name) {
+        if (call == null || call.getData() == null || !call.getData().has(name) || call.getData().isNull(name)) {
+            return null;
+        }
+        Object value = call.getData().opt(name);
+        if (value instanceof Number) {
+            return ((Number) value).longValue();
+        }
+        if (value instanceof String) {
+            try {
+                return Long.parseLong(((String) value).trim());
+            } catch (NumberFormatException ignored) {}
+        }
+        return null;
+    }
+
     @PluginMethod
     public void saveToDownloads(PluginCall call) {
         String filename = call.getString("filename");
@@ -177,19 +198,35 @@ public class FileSaverPlugin extends Plugin {
         String filename = call.getString("filename");
         String mimeType = call.getString("mimeType");
         String subDir = sanitizeSubDir(call.getString("subDir"));
+        boolean resume = Boolean.TRUE.equals(call.getBoolean("resume", false));
 
         if (fileId == null || fileId.trim().isEmpty() || filename == null || filename.trim().isEmpty()) {
             call.reject("fileId and filename are required");
             return;
         }
 
-        if (activeChannels.containsKey(fileId) || activeStreams.containsKey(fileId)) {
+        if (resume && (activeChannels.containsKey(fileId) || activeStreams.containsKey(fileId))) {
             JSObject ret = new JSObject();
             ret.put("success", true);
             ret.put("fileId", fileId);
             ret.put("resumed", true);
             call.resolve(ret);
             return;
+        }
+
+        if (!resume) {
+            // Ensure any stale handle from an earlier non-resumed run with the same fileId is closed cleanly
+            FileChannel oldCh = activeChannels.remove(fileId);
+            ParcelFileDescriptor oldPfd = activePfds.remove(fileId);
+            RandomAccessFile oldRaf = activeRaws.remove(fileId);
+            OutputStream oldOs = activeStreams.remove(fileId);
+            try { if (oldCh != null) oldCh.close(); } catch (Exception ignored) {}
+            try { if (oldPfd != null) oldPfd.close(); } catch (Exception ignored) {}
+            try { if (oldRaf != null) oldRaf.close(); } catch (Exception ignored) {}
+            try { if (oldOs != null) oldOs.close(); } catch (Exception ignored) {}
+            activeUris.remove(fileId);
+            activeContentValues.remove(fileId);
+            activeFiles.remove(fileId);
         }
 
         if (mimeType == null || mimeType.trim().isEmpty()) {
@@ -202,8 +239,35 @@ public class FileSaverPlugin extends Plugin {
 
         SharedPreferences prefs = getContext().getSharedPreferences("p2p_filesaver_resumption", Context.MODE_PRIVATE);
 
-        // Check if an existing file descriptor is already open/persisted for this fileId
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (!resume) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                String staleUriStr = prefs.getString("uri_" + fileId, null);
+                if (staleUriStr != null) {
+                    try {
+                        getContext().getContentResolver().delete(Uri.parse(staleUriStr), null, null);
+                    } catch (Exception ignored) {}
+                }
+            } else {
+                String staleFilePath = prefs.getString("file_" + fileId, null);
+                if (staleFilePath != null) {
+                    try {
+                        File f = new File(staleFilePath);
+                        if (f.exists()) f.delete();
+                    } catch (Exception ignored) {}
+                }
+            }
+            prefs.edit()
+                .remove("uri_" + fileId)
+                .remove("path_" + fileId)
+                .remove("name_" + fileId)
+                .remove("mime_" + fileId)
+                .remove("subdir_" + fileId)
+                .remove("file_" + fileId)
+                .apply();
+        }
+
+        // Check if an existing file descriptor is already open/persisted for this fileId when resuming
+        if (resume && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             String savedUriStr = prefs.getString("uri_" + fileId, null);
             if (savedUriStr != null) {
                 try {
@@ -231,7 +295,7 @@ public class FileSaverPlugin extends Plugin {
                     prefs.edit().remove("uri_" + fileId).apply();
                 }
             }
-        } else {
+        } else if (resume) {
             String savedFilePath = prefs.getString("file_" + fileId, null);
             if (savedFilePath != null) {
                 File targetFile = new File(savedFilePath);
@@ -357,7 +421,7 @@ public class FileSaverPlugin extends Plugin {
     public void writeChunk(PluginCall call) {
         String fileId = call.getString("fileId");
         String base64Chunk = call.getString("base64Chunk");
-        Long offset = call.hasOption("offset") ? call.getLong("offset") : null;
+        Long offset = getLongOption(call, "offset");
 
         if (fileId == null || base64Chunk == null) {
             call.reject("fileId and base64Chunk are required");
@@ -381,20 +445,29 @@ public class FileSaverPlugin extends Plugin {
             ByteBuffer buffer = ByteBuffer.wrap(bytes);
 
             if (channel != null) {
-                if (offset != null && offset >= 0) {
-                    long currentPos = offset;
-                    while (buffer.hasRemaining()) {
-                        int written = channel.write(buffer, currentPos);
-                        if (written <= 0) break;
-                        currentPos += written;
-                    }
-                } else {
-                    while (buffer.hasRemaining()) {
-                        channel.write(buffer);
+                synchronized (channel) {
+                    if (offset != null && offset >= 0) {
+                        long currentPos = offset;
+                        while (buffer.hasRemaining()) {
+                            int written = channel.write(buffer, currentPos);
+                            if (written <= 0) {
+                                throw new java.io.IOException("Failed to write bytes at offset " + currentPos);
+                            }
+                            currentPos += written;
+                        }
+                    } else {
+                        while (buffer.hasRemaining()) {
+                            int written = channel.write(buffer);
+                            if (written <= 0) {
+                                throw new java.io.IOException("Failed to write bytes to channel");
+                            }
+                        }
                     }
                 }
             } else if (os != null) {
-                os.write(bytes);
+                synchronized (os) {
+                    os.write(bytes);
+                }
             }
 
             JSObject ret = new JSObject();
@@ -409,7 +482,7 @@ public class FileSaverPlugin extends Plugin {
     @PluginMethod
     public void finishSaveFile(PluginCall call) {
         String fileId = call.getString("fileId");
-        Long expectedSize = call.hasOption("expectedSize") ? call.getLong("expectedSize") : null;
+        Long expectedSize = getLongOption(call, "expectedSize");
         if (fileId == null) {
             call.reject("fileId is required");
             return;
@@ -490,12 +563,23 @@ public class FileSaverPlugin extends Plugin {
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 Uri uri = activeUris.remove(fileId);
-                ContentValues contentValues = activeContentValues.remove(fileId);
-                if (uri != null && contentValues != null) {
+                activeContentValues.remove(fileId);
+                if (uri != null) {
                     ContentResolver resolver = getContext().getContentResolver();
-                    contentValues.clear();
-                    contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0);
-                    resolver.update(uri, contentValues, null, null);
+                    ContentValues cv = new ContentValues();
+                    cv.put(MediaStore.MediaColumns.IS_PENDING, 0);
+                    resolver.update(uri, cv, null, null);
+                }
+                if (savedPath != null) {
+                    File publicFile = new File(Environment.getExternalStorageDirectory(), savedPath);
+                    if (publicFile.exists()) {
+                        MediaScannerConnection.scanFile(
+                            getContext(),
+                            new String[]{publicFile.getAbsolutePath()},
+                            new String[]{mimeType},
+                            null
+                        );
+                    }
                 }
             } else {
                 File targetFile = activeFiles.remove(fileId);
