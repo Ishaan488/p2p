@@ -1,15 +1,50 @@
-import React, { useEffect, useRef } from 'react';
-import { ArrowLeft, Bug, Code2, ExternalLink, Mail, MessageSquare } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { ArrowLeft, Bug, Code2, ExternalLink, Mail, MessageSquare, RefreshCw } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
 import { backButtonManager } from '../lib/backButton';
 import { APP_VERSION, CONTACT_EMAIL, DEVELOPER_NAME, ISSUES_URL, REPO_URL, feedbackMailto } from '../lib/appInfo';
 import { BrandLogo } from './BrandLogo';
+import { checkForUpdates, downloadAndInstallUpdate, type UpdateCheckResult } from '../lib/updates';
 
-/** About: who made it, where the code lives, and the easiest ways to say something back. */
+/** About: who made it, where the code lives, updates, and the easiest ways to say something back. */
 export const AboutPage: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   useEffect(() => backButtonManager.push(() => { closeRef.current(); return true; }), []);
+
+  const [checking, setChecking] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [checkStatus, setCheckStatus] = useState<string>('Tap to check GitHub releases');
+
+  const handleCheckUpdates = async () => {
+    if (checking) return;
+    setChecking(true);
+    setCheckStatus('Checking GitHub...');
+    try {
+      const res = await checkForUpdates(true);
+      if (!res) {
+        setCheckStatus('Unable to reach GitHub');
+      } else {
+        setUpdateInfo(res);
+        setCheckStatus(res.hasUpdate ? `Version ${res.latestVersion} is available!` : `You're on the latest version`);
+      }
+    } catch {
+      setCheckStatus('Check failed');
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const handleDownload = async () => {
+    if (!updateInfo) return;
+    setDownloading(true);
+    try {
+      await downloadAndInstallUpdate(updateInfo.apkDownloadUrl, updateInfo.htmlUrl);
+    } finally {
+      setTimeout(() => setDownloading(false), 2000);
+    }
+  };
 
   const platform = Capacitor.isNativePlatform() ? Capacitor.getPlatform() : 'web';
 
@@ -26,6 +61,39 @@ export const AboutPage: React.FC<{ onClose: () => void }> = ({ onClose }) => {
           <h3 className="about-name">P2P Link</h3>
           <p className="about-sub">Version {APP_VERSION}</p>
           <p className="about-line">Fast, private file sharing between your phone and computer. No cloud, no accounts.</p>
+        </div>
+
+        <div className="section-label">Updates</div>
+        <div className="group settings-group">
+          <div className="row" style={{ cursor: 'pointer' }} onClick={handleCheckUpdates}>
+            <RefreshCw size={20} className={`row-icon${checking ? ' spin' : ''}`} />
+            <span className="row-main">
+              <span className="row-title">{updateInfo?.hasUpdate ? `Update to v${updateInfo.latestVersion}` : 'Check for updates'}</span>
+              <span className="row-sub">{checkStatus}</span>
+            </span>
+            {updateInfo?.hasUpdate ? (
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={downloading}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDownload();
+                }}
+              >
+                {downloading ? 'Downloading…' : 'Install Update'}
+              </button>
+            ) : (
+              <span className="row-value">v{APP_VERSION}</span>
+            )}
+          </div>
+          {updateInfo?.hasUpdate && updateInfo.releaseNotes && (
+            <div className="row" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}>
+              <span className="row-sub" style={{ whiteSpace: 'pre-line', fontSize: '12px', opacity: 0.85, maxHeight: '120px', overflowY: 'auto' }}>
+                {updateInfo.releaseNotes}
+              </span>
+            </div>
+          )}
         </div>
 
         <div className="section-label">Developer</div>

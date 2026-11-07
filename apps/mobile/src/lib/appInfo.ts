@@ -1,5 +1,5 @@
 /** Static facts about the app and its maker, shown on the About page. */
-export const APP_VERSION = '1.0.0';
+export const APP_VERSION = '1.0.1';
 export const DEVELOPER_NAME = 'Ishaan';
 export const REPO_URL = 'https://github.com/Ishaan488/p2p';
 export const ISSUES_URL = `${REPO_URL}/issues/new`;

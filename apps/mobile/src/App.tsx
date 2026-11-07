@@ -69,6 +69,7 @@ import { SendTextModal } from './components/SendTextModal';
 import { ConfirmationDialog } from './components/ConfirmationDialog';
 import { PreferencesModal } from './components/PreferencesModal';
 import { ConnectionScreen } from './components/ConnectionScreen';
+import { checkForUpdates, downloadAndInstallUpdate } from './lib/updates';
 
 function isImageFilename(name: string): boolean {
   return /\.(jpg|jpeg|png|gif|webp|svg|bmp)$/i.test(name);
@@ -452,6 +453,26 @@ export default function App() {
     if (Capacitor.isNativePlatform()) {
       FileSaver.cleanupAbandonedPendingDownloads().catch(() => {});
     }
+  }, []);
+
+  // Automatic background update check (throttled to 4 hours)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      checkForUpdates(false).then((res) => {
+        if (res?.hasUpdate) {
+          showToast(`P2P Link v${res.latestVersion} is available`, 'info', {
+            action: {
+              label: 'Update',
+              onClick: () => {
+                downloadAndInstallUpdate(res.apkDownloadUrl, res.htmlUrl);
+              },
+            },
+            durationMs: 9000,
+          });
+        }
+      }).catch(() => {});
+    }, 2500);
+    return () => clearTimeout(timer);
   }, []);
 
   // Batch progress listener
