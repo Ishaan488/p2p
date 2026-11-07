@@ -289,7 +289,7 @@ func showTrayContextMenu(hwnd uintptr) {
 		procAppendMenuW.Call(hMenu, flags, id, uintptr(unsafe.Pointer(ptr)))
 	}
 
-	appendItem(mfString, menuCmdOpenUI, fmt.Sprintf("Open P2P Link Web UI (Port %d)", trayServerPort))
+	appendItem(mfString, menuCmdOpenUI, fmt.Sprintf("Open P2P Link Desktop Companion (Port %d)", trayServerPort))
 	if consoleVisible {
 		appendItem(mfString, menuCmdToggleWindow, "Hide Terminal Window")
 	} else {
@@ -323,7 +323,7 @@ func trayWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 	case wmAppTrayCallback:
 		switch uint32(lParam) {
 		case wmLButtonDblClk:
-			_ = openBrowser(fmt.Sprintf("%s://localhost:%d", httpScheme(), trayServerPort))
+			_ = openBrowser(fmt.Sprintf("%s://localhost:%d/desktop", httpScheme(), trayServerPort))
 		case wmRButtonUp, wmLButtonUp:
 			showTrayContextMenu(hwnd)
 		}
@@ -331,7 +331,7 @@ func trayWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 	case wmCommand:
 		switch int(wParam & 0xffff) {
 		case menuCmdOpenUI:
-			_ = openBrowser(fmt.Sprintf("%s://localhost:%d", httpScheme(), trayServerPort))
+			_ = openBrowser(fmt.Sprintf("%s://localhost:%d/desktop", httpScheme(), trayServerPort))
 		case menuCmdToggleWindow:
 			toggleConsoleVisibility()
 		case menuCmdShowQR:

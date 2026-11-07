@@ -108,7 +108,7 @@ func handleCommand(text string) {
 	case "clear", "cls":
 		fmt.Print("\033[H\033[2J")
 	case "open", "ui":
-		url := fmt.Sprintf("%s://localhost:%d", httpScheme(), *port)
+		url := fmt.Sprintf("%s://localhost:%d/desktop", httpScheme(), *port)
 		printSync(Green, "● Browser", url, "opened")
 		if err := openBrowser(url); err != nil {
 			printSync(Red, "! Error", fmt.Sprintf("Failed to open browser: %v", err), "")

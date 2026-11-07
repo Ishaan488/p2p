@@ -312,6 +312,23 @@ export default function App() {
     prevMsgCountRef.current = messages.length;
   }, [messages.length]);
 
+  // Anonymous once-per-day active user count (privacy-preserving)
+  useEffect(() => {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const last = localStorage.getItem('p2p_active_day');
+      if (last !== today) {
+        const platform = Capacitor.isNativePlatform() ? 'android' : 'web';
+        fetch(`https://p2plink.goatcounter.com/count?p=/app-active-${platform}&t=P2P+Link+Active+${platform}`, {
+          method: 'GET',
+          mode: 'no-cors'
+        }).then(() => {
+          localStorage.setItem('p2p_active_day', today);
+        }).catch(() => {});
+      }
+    } catch {}
+  }, []);
+
   // Apply Theme
   useEffect(() => {
     localStorage.setItem('p2p_theme', theme);

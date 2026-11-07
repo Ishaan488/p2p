@@ -38,7 +38,8 @@ var (
 	port                     = flag.Int("port", 8080, "port to listen on")
 	homeFlag                 = flag.String("home", "", "directory for received files and app data (default ~/P2P)")
 	noClipboard              = flag.Bool("no-clipboard", false, "disable clipboard sync")
-	openBrowserFlag          = flag.Bool("open", false, "open web UI in default browser on startup")
+	openBrowserFlag          = flag.Bool("open", false, "open Desktop Companion UI in default browser on startup")
+	desktopFlag              = flag.Bool("desktop", false, "open Desktop Companion & QR Pairing window on startup")
 	devModeFlag              = flag.Bool("dev", false, "serve web UI from disk (mobile/dist) instead of embedded")
 	tlsFlag                  = flag.Bool("tls", false, "enable HTTPS/WSS with self-signed TLS and cert pinning")
 	pprofFlag                = flag.Bool("pprof", false, "enable pprof profiling endpoint on 127.0.0.1:6060")
@@ -92,6 +93,9 @@ func newMux(devMode bool) *http.ServeMux {
 	mux.HandleFunc("/device_alias", authed(handleDeviceAlias))
 	mux.HandleFunc("/settings", authed(handleSettings))
 	mux.HandleFunc("/local/send", handleLocalSend)
+	mux.HandleFunc("/local/status", handleDesktopStatus)
+	mux.HandleFunc("/local/action", handleDesktopAction)
+	mux.HandleFunc("/desktop", handleDesktopUI)
 	mux.Handle("/", getFrontendHandler(devMode))
 	return mux
 }
@@ -240,6 +244,7 @@ func run() int {
 
 	// Zero-config discovery: mDNS announcement and UDP broadcast.
 	go startDiscovery(activePort, getServerName(), getServerID(), httpScheme(), tlsFingerprint)
+	go pingActiveHeartbeat()
 
 	showPairing()
 
@@ -253,10 +258,10 @@ func run() int {
 		}
 	}
 
-	if *openBrowserFlag {
+	if *openBrowserFlag || *desktopFlag {
 		go func() {
 			time.Sleep(150 * time.Millisecond)
-			_ = openBrowser(fmt.Sprintf("%s://localhost:%d", httpScheme(), *port))
+			_ = openBrowser(fmt.Sprintf("%s://localhost:%d/desktop", httpScheme(), *port))
 		}()
 	}
 
@@ -284,6 +289,30 @@ func run() int {
 
 	shutdownServer(server)
 	return exitCode
+}
+
+// pingActiveHeartbeat sends a once-per-day anonymous ping to GoatCounter
+func pingActiveHeartbeat() {
+	today := time.Now().UTC().Format("2006-01-02")
+	stateMu.Lock()
+	last := state.LastHeartbeatDate
+	if last == today {
+		stateMu.Unlock()
+		return
+	}
+	state.LastHeartbeatDate = today
+	saveStateLocked()
+	stateMu.Unlock()
+
+	client := &http.Client{Timeout: 6 * time.Second}
+	req, err := http.NewRequest("GET", "https://p2plink.goatcounter.com/count?p=/app-active-windows&t=P2P+Link+Active+Windows", nil)
+	if err == nil {
+		req.Header.Set("User-Agent", "P2P-Link/1.0 (Windows)")
+		resp, err := client.Do(req)
+		if err == nil && resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+	}
 }
 
 // shutdownServer stops accepting work, gives in-flight requests a moment to

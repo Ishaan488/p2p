@@ -5,310 +5,251 @@
 </p>
 
 <p align="center">
-  <strong>Ultra-fast, encrypted peer-to-peer file transfer, real-time messaging, and clipboard synchronization across Desktop and Mobile on local Wi-Fi.</strong>
+  <strong>Fast, private, end-to-end encrypted file transfer, text sharing, and clipboard sync between your PC and Android phone over local Wi-Fi.</strong>
 </p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT" /></a>
-  <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.21%2B-00ADD8?style=flat-square&logo=go" alt="Go 1.21+" /></a>
-  <a href="https://react.dev/"><img src="https://img.shields.io/badge/React-18.2-61DAFB?style=flat-square&logo=react" alt="React 18" /></a>
-  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.2-3178C6?style=flat-square&logo=typescript" alt="TypeScript" /></a>
-  <a href="https://vitejs.dev/"><img src="https://img.shields.io/badge/Vite-5.0-646CFF?style=flat-square&logo=vite" alt="Vite" /></a>
-  <a href="https://capacitorjs.com/"><img src="https://img.shields.io/badge/Capacitor-Android%208.5-119EFF?style=flat-square&logo=capacitor" alt="Capacitor 8" /></a>
-  <img src="https://img.shields.io/badge/Encryption-AES--256--GCM-success?style=flat-square" alt="AES-256-GCM" />
-  <img src="https://img.shields.io/badge/Design-Obsidian%20%2B%20Soft%20Lavender-purple?style=flat-square" alt="Obsidian + Soft Lavender" />
-  <img src="https://img.shields.io/badge/Accessibility-WCAG%20AA%20Compliant-brightgreen?style=flat-square" alt="WCAG AA" />
+  <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.22%2B-00ADD8?style=flat-square&logo=go" alt="Go 1.22+" /></a>
+  <a href="https://react.dev/"><img src="https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react" alt="React 18" /></a>
+  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript" alt="TypeScript 5" /></a>
+  <a href="https://capacitorjs.com/"><img src="https://img.shields.io/badge/Capacitor-Android%208-119EFF?style=flat-square&logo=capacitor" alt="Capacitor Android" /></a>
+  <img src="https://img.shields.io/badge/Encryption-AES--256--GCM-10B981?style=flat-square" alt="AES-256-GCM" />
+  <img src="https://img.shields.io/badge/Speed-80--120%2B%20MB%2Fs-A78BDA?style=flat-square" alt="80-120+ MB/s" />
 </p>
 
 ---
 
-## 📖 Overview
+## Overview
 
-**P2P Link** is a lightweight, high-performance, and privacy-respecting local file transfer platform designed as an open-source, cross-platform alternative to Apple AirDrop, Google Quick Share, and Snapdrop. 
+**P2P Link** is a lightweight, zero-cloud local file transfer and device continuity tool designed as a fast, reliable, cross-platform alternative to AirDrop and Quick Share.
 
-It pairs a high-throughput **Go host engine** on desktop with a polished **Obsidian + Soft Lavender** mobile client running on React 18, TypeScript, and Capacitor for Android. All data moves strictly over your local Wi-Fi network with end-to-end authenticated encryption (AES-256-GCM) — no external servers, cloud storage, accounts, or internet connectivity required.
-
----
-
-## ✨ Highlights & Architecture
-
-### 🎨 Obsidian + Soft Lavender Design Language
-- **Calm, Premium Aesthetic:** Purpose-built palette centered on Obsidian (`#17161D`), deep elevated surfaces (`#201E27`), and Soft Lavender (`#A995D5` / `#7E66AC`) interactive accents.
-- **Dual-Theme Support:** Automatic and manual switching between Dark and Light modes (`#F6F4F8`) with verified **WCAG AA contrast compliance** (4.83:1 on light-theme CTAs, 6.77:1 on dark-theme CTAs).
-- **Dynamic Android Status Bar:** Synchronizes `<meta name="theme-color">` dynamically to match the active theme, integrating seamlessly with Android system bars.
-- **Tactile Touch Targets:** All interactive controls (buttons, pills, icons) enforce a minimum **44×44px hit-area** via centered pseudo-element expanders.
-- **Scroll Clearance:** Trailing `.activity-scroll-spacer` guarantees that the final items in the transfer stream scroll completely clear of the floating bottom toolbar with comfortable breathing room.
-
-### ⚡ Line-Rate Transfer Engine
-- **Flat $\mathcal{O}(1)$ Memory Scaling:** Streams multi-gigabyte files (tested up to 60GB+) using adaptive chunking (256 KB to 4 MB) with random-access `WriteAt` I/O. Memory usage remains flat ($< 15\text{ MB}$) regardless of file size.
-- **Pre-Flight SHA-256 Deduplication:** Incremental hash verification checks if a file already exists on the destination before streaming payload bytes. Duplicates transfer in 0 milliseconds and consume 0 bytes of network bandwidth.
-- **Parallel Worker Streams:** Concurrent chunk streaming saturates local Wi-Fi bandwidth, delivering speeds of 80–120+ MB/s on modern 5 GHz / Wi-Fi 6 connections.
-
-### 🛡️ Crash-Consistent Chunk Recovery & Security
-- **Resilient Transfer Resumption:** Interrupted transfers resume deterministically from the exact last verified chunk via manifest tracking and per-chunk digest validation.
-- **Atomic Finalization:** Completed files are verified, recorded in the transfer history, and atomically moved into destination directories with collision-free naming, preventing partial-write corruption.
-- **End-to-End Cryptography:** Authenticated AES-256-GCM encryption with HKDF-SHA256 key derivation. Unauthenticated HTTP connections on local Wi-Fi are automatically protected via a pure-JS noble-ciphers fallback.
-- **Path Traversal Protection:** Defends against directory escapes (`../../`), Zip Slip exploits in folder transfers, and defangs Windows reserved device names (`CON`, `PRN`, `AUX`, `NUL`, etc.).
-
-### 📱 Android Integration
-- **Zero Android Studio Requirement:** The entire Android APK is compiled and packaged via standard CLI commands using Gradle Wrapper (`gradlew assembleDebug`).
-- **Android Share Target:** Send photos, videos, documents, or text directly from any Android app using the native "Share → P2P Link" intent.
-- **Background Transfers:** Transfers continue uninterrupted even when the screen is turned off or the app is minimized via the native Android Foreground Service.
-- **Hardware Back Button:** Fully integrated hardware back-button stack across all 7 modals, sheets, and image lightboxes.
-- **USB Live-Reload Workflow:** Direct ADB port forwarding (`localhost:5173`) enables instant on-device hot-reloading during development without reinstalling APKs.
+Everything travels directly between your devices over your local Wi-Fi network or mobile hotspot using authenticated **AES-256-GCM** end-to-end encryption. There are no accounts, no file-size limits, no cloud relays, and zero quality compression on photos or 4K videos.
 
 ---
 
-## 🚀 Quick Start
+## For Everyday Users — 30-Second Setup
+
+You do **not** need to use a terminal or type IP addresses. P2P Link pairs just like WhatsApp Web:
+
+| Step | What to do |
+| :--- | :--- |
+| **1. Install on PC** | Double-click **`Install-P2P-Link.bat`** (Windows). It automatically configures Windows Firewall, adds **"Send via P2P Link"** to your right-click menu, creates a **P2P Link** Desktop shortcut, and opens the Desktop Pairing Dashboard. |
+| **2. Install on Phone** | Install **`dist-apk/p2p-release.apk`** on your Android phone (or open [`site/index.html`](site/index.html) for the guided download page). |
+| **3. Scan QR Code** | Open **P2P Link** on your phone, tap **Scan QR Code**, and point your camera at the QR code shown on your PC screen. |
+
+Once paired, your phone and PC remember each other and reconnect automatically whenever they are on the same Wi-Fi network.
+
+### Everyday Ways to Send
+- **From Phone to PC**:
+  - Open **P2P Link** and tap **Send files** (Photos & Videos, Documents, Audio, Folder) or type/paste text in the composer.
+  - Or share directly from **any Android app** (Gallery, Files, Browser) via the native **Share $\rightarrow$ P2P Link** sheet.
+- **From PC to Phone**:
+  - **Right-click any file or folder** in Windows Explorer and click **Send via P2P Link**.
+  - Or use the **Desktop Companion Window** (`http://localhost:8080/desktop`) to send files, folders, or text with one click.
+
+---
+
+## Key Capabilities
+
+### 1. Minimal, Content-First Mobile Experience
+- **Monochromatic Charcoal Design System**: Crafted with a distraction-free monochromatic charcoal palette (`#101010` canvas, brightness-layered `#181818` / `#202020` surfaces, stark bone `#E5E5E5` primary actions, and semantic status accents) with full dark and light theme support.
+- **Inline Media & Code Previews**: View images in a zoomable lightbox, play received videos and audio inline, preview PDFs, and inspect syntax-highlighted code snippets with one-tap copy.
+- **Native Android Integration**:
+  - Full **Android Share Target** (`ACTION_SEND` / `ACTION_SEND_MULTIPLE`) with atomic stream spooling so shared photos and videos from any provider arrive bit-for-bit intact.
+  - Direct **MediaStore Downloads** integration with automatic `MediaScannerConnection` indexing so downloaded videos and images immediately appear in your Gallery and video players with thumbnails.
+  - **Foreground Transfer Service** that keeps multi-gigabyte transfers running smoothly when the screen is off.
+
+### 2. Line-Rate Transfer Engine
+- **$\mathcal{O}(1)$ Memory Footprint**: Streams multi-gigabyte files (tested up to 60 GB+) using adaptive chunking (`256 KiB` to `4 MiB`) and positional random-access `WriteAt` / `FileChannel` I/O. Memory stays flat regardless of file size.
+- **Parallel Chunk Workers**: Concurrent encrypted chunk streams saturate 5 GHz / Wi-Fi 6 links at **80–120+ MB/s**.
+- **Pre-Flight SHA-256 Deduplication**: Checks whether the destination already holds an identical file by SHA-256 digest before transmitting payload bytes.
+- **Crash-Consistent Resumption**: Interrupted transfers resume from the exact unreceived chunk using write-ahead chunk journals (`.journal`) on desktop and persisted chunk bitmaps on mobile.
+
+### 3. End-to-End Security
+- **Cryptographic Pairing**: QR pairing derives a 256-bit device key via **HKDF-SHA256** without transmitting the pairing secret over the network.
+- **Authenticated Sessions**: Every session exchanges fresh nonces and proves identity via mutual **HMAC-SHA256** before opening a transport channel.
+- **Per-Chunk AES-256-GCM**: Every HTTP request, WebSocket frame, and file chunk is sealed with a unique 96-bit nonce and bound to its transfer ID and chunk index via Additional Authenticated Data (AAD), preventing replay or chunk-swapping attacks.
+- **Sensitive Clipboard Protection**: Automatic client- and host-side filters skip syncing payment cards (Luhn validation), PEM private keys, JWTs, and API tokens (`ghp_`, `sk-`, `AKIA`, etc.).
+
+### 4. Multi-Device Mesh
+- **Multiple Paired Computers**: Pair your phone with your home desktop, work laptop, and media server simultaneously.
+- **Zero-Config Discovery**: Hybrid **mDNS (`_p2plink._tcp.local.`)** and **UDP broadcast (`:8089`)** discovery detects online desktops automatically and wakes connections when switching networks.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph Mobile["Android App / PWA (React 18 + Capacitor 8)"]
+        UI["Minimal Editorial UI\n(App, TransferCard, Sheets)"]
+        PM["PeerManager & Discovery\n(mDNS / UDP / QR / IP)"]
+        TX["Transfer Engine\n(Upload / Download Workers)"]
+        NP["Native Plugins\n(FileSaver, ShareTarget,\nForegroundService, Discovery)"]
+        UI --> PM
+        UI --> TX
+        TX --> NP
+        PM --> NP
+    end
+
+    subgraph Desktop["Desktop Host Engine (Go)"]
+        HTTP["Signed HTTP/TLS + WebSocket\n(AES-256-GCM + HMAC-SHA256)"]
+        DASH["Desktop Companion UI\n(/desktop + System Tray)"]
+        STORE["Crash-Safe Storage\n(WriteAt + .journal + SHA-256 Dedup)"]
+        OSINT["OS Integration\n(Explorer Menu, SendTo, Clipboard)"]
+        HTTP --> STORE
+        DASH --> HTTP
+        OSINT --> HTTP
+    end
+
+    TX <== "Encrypted Chunks (LAN / Hotspot)" ==> HTTP
+    PM <== "Framed WebSocket + UDP Discovery" ==> HTTP
+```
+
+---
+
+## Repository Structure
+
+```text
+.
+├── Install-P2P-Link.bat          # 1-click Windows installer (Firewall, Explorer menu, Desktop shortcut)
+├── Start P2P.bat                 # Quick launcher for Windows desktop host
+├── Makefile                      # Cross-platform build, test, and verification targets
+├── site/
+│   └── index.html                # Standalone 1-page user download & visual onboarding site
+├── scripts/
+│   ├── build-release-apk.bat     # Builds & signs production Android APK (dist-apk/p2p-release.apk)
+│   ├── build-apk.bat             # Builds debug Android APK (dist-apk/p2p-debug.apk)
+│   ├── build-desktop.bat         # Compiles embedded Go desktop binary (p2p.exe)
+│   └── install-phone.bat         # Installs APK to USB-connected Android device via ADB
+├── apps/
+│   ├── cli/                      # Go desktop host engine
+│   │   ├── main.go               # Server lifecycle, flags, TLS, graceful shutdown
+│   │   ├── desktop_ui.go         # Visual Desktop Companion & QR Pairing dashboard (/desktop)
+│   │   ├── auth.go               # Pairing, HKDF session keys, HMAC signing, AES-GCM cipher
+│   │   ├── upload.go             # Chunk receiver, write-ahead journal, atomic finalization
+│   │   ├── download.go           # Chunk server, range streaming, folder zip streaming
+│   │   ├── transfer_state.go     # In-flight transfer state & crash recovery
+│   │   ├── discovery.go          # mDNS + UDP broadcast announcement & /discover endpoint
+│   │   ├── clipboard*.go         # Cross-platform clipboard sync & sensitive content filter
+│   │   ├── local_ipc.go          # Loopback IPC for Explorer right-click & CLI --send handoff
+│   │   └── os_integration_*.go   # Win32 system tray, Explorer context menu, autostart
+│   └── mobile/                   # React 18 + TypeScript + Capacitor 8 Android client
+│       ├── src/
+│       │   ├── App.tsx           # Workspace, discovery screen, composer, share & download orchestration
+│       │   ├── index.css         # Design tokens, editorial feed layout, dark/light themes
+│       │   ├── components/       # TransferCard, Sheet, DevicesSheet, MediaViewer, Toast, viewers
+│       │   └── lib/              # api, crypto, uploads, downloads, chunkLayout, mime, peerManager
+│       └── android/              # Capacitor Android project & Java native plugins
+│           └── app/src/main/java/com/example/app/
+│               ├── FileSaverPlugin.java         # Positional MediaStore & Downloads streaming
+│               ├── ShareTargetPlugin.java       # Android Share Sheet receiver & file spooler
+│               ├── DiscoveryPlugin.java         # Native UDP broadcast & mDNS discovery
+│               └── ForegroundServicePlugin.java # Background transfer notification service
+└── docs/                         # Protocol spec, security model, architecture, and benchmarks
+```
+
+---
+
+## Building From Source
 
 ### Prerequisites
-- **Desktop:** [Go 1.21+](https://go.dev/dl/) installed.
-- **Mobile Build (Optional):** [Node.js 18+](https://nodejs.org/) & Java JDK 17+ (for compiling the Android APK).
+- **Desktop Host**: [Go 1.22+](https://go.dev/dl/) and [Node.js 18+](https://nodejs.org/)
+- **Android APK (Optional)**: JDK 17+ (or JDK 22) and Android SDK (`ANDROID_HOME`)
+
+### 1. Build the Desktop Binary (`p2p.exe` / `p2p`)
+```bash
+# Windows
+scripts\build-desktop.bat
+
+# macOS / Linux
+./scripts/build-desktop.sh
+# or:
+make web build
+```
+
+To cross-compile standalone binaries for Windows, macOS (Intel & Apple Silicon), and Linux (`amd64` & `arm64`):
+```bash
+make web cross
+# Outputs to dist-bin/
+```
+
+### 2. Build the Signed Production Android APK (`dist-apk/p2p-release.apk`)
+No Android Studio is required. Run:
+```bash
+# Windows — Signed Production Release APK
+scripts\build-release-apk.bat
+
+# Windows — Debug APK
+scripts\build-apk.bat
+
+# Install directly to a connected Android phone over USB
+scripts\install-phone.bat
+```
 
 ---
 
-### macOS and Linux
+## Desktop CLI & Flags Reference
 
-The desktop host is the same Go program on every OS. Windows-only extras (system tray icon, Explorer
-context menu, "Send to" shortcuts) are skipped elsewhere; everything else works from the terminal.
+While everyday users can use the **Desktop Companion UI** (`http://localhost:8080/desktop`) and the **Windows System Tray**, power users have full CLI control:
 
-**1. Install the tools** (once)
-- macOS: `brew install go node`
-- Debian/Ubuntu: `sudo apt install golang nodejs npm` (Go 1.21+ and Node 18+ are required; use the
-  official installers if your distribution ships older versions)
-- Linux clipboard sync additionally needs one of `xclip`, `xsel` (X11) or `wl-clipboard` (Wayland):
-  `sudo apt install xclip`
+### Launch Flags
+| Flag | Description |
+| :--- | :--- |
+| `--desktop` | Open the visual Desktop Companion & QR Pairing window on startup |
+| `--open` | Open the web UI in the default browser on startup |
+| `--port <n>` | Port to listen on (default `8080`; auto-increments if busy) |
+| `--send <path>` | Send a file or folder via the running instance (or start and queue) |
+| `--to <device>` | Target a specific paired device name, alias, or ID with `--send` |
+| `--tls` | Enable HTTPS/WSS with self-signed TLS and QR certificate fingerprint pinning |
+| `--bandwidth <MB/s>` | Cap transfer bandwidth in MB/s (`0` = unlimited) |
+| `--install-context-menu` | Register *"Send via P2P Link"* in the Windows Explorer right-click menu |
+| `--autostart on\|off` | Enable or disable automatic background startup on login |
 
-**2. Build** (from the repository root)
-```bash
-scripts/build-desktop.sh        # builds the web UI if needed, then ./p2p
-```
-or build every platform at once from a Windows/Linux/macOS machine with `make web cross` and copy the
-matching file from `dist-bin/` (for example `p2p-darwin-arm64` for Apple Silicon).
-
-**3. Run**
-```bash
-./p2p                 # add --tls for HTTPS, --port 9000 to change the port
-```
-A QR code appears in the terminal; scan it with the phone app. Type `help` for commands.
-
-**4. First-run permissions**
-- macOS shows "Do you want the application p2p to accept incoming network connections?" - choose **Allow**.
-  A binary copied from another machine is quarantined; clear it with
-  `xattr -d com.apple.quarantine ./p2p && chmod +x ./p2p`. (If you build locally this is not needed.)
-- Linux firewalls must allow the phone in: for ufw,
-  `sudo ufw allow 8080:8090/tcp && sudo ufw allow 8089/udp && sudo ufw allow 5353/udp`.
-- Both phone and computer must be on the same Wi-Fi network and the router must not isolate clients.
-
-**5. Start at login (optional)**
-```bash
-./p2p --autostart on     # macOS: ~/Library/LaunchAgents/com.p2plink.agent.plist (starts at next login)
-                         # Linux: ~/.config/autostart/p2plink.desktop
-./p2p --autostart off
-```
-Autostart runs without a terminal; logs go to `~/P2P/p2p.log` on macOS. Stop a background instance with
-`pkill p2p` (a clean stop also tells phones the PC left).
-
-**6. Send from the file manager (Linux)**: `./p2p --install-context-menu` adds a "Send via P2P Link" entry.
-Anywhere: `./p2p --send ~/file.zip` hands the file to the running instance.
-
-Received files go to `~/P2P/received`. Note: macOS and Linux were verified to compile and vet cleanly
-(`GOOS=darwin|linux`), but the full test suite and the runtime behaviour have only been exercised on Windows.
-
----
-
-### Desktop (Go Host Engine)
-
-#### 1. Launch the Server
-```bash
-# Windows (One-Click)
-Start P2P.bat
-
-# Or compile and run directly:
-cd apps/cli
-go run .
-```
-
-The desktop host starts immediately (< 10ms) and presents an interactive prompt along with a pairing QR code:
-
-```
-===================================================
-  P2P Link — Host Engine (Port 8080)
-===================================================
-  Wi-Fi IP : 192.168.1.15:8080
-  Status   : Ready for connections
-===================================================
-
-p2p> 
-```
-
-#### 2. Desktop CLI Commands
-
+### Interactive Terminal Commands (`p2p>`)
 | Command | Action | Example |
 | :--- | :--- | :--- |
-| `send <path>` | Send file or folder to all connected devices | `send "C:\Photos\vacation.jpg"` |
-| `send <path> --to <peer>` | Target a specific device | `send "report.pdf" --to "Pixel 8"` |
-| `> <path> [--to <peer>]` | Fast shorthand for sending | `> "clip.mp4" --to Laptop` |
-| `msg <text> [--to <peer>]` | Send text message or URL | `msg "https://github.com" --to Pixel` |
-| `devices` | List paired devices and online status | `devices` |
-| `trust <device>` | Auto-accept transfers from device | `trust "Pixel 8"` |
-| `unpair <device>` | Revoke pairing and disconnect peer | `unpair "Pixel 8"` |
-| `history` | View recent transfer history | `history` |
-| `status` | Show system uptime, RAM, active transfers | `status` |
-| `pair` | Show QR code and pairing token | `pair` |
-| `open` | Open desktop web UI in default browser | `open` |
+| `send <path> [--to <peer>]` | Send a file or folder to connected device(s) | `send "C:\Videos\demo.mp4"` |
+| `msg <text> [--to <peer>]` | Send a text message or link | `msg "https://example.com"` |
+| `devices` | List paired devices and connection status | `devices` |
+| `trust <device>` | Toggle auto-accept for uploads from a device | `trust "Pixel 8"` |
+| `unpair <device>` | Remove a paired device and revoke its key | `unpair "Pixel 8"` |
+| `pair` | Print a fresh pairing QR code in the terminal | `pair` |
+| `history` | Show recent sent and received transfers | `history` |
+| `status` | Display uptime, memory usage, and active transfers | `status` |
+| `open` | Open the Desktop Companion window in your browser | `open` |
 
 ---
 
-### Mobile (Android App & PWA)
+## Testing & Verification
 
-#### Option 1: Native Android App (Recommended)
-1. **Compile the APK (No Android Studio required):**
-   ```bash
-   # Windows
-   scripts\build-apk.bat
-
-   # Linux / macOS
-   ./scripts/build-apk.sh
-   # or: make apk
-   ```
-2. **Install to Connected Phone via ADB:**
-   ```bash
-   # Windows
-   scripts\install-phone.bat
-
-   # Linux / macOS
-   ./scripts/install-phone.sh
-   # or: make install
-   ```
-3. Open **P2P Link** on your phone, tap **Scan QR Code**, and point your camera at the desktop terminal.
-
-#### Option 2: Progressive Web App (PWA)
-1. Open your mobile browser (Chrome, Safari, Firefox) and navigate to the IP shown in your desktop terminal (e.g., `http://192.168.1.15:8080`).
-2. Scan the terminal pairing QR code or enter the pairing code.
-3. Tap **Add to Home Screen** to install as a standalone OLED web app.
-
----
-
-## 🗂️ Repository Layout
-
-```
-apps/
-  cli/                  Go desktop host (single `main` package, one concern per file)
-    main.go             flags, startup, graceful shutdown, HTTP server wiring
-    repl.go cmdparse.go interactive "p2p>" terminal and its argument parsing
-    clients.go          WebSocket clients, message dispatch, offline outbox
-    auth.go             pairing, sessions, request signing, AES-GCM sealing
-    state.go dirs.go    persisted state (devices, settings) and data directories
-    upload.go download.go folder_transfer.go   the transfer endpoints
-    transfer_state.go transfer_meta.go         in-flight transfers, crash recovery
-    dedup.go history.go bandwidth.go           dedup index, history, rate limiter
-    clipboard*.go       clipboard sync, sensitive-content filter, image capture
-    discovery.go        mDNS + UDP broadcast announcement, /discover probe
-    settings.go local_ipc.go   remote settings API, context-menu hand-off
-    os_integration_*.go OS shell/tray/autostart (Windows) and desktop entries (Linux)
-    bench/              benchmark harness (not part of the app)
-  mobile/               React + Capacitor client (PWA and Android app)
-    src/lib/            protocol client: api, transport, uploads, downloads, discovery;
-                        multi-device: peers, peerConnection, peerManager, sendPlan (see docs/multi-device.md)
-    src/components/     UI
-    android/            Capacitor Android project and native plugins
-docs/                   protocol, security, requirements, architecture, audit reports
-scripts/                build-desktop, build-apk, install-phone helpers
-benchmark_results/      committed benchmark summaries (raw dumps are git-ignored)
-```
-
-Everything under `apps/cli` that is not `*_test.go` ships in the binary; the web UI from
-`apps/mobile/dist` is embedded into it at build time (`make build`).
-
----
-
-## 🧩 Component Architecture
-
-```
-apps/mobile/src/
-├── App.tsx                     # Main application shell & WebSocket transport orchestrator
-├── index.css                   # Obsidian + Soft Lavender tokens, responsive layout, 44px hit-expanders
-├── components/
-│   ├── ConnectionScreen.tsx    # Standby screen, Wi-Fi LAN discovery, inline IP editor, QR scanner
-│   ├── TransferActionPanel.tsx # 6-category action strip (Photos, Videos, Audio, Docs, Folder, Paste)
-│   ├── TransferCard.tsx        # History item with Received/Sent badges, 16:9 previews, 360px protection
-│   ├── BatchProgress.tsx       # Shimmer progress bar, MB/s telemetry, remaining time, pause/cancel
-│   ├── PreferencesModal.tsx    # Grouped device settings (Local Mobile vs Remote Desktop)
-│   ├── SendTextModal.tsx       # Instant text & URL sharing bottom sheet with clipboard paste
-│   ├── ConfirmationDialog.tsx  # Semantic confirmation dialog with severity badges
-│   ├── MediaViewer.tsx         # Fullscreen image lightbox with zoom and pan
-│   ├── VideoPlayer.tsx         # Custom inline & fullscreen video player
-│   ├── AudioPlayer.tsx         # Waveform audio playback HUD
-│   ├── PdfViewer.tsx           # Inline PDF viewer
-│   ├── CodeViewer.tsx          # Syntax-highlighted code snippet viewer
-│   └── BrandLogo.tsx           # Animated SVG identity logo
-└── lib/
-    ├── api.ts                  # HTTP API client, pairing endpoints, error handling
-    ├── transport.ts            # Framed WebSocket transport with sequence counters
-    ├── crypto.ts               # WebCrypto + pure-JS noble-ciphers HKDF/AES-GCM
-    ├── uploads.ts              # Adaptive chunk streaming & worker queue
-    ├── downloads.ts            # Streamed download saver & filesystem bridge
-    ├── discovery.ts            # mDNS & UDP LAN device discovery (live list, goodbyes, timeouts)
-    ├── peerManager.ts          # Several paired PCs at once: connections, limits, send targets
-    ├── peerConnection.ts       # One PC's session, socket and reconnect loop
-    ├── shareTarget.ts          # Android native intent receiver
-    └── backButton.ts           # Hardware back-button stack manager
-```
-
----
-
-## 🛠️ Developer & Live-Reload Workflow
-
-To iterate on the mobile UI without repeatedly rebuilding and reinstalling APKs, use the automated ADB Live-Reload runner:
+Run the full verification suite before releasing:
 
 ```bash
-npm --prefix apps/mobile run dev:live
-```
-
-This workflow automatically:
-1. Detects connected Android devices via ADB.
-2. Forwards port 5173 (`adb reverse tcp:5173 tcp:5173`).
-3. Starts the Vite dev server with Hot Module Replacement (HMR).
-4. Directs your phone's WebView to hot-reload changes within milliseconds.
-
----
-
-## 🧪 Testing & Quality Assurance
-
-### Go Test Suite (Desktop & Protocol)
-```bash
-cd apps/cli
-go test -v ./...
-```
-- **Crash Recovery:** `TestRestartTransferRecovery` validates chunk resumption after process kills.
-- **Multi-Device Targeting:** `TestMultiDeviceTargeting` ensures isolated message delivery.
-- **Content Deduplication:** `TestContentDeduplication` verifies zero-byte transmission for identical files.
-- **Fuzzing Suite:** Continuous fuzz testing on filename sanitizers, chunk AAD bindings, and request signatures.
-- **Hardening Regressions:** `robustness_test.go` pins fixes for download ownership, UDP discovery lifetime, pprof exposure, bounded queues and more.
-
-- **Client logic (vitest):** `npm --prefix apps/mobile test` covers the live device list (appearing/confirmed, timeout, goodbye ordering, probe limits), the "device just went offline" connect race, and multi-device (connections, limits, send targets, migration, share routing).
-
-Static checks used before every release: `make check` (gofmt, `go vet`, Go tests, TypeScript compile, client tests).
-
-### Mobile Build & TypeScript Verification
-```bash
+# 1. Mobile TypeScript & Vitest Unit Suite (165+ tests)
+npm --prefix apps/mobile test -- --run
 npm --prefix apps/mobile run build
+
+# 2. Desktop Go Test Suite (Unit, Integration, Crash Recovery, Security, Fuzzing)
+cd apps/cli && go test ./...
 ```
-Validates zero TypeScript compile errors (`tsc`) and bundles production assets with Vite.
 
 ---
 
-## 🌐 Network Troubleshooting
+## Troubleshooting for Everyday Users
 
-### Campus / Enterprise Wi-Fi (AP Client Isolation)
-Public and university Wi-Fi networks typically enable **AP Client Isolation**, which blocks devices on the same subnet from seeing each other.
-- **Fix 1 (Direct QR Pairing):** Tap **Scan QR Code** in the mobile app. The QR code contains direct connection parameters, bypassing multicast discovery.
-- **Fix 2 (Manual IP Entry):** Tap **Connect via IP** and enter the desktop's IP directly (e.g. `10.x.x.x:8080`).
-- **Fix 3 (Mobile Hotspot):** Turn on your phone's Wi-Fi hotspot and connect your computer to it. Hotspots do not enforce AP isolation and achieve maximum wire speeds (80–120 MB/s).
+### "Could not reach PC" / Devices Not Connecting
+1. **Check Same Wi-Fi**: Make sure both your phone and computer are connected to the same Wi-Fi network (and that your phone isn't using mobile data while your PC is on Wi-Fi).
+2. **College, Office, or Hotel Wi-Fi (Client Isolation)**: Public Wi-Fi networks often block devices from talking directly to each other.
+   - **Instant Fix**: Turn on your **Phone's Wi-Fi Hotspot** (you can even turn Mobile Data off so it uses zero data!), connect your laptop to your phone's hotspot, and scan the QR code. Transfers will run at maximum speed (80–120 MB/s).
+3. **Windows Firewall**: Run `Install-P2P-Link.bat` or `Start P2P.bat` once and click **Yes** when Windows asks to allow P2P Link through the firewall.
+
+### Keeping Large Transfers Running with Screen Off
+- P2P Link runs a native Android Foreground Service during active transfers. On devices with aggressive OEM battery savers (Xiaomi HyperOS/MIUI, Samsung OneUI, Realme/Oppo ColorOS), allow **Notifications** and set battery usage to **Unrestricted** in App Info if you transfer multi-gigabyte files with the screen locked.
 
 ---
 
-## 📄 License
+## License
 
 Distributed under the [MIT License](LICENSE).

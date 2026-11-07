@@ -41,6 +41,7 @@ type appState struct {
 	ClipboardSyncDisabled   bool      `json:"clipboardSyncDisabled,omitempty"`   // FR 35
 	SensitiveFilterDisabled bool      `json:"sensitiveFilterDisabled,omitempty"` // FR 36 (enabled by default when false)
 	CustomReceiveDir        string    `json:"customReceiveDir,omitempty"`        // FR 24
+	LastHeartbeatDate       string    `json:"lastHeartbeatDate,omitempty"`       // once-per-day anonymous launch counter
 }
 
 var (

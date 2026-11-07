@@ -16,8 +16,22 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            def ksFile = file("p2p-release-key.jks")
+            if (ksFile.exists()) {
+                storeFile ksFile
+                storePassword System.getenv("P2P_KEYSTORE_PASSWORD") ?: "p2plink123"
+                keyAlias System.getenv("P2P_KEY_ALIAS") ?: "p2plink"
+                keyPassword System.getenv("P2P_KEY_PASSWORD") ?: "p2plink123"
+            }
+        }
+    }
     buildTypes {
         release {
+            if (file("p2p-release-key.jks").exists()) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
