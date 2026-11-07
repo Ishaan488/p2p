@@ -526,8 +526,13 @@
     if (window.goatcounter && typeof window.goatcounter.count === 'function') {
       window.goatcounter.count({ path: 'download-' + platform, title: 'Download ' + platform, event: true });
     }
+    if (window.va) {
+      window.va('event', { name: 'download', data: { platform: platform } });
+    }
   }
 </script>
 <script data-goatcounter="https://p2plink.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+<!-- Vercel Web Analytics -->
+<script defer src="/_vercel/insights/script.js"></script>
 </body>
 </html>
