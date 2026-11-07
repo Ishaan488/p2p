@@ -1,19 +1,26 @@
 # P2P Link
 
 <p align="center">
-  <img src="apps/mobile/public/icon.svg" width="96" height="96" alt="P2P Link Logo" />
+  <img src="site/assets/logo-connected.png" width="110" height="110" alt="P2P Link Logo" style="border-radius: 24px;" />
 </p>
 
 <p align="center">
-  <strong>Fast, private, end-to-end encrypted file transfer, text sharing, and clipboard sync between your PC and Android phone over local Wi-Fi.</strong>
+  <strong>Fast, private, zero-cloud file transfer, text sharing, and clipboard sync between your Windows PC and Android phone over local Wi-Fi or hotspot.</strong>
+</p>
+
+<p align="center">
+  <a href="https://p2p-nine-iota.vercel.app"><strong>🌐 Official Web Download</strong></a> · 
+  <a href="https://github.com/Ishaan488/p2p/releases/latest"><strong>📦 Latest Release</strong></a> · 
+  <a href="LICENSE"><strong>📄 MIT License</strong></a>
 </p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT" /></a>
+  <a href="https://github.com/Ishaan488/p2p/releases"><img src="https://img.shields.io/badge/Version-1.1.0-10B981?style=flat-square" alt="Version 1.1.0" /></a>
   <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.22%2B-00ADD8?style=flat-square&logo=go" alt="Go 1.22+" /></a>
   <a href="https://react.dev/"><img src="https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react" alt="React 18" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript" alt="TypeScript 5" /></a>
-  <a href="https://capacitorjs.com/"><img src="https://img.shields.io/badge/Capacitor-Android%208-119EFF?style=flat-square&logo=capacitor" alt="Capacitor Android" /></a>
+  <a href="https://capacitorjs.com/"><img src="https://img.shields.io/badge/Capacitor-Android%2015-119EFF?style=flat-square&logo=capacitor" alt="Capacitor Android" /></a>
   <img src="https://img.shields.io/badge/Encryption-AES--256--GCM-10B981?style=flat-square" alt="AES-256-GCM" />
   <img src="https://img.shields.io/badge/Speed-80--120%2B%20MB%2Fs-A78BDA?style=flat-square" alt="80-120+ MB/s" />
 </p>

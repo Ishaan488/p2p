@@ -2041,6 +2041,7 @@ export default function App() {
           aria-haspopup="dialog"
           aria-label={`${focused?.name || 'Desktop PC'}${snap.connected.length > 1 ? `, and ${snap.connected.length - 1} more` : ''}. Open devices.`}
         >
+          <BrandLogo size={28} connected={snap.connected.length > 0} className="device-switcher-brand" />
           <span className="device-switcher-text">
             <span className="device-switcher-name">
               <span className="truncate">{focused?.name || 'Desktop PC'}</span>
@@ -2129,7 +2130,7 @@ export default function App() {
 
         {filteredMessages.length === 0 && (
           <StateView
-            icon={<BrandLogo size={36} connected={true} />}
+            icon={<BrandLogo size={40} connected={snap.connected.length > 0} />}
             title={messages.length === 0 ? 'Ready to send' : filter === 'all' ? 'Nothing matches' : `No ${filter} transfers`}
             body={messages.length === 0
               ? 'Send files, photos or text straight over your Wi‑Fi.'

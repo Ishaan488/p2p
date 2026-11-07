@@ -49,16 +49,16 @@ describe('updates module', () => {
 
     it('fetches latest release from GitHub and returns update info', async () => {
       const mockRelease = {
-        tag_name: 'v1.1.0',
-        name: 'P2P Link v1.1.0',
+        tag_name: 'v1.2.0',
+        name: 'P2P Link v1.2.0',
         body: 'New features and improvements',
         published_at: '2026-11-08T00:00:00Z',
-        html_url: 'https://github.com/Ishaan488/p2p/releases/tag/v1.1.0',
+        html_url: 'https://github.com/Ishaan488/p2p/releases/tag/v1.2.0',
         assets: [
           {
             name: 'p2p-release.apk',
             size: 3800000,
-            browser_download_url: 'https://github.com/Ishaan488/p2p/releases/download/v1.1.0/p2p-release.apk',
+            browser_download_url: 'https://github.com/Ishaan488/p2p/releases/download/v1.2.0/p2p-release.apk',
             content_type: 'application/vnd.android.package-archive',
           },
         ],
@@ -71,9 +71,9 @@ describe('updates module', () => {
 
       const result = await checkForUpdates(true);
       expect(result).not.toBeNull();
-      expect(result?.latestVersion).toBe('1.1.0');
+      expect(result?.latestVersion).toBe('1.2.0');
       expect(result?.hasUpdate).toBe(true);
-      expect(result?.apkDownloadUrl).toBe('https://github.com/Ishaan488/p2p/releases/download/v1.1.0/p2p-release.apk');
+      expect(result?.apkDownloadUrl).toBe('https://github.com/Ishaan488/p2p/releases/download/v1.2.0/p2p-release.apk');
       expect(result?.apkSize).toBe(3800000);
     });
 

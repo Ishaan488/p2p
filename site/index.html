@@ -3,8 +3,108 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>P2P Link — Direct file transfer between phone and PC</title>
-<meta name="description" content="Fast, private file transfer between your Android phone and Windows PC over local Wi-Fi or hotspot. Original quality, no cloud, no accounts.">
+
+<!-- Primary SEO Meta Tags -->
+<title>P2P Link — Open Source Local File Transfer for Android &amp; Windows</title>
+<meta name="title" content="P2P Link — Open Source Local File Transfer for Android &amp; Windows">
+<meta name="description" content="Fast, private file transfer between your Android phone and Windows PC over local Wi-Fi or hotspot. Lossless original quality, zero cloud, no accounts, and AES-256 encrypted.">
+<meta name="keywords" content="P2P Link, local file transfer, android to pc file transfer, wifi file transfer, offline file share, airdrop for windows, localsend alternative, nearby share alternative, open source file sharing, direct transfer, peer to peer transfer">
+<meta name="author" content="Ishaan">
+<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1">
+<link rel="canonical" href="https://p2p-nine-iota.vercel.app/">
+
+<!-- Theme & Web App Meta -->
+<meta name="theme-color" content="#0E0E0E">
+<meta name="color-scheme" content="dark">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="P2P Link">
+
+<!-- Favicon & Icons -->
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+
+<!-- Open Graph / Facebook / WhatsApp / Reddit / Discord -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="P2P Link">
+<meta property="og:url" content="https://p2p-nine-iota.vercel.app/">
+<meta property="og:title" content="P2P Link — Open Source Local File Transfer (Android &amp; Windows)">
+<meta property="og:description" content="Direct, high-speed file transfer between Android phone and Windows PC over local Wi-Fi or hotspot. Zero cloud, lossless original quality photos &amp; 4K videos, no accounts, AES-256 encrypted.">
+<meta property="og:image" content="https://p2p-nine-iota.vercel.app/og-image.png">
+<meta property="og:image:secure_url" content="https://p2p-nine-iota.vercel.app/og-image.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="P2P Link - Direct Local File Transfer for Android and Windows">
+<meta property="og:locale" content="en_US">
+
+<!-- Twitter / X Card -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="P2P Link — Open Source Local File Transfer (Android &amp; Windows)">
+<meta name="twitter:description" content="Fast, private file transfer between your Android phone and Windows PC over local Wi-Fi or hotspot. Lossless original quality, zero cloud, no accounts, AES-256 encrypted.">
+<meta name="twitter:image" content="https://p2p-nine-iota.vercel.app/og-image.png">
+<meta name="twitter:image:alt" content="P2P Link - Direct Local File Transfer for Android and Windows">
+
+<!-- Structured Data: SoftwareApplication Schema -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "P2P Link",
+  "operatingSystem": "Android 7.0+, Windows 10, Windows 11",
+  "applicationCategory": "UtilitiesApplication",
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+  },
+  "description": "Fast, private file transfer between your Android phone and Windows PC over local Wi-Fi or hotspot. Original quality, no cloud, no accounts, AES-256 encrypted.",
+  "downloadUrl": "https://github.com/Ishaan488/p2p/releases/latest",
+  "softwareVersion": "1.1.0",
+  "fileSize": "3.5MB",
+  "author": {
+    "@type": "Person",
+    "name": "Ishaan",
+    "url": "https://github.com/Ishaan488"
+  },
+  "license": "https://opensource.org/licenses/MIT"
+}
+</script>
+
+<!-- Structured Data: FAQPage Schema -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "How does P2P Link transfer files without cloud or internet?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "P2P Link establishes a direct peer-to-peer connection over your local Wi-Fi network or phone hotspot. Data streams directly from device to device at full local Wi-Fi speeds without ever passing through external servers or consuming mobile data."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does P2P Link compress photos or 4K videos?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "No. Files stream bit-for-bit identical to their originals. Every transfer is verified with SHA-256 hashes to guarantee 100% lossless integrity."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Is P2P Link free and open-source?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes, P2P Link is 100% free and open-source under the MIT license with no accounts, ads, or telemetry."
+      }
+    }
+  ]
+}
+</script>
 <style>
   :root {
     color-scheme: dark;
@@ -372,13 +472,7 @@
 <div class="container">
   <header>
     <a href="#" class="brand">
-      <svg width="20" height="20" viewBox="0 0 32 32" fill="none" aria-hidden="true">
-        <rect x="4.5" y="4.5" width="13.5" height="13.5" rx="3.8" stroke="currentColor" stroke-width="2.2"/>
-        <rect x="14" y="14" width="13.5" height="13.5" rx="3.8" stroke="currentColor" stroke-width="2.2"/>
-        <circle cx="11.25" cy="11.25" r="1.75" fill="currentColor"/>
-        <circle cx="20.75" cy="20.75" r="1.75" fill="currentColor"/>
-        <path d="M11.25 11.25L20.75 20.75" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-      </svg>
+      <img src="/apple-touch-icon.png" width="22" height="22" alt="P2P Link" style="border-radius: 5px; vertical-align: middle;" />
       <span>P2P Link</span>
     </a>
     <nav class="nav-links">
@@ -391,7 +485,7 @@
   <section class="hero">
     <div class="eyebrow">
       <span class="status-dot"></span>
-      <span>v1.0.0 · Local network transfer</span>
+      <span>v1.1.0 · Local network transfer</span>
     </div>
 
     <h1>Direct file transfer between your phone and PC.</h1>

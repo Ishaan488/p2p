@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { Sheet } from './Sheet';
 import { IconTile, Notice, StateView } from './ui';
+import { BrandLogo } from './BrandLogo';
 
 export interface ConnectionScreenProps {
   mode: 'standby' | 'add';
@@ -92,7 +93,14 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
       <header className="top-bar">
         {mode === 'add' && onBack ? (
           <button type="button" className="icon-btn" onClick={onBack} aria-label="Back"><X size={22} /></button>
-        ) : null}
+        ) : (
+          <BrandLogo
+            size={28}
+            connected={status === 'connected'}
+            connecting={status === 'connecting'}
+            className="top-bar-brand"
+          />
+        )}
         <h1 className="top-bar-title">{mode === 'add' ? 'Add device' : 'Nearby devices'}</h1>
         <button type="button" className="icon-btn" onClick={() => setOptionsOpen(true)} aria-label="More ways to connect">
           <MoreHorizontal size={22} />

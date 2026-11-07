@@ -7,7 +7,7 @@ import { BrandLogo } from './BrandLogo';
 import { checkForUpdates, downloadAndInstallUpdate, type UpdateCheckResult } from '../lib/updates';
 
 /** About: who made it, where the code lives, updates, and the easiest ways to say something back. */
-export const AboutPage: React.FC<{ onClose: () => void }> = ({ onClose }) => {
+export const AboutPage: React.FC<{ onClose: () => void; isConnected?: boolean }> = ({ onClose, isConnected = false }) => {
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   useEffect(() => backButtonManager.push(() => { closeRef.current(); return true; }), []);
@@ -57,7 +57,7 @@ export const AboutPage: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 
       <div className="scroll" style={{ paddingBottom: 'calc(var(--safe-bottom) + var(--s-8))' }}>
         <div className="about-hero">
-          <span className="about-mark"><BrandLogo size={30} connected={false} /></span>
+          <span className="about-mark"><BrandLogo size={36} connected={isConnected} /></span>
           <h3 className="about-name">P2P Link</h3>
           <p className="about-sub">Version {APP_VERSION}</p>
           <p className="about-line">Fast, private file sharing between your phone and computer. No cloud, no accounts.</p>

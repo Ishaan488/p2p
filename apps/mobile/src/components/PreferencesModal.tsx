@@ -63,7 +63,7 @@ type Picker = null | 'folder' | 'concurrency' | 'bandwidth';
 
 /** Settings: a grouped list on its own page; choices open in the shared selection sheet. */
 export const PreferencesModal: React.FC<PreferencesModalProps> = ({
-  isOpen, theme, onSetTheme, deviceName, pcName, downloadSubDir, bandwidthLimitBps, concurrencyMode, clipboardSyncEnabled,
+  isOpen, isConnected, theme, onSetTheme, deviceName, pcName, downloadSubDir, bandwidthLimitBps, concurrencyMode, clipboardSyncEnabled,
   sensitiveFilterEnabled, serverSettings, onClose, onSave,
 }) => {
   const [devAlias, setDevAlias] = useState(deviceName);
@@ -249,7 +249,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
         </div>
       </div>
 
-      {aboutOpen && <AboutPage onClose={() => setAboutOpen(false)} />}
+      {aboutOpen && <AboutPage onClose={() => setAboutOpen(false)} isConnected={isConnected} />}
 
       <Sheet open={picker === 'folder'} onClose={() => setPicker(null)} title="Save location" flush>
         <ul className="rows">
