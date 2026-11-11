@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Play, Pause, Volume2, VolumeX, Download, Music } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX, Download, Music } from './icons';
 import { formatBytes } from '../lib/telemetry';
 
 interface AudioPlayerProps {

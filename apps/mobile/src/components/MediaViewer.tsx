@@ -3,7 +3,7 @@ import {
   ArrowLeft, Download, Share2, ZoomIn, ZoomOut,
   RotateCcw, RotateCw, Play, Pause, Volume2, VolumeX,
   AlertCircle
-} from 'lucide-react';
+} from './icons';
 import { backButtonManager } from '../lib/backButton';
 import { formatBytes } from '../lib/telemetry';
 

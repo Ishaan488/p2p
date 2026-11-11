@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Bug, Code2, ExternalLink, Mail, MessageSquare, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Bug, Code2, ExternalLink, Mail, MessageSquare, RefreshCw } from './icons';
 import { Capacitor } from '@capacitor/core';
 import { backButtonManager } from '../lib/backButton';
 import { APP_VERSION, CONTACT_EMAIL, DEVELOPER_NAME, ISSUES_URL, REPO_URL, feedbackMailto } from '../lib/appInfo';

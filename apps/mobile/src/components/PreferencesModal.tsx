@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, ChevronRight, Monitor, Moon, Sun } from 'lucide-react';
+import { ArrowLeft, ChevronRight, Monitor, Moon, Sun } from './icons';
 import { ServerSettings } from '../lib/api';
 import { backButtonManager } from '../lib/backButton';
 import { Sheet } from './Sheet';

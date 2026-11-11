@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Plus, Type, Image, FileUp, ClipboardPaste, Folder, ChevronRight, Users } from 'lucide-react';
+import { Plus, Type, Image, FileUp, ClipboardPaste, Folder, ChevronRight, Users } from './icons';
 import { Sheet } from './Sheet';
 
 export interface TransferActionPanelProps {

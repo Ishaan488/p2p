@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Laptop, Loader2, Plus, Send, Wifi } from 'lucide-react';
+import { Laptop, Loader2, Plus, Send, Wifi } from './icons';
 import { deviceKey, type DiscoveredDevice } from '../lib/discovery';
 import { MAX_CONNECTED_PEERS } from '../lib/peers';
 import type { PeerView } from '../lib/peerManager';

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { FileText, ExternalLink, Download, X, Eye } from 'lucide-react';
+import { FileText, ExternalLink, Download, X, Eye } from './icons';
 import { formatBytes } from '../lib/telemetry';
 import { backButtonManager } from '../lib/backButton';
 import { Capacitor } from '@capacitor/core';

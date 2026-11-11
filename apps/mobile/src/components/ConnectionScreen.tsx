@@ -3,7 +3,7 @@ import type { PeerView } from '../lib/peerManager';
 import { deviceKey, type DiscoveredDevice } from '../lib/discovery';
 import {
   Laptop, QrCode, Edit3, Loader2, X, HelpCircle, Smartphone, MoreHorizontal, Settings, Unplug, WifiOff,
-} from 'lucide-react';
+} from './icons';
 import { Sheet } from './Sheet';
 import { IconTile, Notice, StateView } from './ui';
 import { BrandLogo } from './BrandLogo';

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Copy, Check, Maximize2, Download, X, Code2 } from 'lucide-react';
+import { Copy, Check, Maximize2, Download, X, Code2 } from './icons';
 import { getLanguageLabel, formatBytes } from '../lib/telemetry';
 import { backButtonManager } from '../lib/backButton';
 import { Clipboard } from '@capacitor/clipboard';

@@ -1,5 +1,5 @@
 import React from 'react';
-import { ChevronDown, Laptop, Loader2, QrCode, Trash2, Unplug } from 'lucide-react';
+import { ChevronDown, Laptop, Loader2, QrCode, Trash2, Unplug } from './icons';
 import type { PeerView } from '../lib/peerManager';
 import { canConnect, needsRepair, peerSubtitle, statusLabel, statusTone } from '../lib/peerPresentation';
 import { IconTile, Switch } from './ui';

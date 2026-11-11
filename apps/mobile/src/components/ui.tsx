@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertCircle, AlertTriangle } from 'lucide-react';
+import { AlertCircle, AlertTriangle } from './icons';
 
 /** On/off control with switch semantics and a 44px touch target. */
 export const Switch: React.FC<{ checked: boolean; label: string; onChange: (next: boolean) => void; disabled?: boolean }> = ({

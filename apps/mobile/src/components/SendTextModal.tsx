@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Clipboard as ClipboardIcon, Check, X } from 'lucide-react';
+import { Send, Clipboard as ClipboardIcon, Check, X } from './icons';
 import { Clipboard } from '@capacitor/clipboard';
 import { Sheet } from './Sheet';
 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Pause, Play, X } from 'lucide-react';
+import { Pause, Play, X } from './icons';
 import { formatBytes, formatSpeed } from '../lib/telemetry';
 
 export interface BatchProgressProps {

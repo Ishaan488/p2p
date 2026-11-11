@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { X } from 'lucide-react';
+import { X } from './icons';
 import { backButtonManager } from '../lib/backButton';
 
 export interface SheetProps {

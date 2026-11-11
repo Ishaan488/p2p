@@ -29,7 +29,7 @@ import {
   Trash2, UploadCloud, Settings, Loader2, ChevronRight, Plus,
   ShieldCheck, ShieldAlert, Unlink, MoreVertical,
   ChevronDown, Laptop, X
-} from 'lucide-react';
+} from './components/icons';
 import { Sheet } from './components/Sheet';
 import { StateView, Switch } from './components/ui';
 import { BrandLogo } from './components/BrandLogo';

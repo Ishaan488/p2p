@@ -3,7 +3,7 @@ import {
   ArrowDownLeft, ArrowUpRight, RotateCcw, Copy, Check, Download, Trash2, Pause, Play, X, ExternalLink, Package,
   File as FileIcon, FileArchive, FileCode, FileSpreadsheet, FileText, Image as ImageIcon, Music, Video as VideoIcon,
   MoreVertical, Share2,
-} from 'lucide-react';
+} from './icons';
 import { formatBytes, formatSpeed, MediaKind } from '../lib/telemetry';
 import { AudioPlayer } from './AudioPlayer';
 import { PdfViewer } from './PdfViewer';
