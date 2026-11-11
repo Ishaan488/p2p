@@ -53,21 +53,21 @@ export const TransferActionPanel: React.FC<TransferActionPanelProps> = ({
 
       <Sheet open={open} onClose={() => setOpen(false)} title="Send files" flush>
         <ul className="rows">
-          <li><button type="button" className="row" onClick={() => pick('image/*,video/*')}>
-            <Image size={20} className="row-icon" />
+          <li><button type="button" className="row row-with-sub" onClick={() => pick('image/*,video/*')}>
+            <span className="row-icon-box"><Image size={20} /></span>
             <span className="row-main"><span className="row-title">Photos and videos</span><span className="row-sub">From your gallery</span></span>
           </button></li>
-          <li><button type="button" className="row" onClick={() => pick('*/*')}>
-            <FileUp size={20} className="row-icon" />
+          <li><button type="button" className="row row-with-sub" onClick={() => pick('*/*')}>
+            <span className="row-icon-box"><FileUp size={20} /></span>
             <span className="row-main"><span className="row-title">Files</span><span className="row-sub">Documents, downloads, archives</span></span>
           </button></li>
-          <li><button type="button" className="row" onClick={() => pick('*/*', true)}>
-            <Folder size={20} className="row-icon" />
+          <li><button type="button" className="row row-with-sub" onClick={() => pick('*/*', true)}>
+            <span className="row-icon-box"><Folder size={20} /></span>
             <span className="row-main"><span className="row-title">Folder</span><span className="row-sub">Everything inside a folder</span></span>
           </button></li>
           {onQuickSendClipboard && (
-            <li><button type="button" className="row" onClick={() => { setOpen(false); onQuickSendClipboard(); }}>
-              <ClipboardPaste size={20} className="row-icon" />
+            <li><button type="button" className="row row-with-sub" onClick={() => { setOpen(false); onQuickSendClipboard(); }}>
+              <span className="row-icon-box"><ClipboardPaste size={20} /></span>
               <span className="row-main"><span className="row-title">Clipboard</span><span className="row-sub">Send what you last copied</span></span>
             </button></li>
           )}

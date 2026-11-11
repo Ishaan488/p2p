@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import type { PeerView } from '../lib/peerManager';
 import { deviceKey, type DiscoveredDevice } from '../lib/discovery';
+import type { UpdateCheckResult } from '../lib/updates';
 import {
-  Laptop, QrCode, Edit3, Loader2, X, HelpCircle, Smartphone, MoreHorizontal, Settings, Unplug, WifiOff,
+  Laptop, QrCode, Edit3, Loader2, X, HelpCircle, Smartphone, MoreHorizontal, Settings, Unplug, WifiOff, RefreshCw,
 } from './icons';
 import { Sheet } from './Sheet';
 import { IconTile, Notice, StateView } from './ui';
@@ -37,6 +38,8 @@ export interface ConnectionScreenProps {
   connectingDiscoveredKey?: string | null;
   /** Add mode: leave without connecting anything. */
   onBack?: () => void;
+  updateInfo?: UpdateCheckResult | null;
+  onInstallUpdate?: (apkUrl?: string, fallbackUrl?: string) => void;
 }
 
 const MAX_LISTED_DEVICES = 50;
@@ -49,7 +52,7 @@ const hostOf = (a: string) => a.replace(/^https?:\/\//, '').split('/')[0];
 export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
   mode, status, address, setAddress, peers, deviceName, setDeviceName, connectError, cameraError, isScanning,
   setIsScanning, isEditingIp, setIsEditingIp, discoveredDevices, onConnectPeer, onManualConnect, onConnectDiscovered,
-  onOpenPreferences, onUnpairPeer, pendingApproval, onCancelPairing, connectingDiscoveredKey, onBack,
+  onOpenPreferences, onUnpairPeer, pendingApproval, onCancelPairing, connectingDiscoveredKey, onBack, updateInfo, onInstallUpdate,
 }) => {
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -111,6 +114,22 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
       </header>
 
       <div className="scroll">
+        {updateInfo?.hasUpdate && (
+          <div className="update-banner" role="status">
+            <div className="update-banner-info">
+              <RefreshCw size={16} />
+              <span>v{updateInfo.latestVersion} is available</span>
+            </div>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => onInstallUpdate?.(updateInfo.apkDownloadUrl, updateInfo.htmlUrl)}
+            >
+              Update
+            </button>
+          </div>
+        )}
+
         {pendingApproval && (
           <div className="notice" role="status" style={{ alignItems: 'center' }}>
             <Loader2 size={18} className="spin notice-icon" style={{ marginTop: 0 }} />
@@ -200,7 +219,7 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
                     <button type="button" className="btn btn-secondary btn-sm" onClick={() => onConnectPeer(peer.id)} disabled={connecting} aria-label={`Connect to ${peer.name}`}>
                       {connecting ? 'Connecting' : 'Connect'}
                     </button>
-                    <button type="button" className="icon-btn" onClick={() => onUnpairPeer(peer.id)} aria-label={`Forget ${peer.name}`}>
+                    <button type="button" className="icon-btn icon-btn-danger" onClick={() => onUnpairPeer(peer.id)} aria-label={`Forget ${peer.name}`} title="Unpair device">
                       <Unplug size={18} />
                     </button>
                   </li>
@@ -216,17 +235,17 @@ export const ConnectionScreen: React.FC<ConnectionScreenProps> = ({
       {/* Connection options */}
       <Sheet open={optionsOpen} onClose={() => setOptionsOpen(false)} title="Connect" description="Other ways to reach your computer" flush>
         <ul className="rows">
-          <li><button type="button" className="row" onClick={() => { setOptionsOpen(false); setIsScanning(true); }}>
-            <QrCode size={20} className="row-icon" /><span className="row-main"><span className="row-title">Scan QR code</span><span className="row-sub">From the P2P Link window on your computer</span></span>
+          <li><button type="button" className="row row-with-sub" onClick={() => { setOptionsOpen(false); setIsScanning(true); }}>
+            <span className="row-icon-box"><QrCode size={20} /></span><span className="row-main"><span className="row-title">Scan QR code</span><span className="row-sub">From the P2P Link window on your computer</span></span>
           </button></li>
-          <li><button type="button" className="row" onClick={() => { setOptionsOpen(false); setIsEditingIp(true); }}>
-            <Edit3 size={20} className="row-icon" /><span className="row-main"><span className="row-title">Enter IP address</span><span className="row-sub">Type the address shown on your computer</span></span>
+          <li><button type="button" className="row row-with-sub" onClick={() => { setOptionsOpen(false); setIsEditingIp(true); }}>
+            <span className="row-icon-box"><Edit3 size={20} /></span><span className="row-main"><span className="row-title">Enter IP address</span><span className="row-sub">Type the address shown on your computer</span></span>
           </button></li>
-          <li><button type="button" className="row" onClick={() => { setOptionsOpen(false); setDeviceOpen(true); }}>
-            <Smartphone size={20} className="row-icon" /><span className="row-main"><span className="row-title">My device</span><span className="row-sub">{deviceName || 'This phone'}</span></span>
+          <li><button type="button" className="row row-with-sub" onClick={() => { setOptionsOpen(false); setDeviceOpen(true); }}>
+            <span className="row-icon-box"><Smartphone size={20} /></span><span className="row-main"><span className="row-title">My device</span><span className="row-sub">{deviceName || 'This phone'}</span></span>
           </button></li>
-          <li><button type="button" className="row" onClick={() => { setOptionsOpen(false); setHelpOpen(true); }}>
-            <HelpCircle size={20} className="row-icon" /><span className="row-main"><span className="row-title">Connection help</span><span className="row-sub">If your computer doesn't show up</span></span>
+          <li><button type="button" className="row row-with-sub" onClick={() => { setOptionsOpen(false); setHelpOpen(true); }}>
+            <span className="row-icon-box"><HelpCircle size={20} /></span><span className="row-main"><span className="row-title">Connection help</span><span className="row-sub">If your computer doesn't show up</span></span>
           </button></li>
         </ul>
       </Sheet>

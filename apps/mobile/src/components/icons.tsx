@@ -163,8 +163,20 @@ export const Share2 = createPikaComponent(Share01Icon, 'Share2');
 export const ExternalLink = createPikaComponent(ExternalLinkSquareIcon, 'ExternalLink');
 export const Maximize2 = createPikaComponent(ExternalLinkSquareIcon, 'Maximize2');
 export const LogOut = createPikaComponent(LogOutRightIcon, 'LogOut');
-export const Unlink = createPikaComponent(LinkSlantIcon, 'Unlink');
-export const Unplug = createPikaComponent(LinkSlantIcon, 'Unplug');
+// Unlink / Unplug: LinkSlant with a diagonal cut strike clearly representing unpairing/disconnecting
+export const Unlink = React.forwardRef<SVGSVGElement, IconProps>((props, ref) => {
+  const { size = 20, color = 'currentColor', strokeWidth = 2, className, style, ...rest } = props;
+  return (
+    <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: size, height: size, flexShrink: 0 }}>
+      <PikaIcon ref={ref} icon={LinkSlantIcon} size={size} color={color} strokeWidth={strokeWidth} className={className} style={style} {...rest} />
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+        <line x1="4" y1="4" x2="20" y2="20" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" />
+      </svg>
+    </span>
+  );
+});
+Unlink.displayName = 'Unlink';
+export const Unplug = Unlink;
 
 // ---------------------------------------------------------------------------
 // File & Content Types

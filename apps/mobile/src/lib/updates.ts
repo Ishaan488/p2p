@@ -89,11 +89,14 @@ export async function checkForUpdates(force = false): Promise<UpdateCheckResult 
       const cachedResultStr = safeStorage.getItem(STORAGE_KEY_RESULT);
       if (lastCheckStr && cachedResultStr) {
         const lastCheck = parseInt(lastCheckStr, 10);
-        if (now - lastCheck < CHECK_INTERVAL_MS) {
-          const cached = JSON.parse(cachedResultStr) as UpdateCheckResult;
-          // Re-evaluate hasUpdate in case the installed version changed
-          cached.currentVersion = APP_VERSION;
-          cached.hasUpdate = isNewer(cached.latestVersion, APP_VERSION);
+        const cached = JSON.parse(cachedResultStr) as UpdateCheckResult;
+        cached.currentVersion = APP_VERSION;
+        cached.hasUpdate = isNewer(cached.latestVersion, APP_VERSION);
+
+        // If an update is already detected, respect the 4-hour throttle to avoid redundant requests.
+        // If no update was detected previously, check again after 15 minutes so newly published releases appear promptly.
+        const throttleMs = cached.hasUpdate ? CHECK_INTERVAL_MS : 15 * 60 * 1000;
+        if (now - lastCheck < throttleMs) {
           return cached;
         }
       }

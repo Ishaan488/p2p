@@ -69,7 +69,7 @@ import { SendTextModal } from './components/SendTextModal';
 import { ConfirmationDialog } from './components/ConfirmationDialog';
 import { PreferencesModal } from './components/PreferencesModal';
 import { ConnectionScreen } from './components/ConnectionScreen';
-import { checkForUpdates, downloadAndInstallUpdate } from './lib/updates';
+import { checkForUpdates, downloadAndInstallUpdate, type UpdateCheckResult } from './lib/updates';
 
 function isImageFilename(name: string): boolean {
   return /\.(jpg|jpeg|png|gif|webp|svg|bmp)$/i.test(name);
@@ -263,6 +263,7 @@ export default function App() {
   const [isBatchPaused, setIsBatchPaused] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [availableUpdate, setAvailableUpdate] = useState<UpdateCheckResult | null>(null);
   const [isDevicesOpen, setIsDevicesOpen] = useState(false);
   const [devicesMode, setDevicesMode] = useState<'manage' | 'pick'>('manage');
   const [isAddingDevice, setIsAddingDevice] = useState(false);
@@ -455,11 +456,12 @@ export default function App() {
     }
   }, []);
 
-  // Automatic background update check (throttled to 4 hours)
+  // Automatic background update check
   useEffect(() => {
     const timer = setTimeout(() => {
       checkForUpdates(false).then((res) => {
         if (res?.hasUpdate) {
+          setAvailableUpdate(res);
           showToast(`P2P Link v${res.latestVersion} is available`, 'info', {
             action: {
               label: 'Update',
@@ -471,7 +473,7 @@ export default function App() {
           });
         }
       }).catch(() => {});
-    }, 2500);
+    }, 1500);
     return () => clearTimeout(timer);
   }, []);
 
@@ -1960,6 +1962,10 @@ export default function App() {
           pendingApproval={pendingApproval ? { host: pendingApproval.host, name: pendingApproval.name } : null}
           onCancelPairing={cancelPairing}
           connectingDiscoveredKey={connectingDiscoveredKey}
+          updateInfo={availableUpdate}
+          onInstallUpdate={(apkUrl, fallbackUrl) => {
+            downloadAndInstallUpdate(apkUrl, fallbackUrl);
+          }}
           onBack={() => {
             setIsAddingDevice(false);
             setIsScanning(false);

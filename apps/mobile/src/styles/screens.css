@@ -49,6 +49,27 @@
 .empty-line { padding: var(--s-3) var(--s-5); font-size: 13px; color: var(--text-3); }
 .foot-note { padding: var(--s-8) var(--s-5) var(--s-6); text-align: center; font-size: var(--fs-support); color: var(--text-3); }
 
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  margin: var(--s-2) var(--s-5) var(--s-3);
+  padding: 10px var(--s-4);
+  background: var(--surface-1);
+  border: 1px solid var(--divider-strong);
+  border-radius: var(--r-item);
+  color: var(--text-1);
+}
+.update-banner-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent-green, #79C9A2);
+}
+
 .icon-tile {
   display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
   border-radius: 10px; background: var(--surface-2); color: var(--text-2);
