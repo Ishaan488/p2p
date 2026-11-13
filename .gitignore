@@ -38,6 +38,7 @@ desktop.ini
 # Environment
 .env
 .env.*.local
+*.local.js
 
 # Logs
 npm-debug.log*

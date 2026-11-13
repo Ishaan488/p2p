@@ -425,9 +425,250 @@
     font-weight: 500;
   }
 
+  /* Feedback Section */
+  .feedback-section {
+    padding: 72px 0;
+    border-bottom: 1px solid var(--line);
+    display: grid;
+    grid-template-columns: 1fr 1.25fr;
+    gap: 48px;
+    align-items: start;
+  }
+
+  @media (max-width: 760px) {
+    .feedback-section {
+      grid-template-columns: 1fr;
+      gap: 28px;
+      padding: 56px 0;
+    }
+  }
+
+  .feedback-copy .pillar-label {
+    margin-bottom: 10px;
+  }
+
+  .feedback-copy h2 {
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    margin-bottom: 10px;
+  }
+
+  .feedback-copy p {
+    font-size: 14px;
+    color: var(--text-2);
+    line-height: 1.6;
+    max-width: 360px;
+    margin-bottom: 20px;
+  }
+
+  .feedback-alt {
+    font-size: 13px;
+    color: var(--text-3);
+  }
+
+  .feedback-alt a {
+    color: var(--text-2);
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 1px;
+    transition: color 140ms ease, border-color 140ms ease;
+  }
+
+  .feedback-alt a:hover {
+    color: var(--text-1);
+    border-color: var(--text-2);
+  }
+
+  .feedback-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 24px;
+  }
+
+  @media (max-width: 540px) {
+    .feedback-card {
+      padding: 18px;
+    }
+  }
+
+  .feedback-pills {
+    display: inline-flex;
+    gap: 6px;
+    padding: 4px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    margin-bottom: 18px;
+  }
+
+  .feedback-pill {
+    appearance: none;
+    border: none;
+    background: transparent;
+    color: var(--text-2);
+    font-family: var(--font);
+    font-size: 12.5px;
+    font-weight: 500;
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 140ms ease, color 140ms ease;
+  }
+
+  .feedback-pill:hover {
+    color: var(--text-1);
+  }
+
+  .feedback-pill.active {
+    background: var(--surface-hover);
+    color: var(--text-1);
+  }
+
+  .field-group {
+    margin-bottom: 14px;
+  }
+
+  .field-label-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+
+  .field-label {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text-2);
+  }
+
+  .field-hint {
+    font-size: 11.5px;
+    color: var(--text-3);
+  }
+
+  .field-input,
+  .field-textarea {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--text-1);
+    font-family: var(--font);
+    font-size: 14px;
+    line-height: 1.5;
+    padding: 10px 13px;
+    outline: none;
+    transition: border-color 140ms ease;
+  }
+
+  .field-input::placeholder,
+  .field-textarea::placeholder {
+    color: var(--text-3);
+  }
+
+  .field-input:focus,
+  .field-textarea:focus {
+    border-color: #3A3A3A;
+  }
+
+  .field-textarea {
+    resize: vertical;
+    min-height: 92px;
+    max-height: 260px;
+  }
+
+  .hp-trap {
+    position: absolute;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .feedback-actions {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-top: 16px;
+  }
+
+  @media (max-width: 480px) {
+    .feedback-actions {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 12px;
+    }
+  }
+
+  .feedback-submit {
+    appearance: none;
+    border: none;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    height: 42px;
+    padding: 0 20px;
+    border-radius: 8px;
+    background: var(--primary-bg);
+    color: var(--primary-fg);
+    font-family: var(--font);
+    font-size: 13.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 140ms ease, opacity 140ms ease;
+  }
+
+  .feedback-submit:hover:not(:disabled) {
+    background: #FFFFFF;
+  }
+
+  .feedback-submit:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .feedback-status {
+    flex: 1;
+    min-width: 0;
+    font-size: 12.5px;
+    line-height: 1.35;
+    color: var(--text-2);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+  }
+
+  .feedback-status:empty {
+    display: none;
+  }
+
+  .feedback-status-head {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--accent-green);
+  }
+
+  .feedback-status-sub {
+    color: var(--text-2);
+    font-size: 12px;
+    padding-left: 13px;
+  }
+
+  .feedback-status.error {
+    color: #E57373;
+  }
+
   /* Footer / About & Contact */
   footer {
-    padding: 56px 0 72px;
+    padding: 44px 0 64px;
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
@@ -562,19 +803,82 @@
     </div>
   </section>
 
-  <footer id="contact">
+  <section class="feedback-section" id="contact">
+    <div class="feedback-copy">
+      <div class="pillar-label">SUPPORT &amp; FEEDBACK</div>
+      <h2>Send feedback or report an issue</h2>
+      <p>Found a bug, have a feature idea, or need help pairing? Drop a note below—it goes straight to my inbox and I'll reply to your email.</p>
+      <div class="feedback-alt">
+        Prefer GitHub? <a href="https://github.com/Ishaan488/p2p/issues/new" target="_blank" rel="noreferrer">Open an issue &rarr;</a>
+      </div>
+    </div>
+
+    <form class="feedback-card" id="feedbackForm" novalidate>
+      <div class="feedback-pills" role="radiogroup" aria-label="Feedback category">
+        <button type="button" class="feedback-pill active" data-category="Feedback" aria-checked="true">Feedback</button>
+        <button type="button" class="feedback-pill" data-category="Bug report" aria-checked="false">Bug report</button>
+        <button type="button" class="feedback-pill" data-category="Question" aria-checked="false">Question</button>
+      </div>
+
+      <!-- Anti-bot honeypot field -->
+      <input type="checkbox" name="botcheck" id="fbBotcheck" class="hp-trap" tabindex="-1" autocomplete="off" aria-hidden="true" />
+
+      <div class="field-group">
+        <div class="field-label-row">
+          <label class="field-label" for="fbEmail">Your email</label>
+          <span class="field-hint">So I can reply to you</span>
+        </div>
+        <input
+          type="email"
+          id="fbEmail"
+          name="email"
+          class="field-input"
+          placeholder="you@example.com"
+          maxlength="160"
+          autocomplete="email"
+          inputmode="email"
+          required
+        />
+      </div>
+
+      <div class="field-group">
+        <div class="field-label-row">
+          <label class="field-label" for="fbMessage">Message</label>
+          <span class="field-hint" id="fbCharHint"></span>
+        </div>
+        <textarea
+          id="fbMessage"
+          name="message"
+          class="field-textarea"
+          placeholder="What's on your mind?"
+          maxlength="2000"
+          required
+        ></textarea>
+      </div>
+
+      <div class="feedback-actions">
+        <button type="submit" class="feedback-submit" id="fbSubmitBtn">
+          <span id="fbSubmitText">Send message</span>
+        </button>
+        <div class="feedback-status" id="fbStatus" role="status" aria-live="polite"></div>
+      </div>
+    </form>
+  </section>
+
+  <footer>
     <div class="footer-left">
       <div class="footer-title">Built by Ishaan</div>
       <p class="footer-sub">Independent, open source. Thanks for using P2P Link.</p>
     </div>
     <div class="footer-links">
       <a href="https://github.com/Ishaan488/p2p" target="_blank" rel="noreferrer">GitHub</a>
-      <a href="mailto:ishaanbajpai732004@gmail.com?subject=P2P%20Link%20feedback%20(v1.3.0)">Email</a>
+      <a href="#contact">Feedback</a>
       <a href="https://github.com/Ishaan488/p2p/issues/new" target="_blank" rel="noreferrer">Report an issue</a>
     </div>
   </footer>
 </div>
 
+<script src="./env.local.js" onerror="void 0"></script>
 <script>
   // Promote the visitor's current OS download button automatically
   (function() {
@@ -625,6 +929,252 @@
       window.va('event', { name: 'download', data: { platform: platform } });
     }
   }
+
+  // Production-grade Feedback Form Handler (Web3Forms + Rate Limiting + Anti-Spam)
+  (function() {
+    var form = document.getElementById('feedbackForm');
+    if (!form) return;
+
+    var emailInput = document.getElementById('fbEmail');
+    var msgInput = document.getElementById('fbMessage');
+    var charHint = document.getElementById('fbCharHint');
+    var botcheck = document.getElementById('fbBotcheck');
+    var submitBtn = document.getElementById('fbSubmitBtn');
+    var submitText = document.getElementById('fbSubmitText');
+    var statusEl = document.getElementById('fbStatus');
+    var pills = form.querySelectorAll('.feedback-pill');
+
+    var selectedCategory = 'Feedback';
+    var cachedAccessKey = (window.__P2P_ENV__ && window.__P2P_ENV__.WEB3FORMS_ACCESS_KEY) || null;
+    var pageLoadedAt = Date.now();
+    var isSubmitting = false;
+
+    var COOLDOWN_MS = 60 * 1000; // 60s between consecutive messages
+    var HOURLY_WINDOW_MS = 60 * 60 * 1000;
+    var MAX_PER_HOUR = 3;
+    var STORAGE_RATE_KEY = 'p2p_fb_timestamps_v1';
+    var STORAGE_DRAFT_KEY = 'p2p_fb_draft_v1';
+
+    var placeholders = {
+      'Feedback': "What's working well, or what could be better?",
+      'Bug report': 'What happened, and on which device (Android or Windows)?',
+      'Question': 'What can I help you with?'
+    };
+
+    // Restore unsent draft from sessionStorage
+    try {
+      var savedDraft = sessionStorage.getItem(STORAGE_DRAFT_KEY);
+      if (savedDraft) {
+        var parsed = JSON.parse(savedDraft);
+        if (parsed.email && !emailInput.value) emailInput.value = parsed.email;
+        if (parsed.message && !msgInput.value) msgInput.value = parsed.message;
+      }
+    } catch (_) {}
+
+    function saveDraft() {
+      try {
+        sessionStorage.setItem(STORAGE_DRAFT_KEY, JSON.stringify({
+          email: emailInput.value,
+          message: msgInput.value
+        }));
+      } catch (_) {}
+    }
+
+    // Lazily fetch Web3Forms access key from serverless /api/feedback-config (.env)
+    function prefetchKey() {
+      if (cachedAccessKey) return Promise.resolve(cachedAccessKey);
+      if (window.location.protocol === 'file:') {
+        return Promise.resolve(cachedAccessKey);
+      }
+      return fetch('/api/feedback-config', { method: 'GET', credentials: 'same-origin' })
+        .then(function(r) { return r.ok ? r.json() : null; })
+        .then(function(data) {
+          if (data && data.accessKey) {
+            cachedAccessKey = data.accessKey;
+            return cachedAccessKey;
+          }
+          return null;
+        })
+        .catch(function() { return null; });
+    }
+
+    emailInput.addEventListener('focus', prefetchKey, { once: true });
+    msgInput.addEventListener('focus', prefetchKey, { once: true });
+    emailInput.addEventListener('input', saveDraft);
+    msgInput.addEventListener('input', function() {
+      saveDraft();
+      var len = msgInput.value.length;
+      charHint.textContent = len >= 1500 ? (len + ' / 2000') : '';
+    });
+
+    pills.forEach(function(pill) {
+      pill.addEventListener('click', function() {
+        pills.forEach(function(p) {
+          p.classList.remove('active');
+          p.setAttribute('aria-checked', 'false');
+        });
+        pill.classList.add('active');
+        pill.setAttribute('aria-checked', 'true');
+        selectedCategory = pill.getAttribute('data-category') || 'Feedback';
+        msgInput.placeholder = placeholders[selectedCategory] || placeholders['Feedback'];
+      });
+    });
+
+    function setStatus(type, text) {
+      statusEl.className = 'feedback-status' + (type ? ' ' + type : '');
+      if (type === 'success') {
+        statusEl.innerHTML =
+          '<div class="feedback-status-head"><span class="status-dot"></span><span>Message sent</span></div>' +
+          '<div class="feedback-status-sub">' + text + '</div>';
+      } else {
+        statusEl.textContent = text;
+      }
+    }
+
+    // Postel's Law: normalize messy email input cleanly
+    function normalizeEmail(raw) {
+      return (raw || '')
+        .trim()
+        .replace(/\s*@\s*/g, '@')
+        .replace(/\s*\.\s*/g, '.')
+        .toLowerCase();
+    }
+
+    function isValidEmail(email) {
+      return email.length <= 160 && /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email);
+    }
+
+    function checkRateLimit() {
+      var now = Date.now();
+      var history = [];
+      try {
+        var raw = localStorage.getItem(STORAGE_RATE_KEY);
+        if (raw) history = JSON.parse(raw) || [];
+      } catch (_) {}
+
+      history = history.filter(function(ts) { return now - ts < HOURLY_WINDOW_MS; });
+
+      if (history.length > 0) {
+        var elapsed = now - history[history.length - 1];
+        if (elapsed < COOLDOWN_MS) {
+          var waitSec = Math.ceil((COOLDOWN_MS - elapsed) / 1000);
+          return { allowed: false, reason: 'Please wait ' + waitSec + 's before sending another message.' };
+        }
+      }
+
+      if (history.length >= MAX_PER_HOUR) {
+        return { allowed: false, reason: 'Submission limit reached. Please try again in an hour.' };
+      }
+
+      return { allowed: true, history: history };
+    }
+
+    function recordSubmission(history) {
+      try {
+        history.push(Date.now());
+        localStorage.setItem(STORAGE_RATE_KEY, JSON.stringify(history));
+      } catch (_) {}
+    }
+
+    form.addEventListener('submit', function(e) {
+      e.preventDefault();
+      if (isSubmitting) return;
+
+      // Silent drop for bots filling the honeypot or submitting faster than humanly possible (<400ms from load)
+      if (botcheck && botcheck.checked) {
+        setStatus('success', "Thanks for reaching out. I'll reply to your email soon.");
+        form.reset();
+        return;
+      }
+      if (Date.now() - pageLoadedAt < 400) {
+        setStatus('error', 'Please wait a moment and try again.');
+        return;
+      }
+
+      var cleanEmail = normalizeEmail(emailInput.value);
+      var cleanMsg = (msgInput.value || '').trim().replace(/\n{3,}/g, '\n\n');
+
+      if (!cleanEmail || !isValidEmail(cleanEmail)) {
+        setStatus('error', 'Please enter a valid email address so I can reply.');
+        emailInput.focus();
+        return;
+      }
+
+      if (cleanMsg.length < 6) {
+        setStatus('error', 'Please write a short message (at least a few words).');
+        msgInput.focus();
+        return;
+      }
+
+      var rateCheck = checkRateLimit();
+      if (!rateCheck.allowed) {
+        setStatus('error', rateCheck.reason);
+        return;
+      }
+
+      isSubmitting = true;
+      submitBtn.disabled = true;
+      submitText.textContent = 'Sending…';
+      setStatus('', '');
+
+      prefetchKey().then(function(accessKey) {
+        if (!accessKey) {
+          throw new Error('UNCONFIGURED');
+        }
+
+        var ua = navigator.userAgent || '';
+        var platform = /Android/i.test(ua) ? 'Android' : (/Windows/i.test(ua) ? 'Windows' : 'Web');
+
+        return fetch('https://api.web3forms.com/submit', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify({
+            access_key: accessKey,
+            subject: 'P2P Link [' + selectedCategory + '] — ' + cleanEmail,
+            from_name: 'P2P Link Website',
+            email: cleanEmail,
+            replyto: cleanEmail,
+            category: selectedCategory,
+            message: cleanMsg,
+            visitor_platform: platform,
+            app_version: 'v1.3.0',
+            botcheck: ''
+          })
+        });
+      })
+      .then(function(res) {
+        return res.json().then(function(data) {
+          if (!res.ok || !data || !data.success) {
+            throw new Error((data && data.message) || 'Submission failed');
+          }
+          return data;
+        });
+      })
+      .then(function() {
+        recordSubmission(rateCheck.history);
+        try { sessionStorage.removeItem(STORAGE_DRAFT_KEY); } catch (_) {}
+        emailInput.value = '';
+        msgInput.value = '';
+        charHint.textContent = '';
+        setStatus('success', "Thanks for reaching out. I'll reply to your email soon.");
+      })
+      .catch(function(err) {
+        if (err && err.message === 'UNCONFIGURED') {
+          setStatus('error', 'Feedback service is being configured. Please use GitHub Issues for now.');
+        } else {
+          setStatus('error', 'Could not send right now. Please check your connection and try again.');
+        }
+      })
+      .finally(function() {
+        isSubmitting = false;
+        submitBtn.disabled = false;
+        submitText.textContent = 'Send message';
+      });
+    });
+  })();
 </script>
 <script data-goatcounter="https://p2plink.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
 <!-- Vercel Web Analytics -->
