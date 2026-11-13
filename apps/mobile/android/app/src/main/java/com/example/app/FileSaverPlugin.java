@@ -14,6 +14,7 @@ import android.os.Environment;
 import android.os.ParcelFileDescriptor;
 import android.provider.MediaStore;
 import android.util.Base64;
+import android.webkit.MimeTypeMap;
 import android.widget.Toast;
 
 import com.getcapacitor.JSObject;
@@ -57,6 +58,62 @@ public class FileSaverPlugin extends Plugin {
         return cleaned.replaceAll("[<>:\"|?*]", "_");
     }
 
+    private static String resolveMimeType(String filename, String providedMime) {
+        if (providedMime != null) {
+            String trimmed = providedMime.trim();
+            if (!trimmed.isEmpty()
+                    && !trimmed.equalsIgnoreCase("application/octet-stream")
+                    && !trimmed.equals("*/*")) {
+                return trimmed;
+            }
+        }
+        if (filename != null) {
+            int dot = filename.lastIndexOf('.');
+            if (dot >= 0 && dot < filename.length() - 1) {
+                String ext = filename.substring(dot + 1).trim().toLowerCase(java.util.Locale.ROOT);
+                switch (ext) {
+                    case "xlsx": return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+                    case "xls": return "application/vnd.ms-excel";
+                    case "ods": return "application/vnd.oasis.opendocument.spreadsheet";
+                    case "csv": return "text/csv";
+                    case "tsv": return "text/tab-separated-values";
+                    case "docx": return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+                    case "doc": return "application/msword";
+                    case "odt": return "application/vnd.oasis.opendocument.text";
+                    case "pptx": return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+                    case "ppt": return "application/vnd.ms-powerpoint";
+                    case "odp": return "application/vnd.oasis.opendocument.presentation";
+                    case "pdf": return "application/pdf";
+                    case "rtf": return "application/rtf";
+                    case "txt":
+                    case "log": return "text/plain";
+                    case "md": return "text/markdown";
+                    case "json": return "application/json";
+                    case "xml": return "application/xml";
+                    case "html":
+                    case "htm": return "text/html";
+                    case "css": return "text/css";
+                    case "js": return "text/javascript";
+                    case "epub": return "application/epub+zip";
+                    case "zip": return "application/zip";
+                    case "rar": return "application/vnd.rar";
+                    case "7z": return "application/x-7z-compressed";
+                    case "tar": return "application/x-tar";
+                    case "gz":
+                    case "tgz": return "application/gzip";
+                    case "apk": return "application/vnd.android.package-archive";
+                    default:
+                        String mapped = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext);
+                        if (mapped != null && !mapped.isEmpty()) {
+                            return mapped;
+                        }
+                        break;
+                }
+            }
+        }
+        return "application/octet-stream";
+    }
+
     /**
      * Capacitor's PluginCall.getLong() only checks `value instanceof Long`, which returns null whenever
      * org.json.JSONObject parses a JS number fitting in 32-bit int (< 2 GiB) as java.lang.Integer.
@@ -85,9 +142,7 @@ public class FileSaverPlugin extends Plugin {
         String mimeType = call.getString("mimeType");
         String subDir = sanitizeSubDir(call.getString("subDir"));
 
-        if (mimeType == null || mimeType.trim().isEmpty()) {
-            mimeType = "application/octet-stream";
-        }
+        mimeType = resolveMimeType(filename, mimeType);
 
         if (filename == null || filename.trim().isEmpty() || base64Data == null || base64Data.trim().isEmpty()) {
             call.reject("Filename and base64Data are required");
@@ -205,17 +260,22 @@ public class FileSaverPlugin extends Plugin {
             return;
         }
 
-        if (resume && (activeChannels.containsKey(fileId) || activeStreams.containsKey(fileId))) {
-            JSObject ret = new JSObject();
-            ret.put("success", true);
-            ret.put("fileId", fileId);
-            ret.put("resumed", true);
-            call.resolve(ret);
-            return;
+        if (resume && activeChannels.containsKey(fileId)) {
+            try {
+                FileChannel existingCh = activeChannels.get(fileId);
+                if (existingCh != null && existingCh.isOpen() && existingCh.size() > 0) {
+                    JSObject ret = new JSObject();
+                    ret.put("success", true);
+                    ret.put("fileId", fileId);
+                    ret.put("resumed", true);
+                    call.resolve(ret);
+                    return;
+                }
+            } catch (Exception ignored) {}
         }
 
-        if (!resume) {
-            // Ensure any stale handle from an earlier non-resumed run with the same fileId is closed cleanly
+        // Clean up any stale in-memory handle before opening/reopening
+        {
             FileChannel oldCh = activeChannels.remove(fileId);
             ParcelFileDescriptor oldPfd = activePfds.remove(fileId);
             RandomAccessFile oldRaf = activeRaws.remove(fileId);
@@ -229,9 +289,7 @@ public class FileSaverPlugin extends Plugin {
             activeFiles.remove(fileId);
         }
 
-        if (mimeType == null || mimeType.trim().isEmpty()) {
-            mimeType = "application/octet-stream";
-        }
+        mimeType = resolveMimeType(filename, mimeType);
 
         String relativeDir = subDir.isEmpty()
                 ? Environment.DIRECTORY_DOWNLOADS
@@ -276,20 +334,27 @@ public class FileSaverPlugin extends Plugin {
                     ParcelFileDescriptor pfd = resolver.openFileDescriptor(savedUri, "rw");
                     if (pfd != null) {
                         FileChannel channel = new FileOutputStream(pfd.getFileDescriptor()).getChannel();
-                        activePfds.put(fileId, pfd);
-                        activeChannels.put(fileId, channel);
-                        activeUris.put(fileId, savedUri);
-                        activePaths.put(fileId, prefs.getString("path_" + fileId, relativeDir + "/" + filename));
-                        activeDisplayNames.put(fileId, prefs.getString("name_" + fileId, filename));
-                        activeMimeTypes.put(fileId, prefs.getString("mime_" + fileId, mimeType));
-                        activeSubDirs.put(fileId, prefs.getString("subdir_" + fileId, subDir));
+                        if (channel.size() > 0) {
+                            activePfds.put(fileId, pfd);
+                            activeChannels.put(fileId, channel);
+                            activeUris.put(fileId, savedUri);
+                            activePaths.put(fileId, prefs.getString("path_" + fileId, relativeDir + "/" + filename));
+                            activeDisplayNames.put(fileId, prefs.getString("name_" + fileId, filename));
+                            activeMimeTypes.put(fileId, prefs.getString("mime_" + fileId, mimeType));
+                            activeSubDirs.put(fileId, prefs.getString("subdir_" + fileId, subDir));
 
-                        JSObject ret = new JSObject();
-                        ret.put("success", true);
-                        ret.put("fileId", fileId);
-                        ret.put("resumed", true);
-                        call.resolve(ret);
-                        return;
+                            JSObject ret = new JSObject();
+                            ret.put("success", true);
+                            ret.put("fileId", fileId);
+                            ret.put("resumed", true);
+                            call.resolve(ret);
+                            return;
+                        } else {
+                            try { channel.close(); } catch (Exception ignored) {}
+                            try { pfd.close(); } catch (Exception ignored) {}
+                            try { resolver.delete(savedUri, null, null); } catch (Exception ignored) {}
+                            prefs.edit().remove("uri_" + fileId).apply();
+                        }
                     }
                 } catch (Exception e) {
                     prefs.edit().remove("uri_" + fileId).apply();
@@ -299,7 +364,7 @@ public class FileSaverPlugin extends Plugin {
             String savedFilePath = prefs.getString("file_" + fileId, null);
             if (savedFilePath != null) {
                 File targetFile = new File(savedFilePath);
-                if (targetFile.exists()) {
+                if (targetFile.exists() && targetFile.length() > 0) {
                     try {
                         RandomAccessFile raf = new RandomAccessFile(targetFile, "rw");
                         FileChannel channel = raf.getChannel();
@@ -320,6 +385,9 @@ public class FileSaverPlugin extends Plugin {
                     } catch (Exception e) {
                         prefs.edit().remove("file_" + fileId).apply();
                     }
+                } else if (targetFile.exists()) {
+                    try { targetFile.delete(); } catch (Exception ignored) {}
+                    prefs.edit().remove("file_" + fileId).apply();
                 }
             }
         }
@@ -365,6 +433,7 @@ public class FileSaverPlugin extends Plugin {
                 JSObject ret = new JSObject();
                 ret.put("success", true);
                 ret.put("fileId", fileId);
+                ret.put("resumed", false);
                 call.resolve(ret);
             } else {
                 File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
@@ -410,6 +479,7 @@ public class FileSaverPlugin extends Plugin {
                 JSObject ret = new JSObject();
                 ret.put("success", true);
                 ret.put("fileId", fileId);
+                ret.put("resumed", false);
                 call.resolve(ret);
             }
         } catch (Exception e) {
@@ -558,7 +628,7 @@ public class FileSaverPlugin extends Plugin {
             String mimeType = activeMimeTypes.remove(fileId);
             String subDir = activeSubDirs.remove(fileId);
             if (displayName == null) displayName = "file";
-            if (mimeType == null) mimeType = "application/octet-stream";
+            mimeType = resolveMimeType(displayName, mimeType);
             if (subDir == null) subDir = "";
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -568,15 +638,19 @@ public class FileSaverPlugin extends Plugin {
                     ContentResolver resolver = getContext().getContentResolver();
                     ContentValues cv = new ContentValues();
                     cv.put(MediaStore.MediaColumns.IS_PENDING, 0);
+                    if (!"application/octet-stream".equals(mimeType)) {
+                        cv.put(MediaStore.MediaColumns.MIME_TYPE, mimeType);
+                    }
                     resolver.update(uri, cv, null, null);
                 }
                 if (savedPath != null) {
                     File publicFile = new File(Environment.getExternalStorageDirectory(), savedPath);
                     if (publicFile.exists()) {
+                        String[] scanMimes = "application/octet-stream".equals(mimeType) ? null : new String[]{mimeType};
                         MediaScannerConnection.scanFile(
                             getContext(),
                             new String[]{publicFile.getAbsolutePath()},
-                            new String[]{mimeType},
+                            scanMimes,
                             null
                         );
                     }
@@ -584,7 +658,8 @@ public class FileSaverPlugin extends Plugin {
             } else {
                 File targetFile = activeFiles.remove(fileId);
                 if (targetFile != null) {
-                    MediaScannerConnection.scanFile(getContext(), new String[]{targetFile.getAbsolutePath()}, new String[]{mimeType}, null);
+                    String[] scanMimes = "application/octet-stream".equals(mimeType) ? null : new String[]{mimeType};
+                    MediaScannerConnection.scanFile(getContext(), new String[]{targetFile.getAbsolutePath()}, scanMimes, null);
                 }
             }
 

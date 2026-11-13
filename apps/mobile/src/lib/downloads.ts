@@ -47,7 +47,7 @@ interface FileSaverPlugin {
     mimeType?: string;
     subDir?: string;
     resume?: boolean;
-  }): Promise<{ success: boolean; fileId: string }>;
+  }): Promise<{ success: boolean; fileId: string; resumed?: boolean }>;
   writeChunk(options: {
     fileId: string;
     base64Chunk: string;
@@ -173,7 +173,7 @@ export function clearDownloadCache(transferId: string): void {
   }
 }
 
-export function getCachedDownloadBytes(transferId: string, totalSize?: number, totalChunks?: number): number {
+export function getCachedDownloadBytes(transferId: string, totalSize?: number, totalChunks?: number, chunkSize?: number): number {
   const parts = downloadChunksCache.get(transferId);
   if (parts) {
     let sum = 0;
@@ -184,12 +184,11 @@ export function getCachedDownloadBytes(transferId: string, totalSize?: number, t
   }
   if (totalSize && totalChunks) {
     const bitmap = loadChunkBitmap(transferId, totalChunks);
-    const chunkSize = Math.ceil(totalSize / totalChunks);
+    const layout = chunkLayout(totalSize, totalChunks, chunkSize);
     let sum = 0;
     for (let i = 0; i < totalChunks; i++) {
       if (bitmap[i]) {
-        const isLast = i === totalChunks - 1;
-        sum += isLast ? (totalSize - i * chunkSize) : chunkSize;
+        sum += layout.lengthOf(i);
       }
     }
     return sum;
@@ -394,26 +393,36 @@ export async function downloadDirectToDisk(
   onProgress: (receivedBytes: number, speed?: number, eta?: string) => void,
   signal?: AbortSignal
 ): Promise<{ success: boolean; path: string }> {
+  const subDir = options.subDir !== undefined ? options.subDir : getDownloadSubDir();
+  const resolvedMime = options.mimeType || mimeFor(options.filename) || 'application/octet-stream';
+
   if (info.totalChunks === 0 || info.totalSize === 0) {
+    const emptyRes = await saveToDeviceDownloads(new Blob([], { type: resolvedMime }), options.filename, resolvedMime, subDir);
     onProgress(0, 0, 'Done');
     playTransferSuccessChime();
-    return { success: true, path: options.filename };
+    return { success: emptyRes.success, path: emptyRes.path || options.filename };
   }
 
   const fileId = `dl_${info.transferId}`;
-  const subDir = options.subDir !== undefined ? options.subDir : getDownloadSubDir();
 
   const layout = chunkLayout(info.totalSize, info.totalChunks, info.chunkSize);
   const completed = loadChunkBitmap(info.transferId, info.totalChunks);
   const hasProgress = completed.some(v => v === 1);
 
-  await FileSaver.startSaveFile({
+  const startRes = await FileSaver.startSaveFile({
     fileId,
     filename: options.filename,
-    mimeType: options.mimeType || mimeFor(options.filename) || 'application/octet-stream',
+    mimeType: resolvedMime,
     subDir,
     resume: hasProgress
   });
+
+  // If native storage could not reopen the previous pending file and created a fresh one,
+  // reset the chunk bitmap so no chunks are skipped (which would leave zero-byte holes).
+  if (hasProgress && !startRes.resumed) {
+    completed.fill(0);
+    saveChunkBitmap(info.transferId, completed);
+  }
 
   let receivedBytes = 0;
   for (let i = 0; i < info.totalChunks; i++) {
