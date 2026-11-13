@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from './icons';
 import { backButtonManager } from '../lib/backButton';
 
@@ -73,7 +74,7 @@ export const Sheet: React.FC<SheetProps> = ({
 
   if (!mounted) return null;
 
-  return (
+  const content = (
     <div className="sheet-root" data-state={visible ? 'open' : 'closed'}>
       <div className="sheet-scrim" onClick={onClose} aria-hidden="true" />
       <div
@@ -110,6 +111,8 @@ export const Sheet: React.FC<SheetProps> = ({
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined' ? createPortal(content, document.body) : content;
 };
 
 export default Sheet;
