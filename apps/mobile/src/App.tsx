@@ -141,21 +141,27 @@ const guessDeviceName = () => {
 
 
 const parsePairingLink = (text: string): { host: string; code?: string; scheme?: string; cert?: string } => {
+  const cleaned = text.trim().replace(/^["'`]+|["'`]+$/g, '').replace(/\s*([:.])\s*/g, '$1').trim();
   try {
-    const url = new URL(text);
-    if (url.protocol === 'http:' || url.protocol === 'https:') {
-      const hashParams = new URLSearchParams(url.hash.slice(1));
-      return {
-        host: url.host,
-        scheme: url.protocol.replace(':', ''),
-        code: hashParams.get('pair') || undefined,
-        cert: hashParams.get('cert') || undefined
-      };
+    const candidate = /^https?:\/\//i.test(cleaned)
+      ? cleaned
+      : (cleaned.includes('/#') || cleaned.includes('?') ? `http://${cleaned}` : '');
+    if (candidate) {
+      const url = new URL(candidate);
+      if (url.protocol === 'http:' || url.protocol === 'https:') {
+        const hashParams = new URLSearchParams(url.hash.slice(1));
+        return {
+          host: url.host,
+          scheme: url.protocol.replace(':', ''),
+          code: hashParams.get('pair') || url.searchParams.get('pair') || undefined,
+          cert: hashParams.get('cert') || url.searchParams.get('cert') || undefined
+        };
+      }
     }
   } catch {
     // not a URL
   }
-  return { host: text.trim() };
+  return { host: cleaned.replace(/^https?:\/\//i, '').split('/')[0].replace(/\/+$/, '') };
 };
 
 
@@ -1551,7 +1557,8 @@ export default function App() {
 
   const handleConnect = async (e: React.FormEvent) => {
     e.preventDefault();
-    let raw = address.trim().replace(/^https?:\/\//, '').split('/')[0];
+    const parsed = parsePairingLink(address);
+    let raw = parsed.host;
     if (raw && !raw.includes(':')) {
       raw = `${raw}:8080`;
     }
@@ -1564,14 +1571,14 @@ export default function App() {
     if (!raw) return;
     setAddress(raw);
     // "Change IP" on the card of the one paired PC edits where to find it; anywhere else this adds a new device.
-    const only = !isAddingDevice && snap.peers.length === 1 ? snap.peers[0] : null;
+    const only = !isAddingDevice && snap.peers.length === 1 && !parsed.code ? snap.peers[0] : null;
     if (only) {
       setAddress(raw);
       peerManager.updateAddress(only.id, raw);
       await connectPeer(only.id, raw);
       return;
     }
-    await pairAndConnect(raw);
+    await pairAndConnect(raw, parsed.code, parsed.scheme, parsed.cert);
   };
 
   const openDevices = (mode: 'manage' | 'pick' = 'manage') => {
@@ -1736,6 +1743,41 @@ export default function App() {
     if (sharedUri) retainSharedUri(sharedUri, fresh.length);
 
     const kind = getMediaKind(file.name);
+    const nowTs = Date.now();
+
+    // Doherty threshold (<400ms): render transfer card immediately while local preview/thumbnail materializes.
+    setMessages(prev => {
+      let next = prev;
+      for (const peer of fresh) {
+        if (!apiFor(peer.id)) continue;
+        const transferId = transferIdForPeer(baseId, peer.id);
+        const msgId = `msg-${transferId}`;
+        if (next.some(m => m.id === msgId)) continue;
+        next = [
+          ...next,
+          {
+            id: msgId,
+            sender: 'me',
+            timestamp: nowTs,
+            peerId: peer.id,
+            peerName: peer.name,
+            file: {
+              filename: file.name,
+              transferId,
+              cacheKey: baseId,
+              totalSize: file.size,
+              totalChunks: Math.max(1, Math.ceil(file.size / (512 * 1024))),
+              chunkSize: 512 * 1024,
+              status: 'queued',
+              priority,
+              mediaKind: kind
+            }
+          }
+        ];
+      }
+      return next;
+    });
+
     let blobUrl: string | undefined = undefined;
     let thumbnailUrl: string | undefined = undefined;
     let snippet: string | undefined = undefined;

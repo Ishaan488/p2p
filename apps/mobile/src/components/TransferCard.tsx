@@ -380,7 +380,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
   return (
     <>
       <div
-        className="swipe-wrapper"
+        className={`swipe-wrapper${isDeleting ? ' is-deleting' : ''}`}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
