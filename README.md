@@ -16,7 +16,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT" /></a>
-  <a href="https://github.com/Ishaan488/p2p/releases"><img src="https://img.shields.io/badge/Version-1.2.0-10B981?style=flat-square" alt="Version 1.2.0" /></a>
+  <a href="https://github.com/Ishaan488/p2p/releases"><img src="https://img.shields.io/badge/Version-1.3.0-10B981?style=flat-square" alt="Version 1.3.0" /></a>
   <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.22%2B-00ADD8?style=flat-square&logo=go" alt="Go 1.22+" /></a>
   <a href="https://react.dev/"><img src="https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react" alt="React 18" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript" alt="TypeScript 5" /></a>
