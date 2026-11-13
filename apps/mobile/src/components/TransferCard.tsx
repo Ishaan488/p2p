@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowDownLeft, ArrowUpRight, RotateCcw, Copy, Check, Download, Trash2, Pause, Play, X, ExternalLink, Package,
   File as FileIcon, FileArchive, FileCode, FileSpreadsheet, FileText, Image as ImageIcon, Music, Video as VideoIcon,
@@ -71,6 +71,22 @@ export interface TransferCardProps {
   onTogglePriority?: (id: string) => void;
   onToast: (text: string, type?: 'info' | 'success' | 'warning') => void;
   peerLabel?: string;
+  selectionMode?: boolean;
+  isSelected?: boolean;
+  onToggleSelect?: (id: string) => void;
+  onLongPressSelect?: (id: string) => void;
+  onSaveText?: (id: string, text: string) => void;
+}
+
+const SWIPE_THRESHOLD = 76;
+const LONG_PRESS_MS = 450;
+const MOVE_SLOP = 8;
+
+function applyRubberBand(dx: number): number {
+  const sign = dx < 0 ? -1 : 1;
+  const abs = Math.abs(dx);
+  if (abs <= 96) return dx;
+  return sign * (96 + Math.min(40, (abs - 96) * 0.35));
 }
 
 function getFileExtension(filename: string): string {
@@ -139,14 +155,41 @@ function statusText(file: NonNullable<TransferItem['file']>): string {
 export const TransferCard: React.FC<TransferCardProps> = ({
   item, isDeleting, onCopy, onDownload, onDelete, onOpenMedia, onAcceptApproval, onAlwaysTrustApproval,
   onRejectApproval, onPauseUpload, onResumeUpload, onCancelUpload, onTogglePriority: _onTogglePriority, onToast, peerLabel,
+  selectionMode = false, isSelected = false, onToggleSelect, onLongPressSelect, onSaveText,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [justCopied, setJustCopied] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
 
+  const [swipeX, setSwipeX] = useState(0);
+  const [isSnapping, setIsSnapping] = useState(false);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const axisLockRef = useRef<'none' | 'horizontal' | 'vertical'>('none');
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const armedRef = useRef<'save' | 'remove' | null>(null);
+  const suppressClickRef = useRef(false);
+
+  const clearLongPress = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  useEffect(() => () => clearLongPress(), []);
+
+  // Reset swipe if selection mode activates
+  useEffect(() => {
+    if (selectionMode && swipeX !== 0) {
+      setIsSnapping(true);
+      setSwipeX(0);
+    }
+  }, [selectionMode]);
+
   const isSent = item.sender === 'me';
   const file = item.file;
+  const canSwipeActions = !detailsOpen && !file?.isPendingApproval;
 
   const isImageFile = !!file && (file.mediaKind === 'image' || /\.(jpg|jpeg|png|gif|webp|svg|bmp|heic|avif)$/i.test(file.filename));
   const isVideoFile = !!file && (file.mediaKind === 'video' || /\.(mp4|mkv|mov|webm|avi|m4v|3gp)$/i.test(file.filename));
@@ -163,6 +206,117 @@ export const TransferCard: React.FC<TransferCardProps> = ({
   const inFlight = !!file && !file.isPendingApproval && (file.isDownloading || file.status === 'saving' || (!!file.status && file.status !== 'done'));
   const failed = !!file && (file.status === 'error' || file.status === 'interrupted' || (!!file.error && !file.isDownloading));
   const canResume = !!file && (file.status === 'paused' || file.status === 'error' || file.status === 'interrupted');
+
+  const triggerSave = () => {
+    if (file) {
+      onDownload(item.id, file, true);
+    } else if (item.text && onSaveText) {
+      onSaveText(item.id, item.text);
+    }
+  };
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (!canSwipeActions || e.touches.length > 1) return;
+    const t = e.touches[0];
+    touchStartRef.current = { x: t.clientX, y: t.clientY };
+    axisLockRef.current = 'none';
+    armedRef.current = null;
+    setIsSnapping(false);
+
+    if (!selectionMode && onLongPressSelect) {
+      clearLongPress();
+      longPressTimerRef.current = setTimeout(() => {
+        longPressTimerRef.current = null;
+        try { navigator.vibrate?.(16); } catch {}
+        suppressClickRef.current = true;
+        setTimeout(() => { suppressClickRef.current = false; }, 350);
+        onLongPressSelect(item.id);
+      }, LONG_PRESS_MS);
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!touchStartRef.current || e.touches.length > 1) return;
+    const t = e.touches[0];
+    const dx = t.clientX - touchStartRef.current.x;
+    const dy = t.clientY - touchStartRef.current.y;
+
+    if (Math.abs(dx) > MOVE_SLOP || Math.abs(dy) > MOVE_SLOP) {
+      clearLongPress();
+    }
+
+    if (selectionMode || !canSwipeActions) return;
+
+    if (axisLockRef.current === 'none') {
+      if (Math.abs(dx) < MOVE_SLOP && Math.abs(dy) < MOVE_SLOP) return;
+      if (Math.abs(dy) > Math.abs(dx) * 1.1) {
+        axisLockRef.current = 'vertical';
+        return;
+      }
+      axisLockRef.current = 'horizontal';
+    }
+
+    if (axisLockRef.current !== 'horizontal') return;
+
+    const clamped = applyRubberBand(dx);
+    setSwipeX(clamped);
+
+    if (clamped >= SWIPE_THRESHOLD && armedRef.current !== 'save') {
+      armedRef.current = 'save';
+      try { navigator.vibrate?.(10); } catch {}
+    } else if (clamped <= -SWIPE_THRESHOLD && armedRef.current !== 'remove') {
+      armedRef.current = 'remove';
+      try { navigator.vibrate?.(10); } catch {}
+    } else if (Math.abs(clamped) < SWIPE_THRESHOLD && armedRef.current !== null) {
+      armedRef.current = null;
+    }
+  };
+
+  const handleTouchEnd = () => {
+    clearLongPress();
+    if (!touchStartRef.current) return;
+    const wasHorizontal = axisLockRef.current === 'horizontal';
+    const finalX = swipeX;
+    touchStartRef.current = null;
+    axisLockRef.current = 'none';
+    armedRef.current = null;
+
+    if (wasHorizontal) {
+      suppressClickRef.current = true;
+      setTimeout(() => { suppressClickRef.current = false; }, 160);
+      setIsSnapping(true);
+      setSwipeX(0);
+      if (finalX >= SWIPE_THRESHOLD) {
+        triggerSave();
+      } else if (finalX <= -SWIPE_THRESHOLD) {
+        onDelete(item.id);
+      }
+    }
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0 || selectionMode || !onLongPressSelect || !canSwipeActions) return;
+    clearLongPress();
+    longPressTimerRef.current = setTimeout(() => {
+      longPressTimerRef.current = null;
+      suppressClickRef.current = true;
+      setTimeout(() => { suppressClickRef.current = false; }, 350);
+      onLongPressSelect(item.id);
+    }, LONG_PRESS_MS);
+  };
+
+  const handleCardClickCapture = (e: React.MouseEvent) => {
+    if (suppressClickRef.current) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (selectionMode && onToggleSelect) {
+      e.preventDefault();
+      e.stopPropagation();
+      onToggleSelect(item.id);
+    }
+  };
 
   const handleCopy = () => {
     if (!item.text) return;
@@ -198,7 +352,7 @@ export const TransferCard: React.FC<TransferCardProps> = ({
       src: (file.blobUrl || file.thumbnailUrl)!,
       filename: file.filename,
       fileSize: file.totalSize,
-      onDownload: !isSent ? () => onDownload(item.id, file, true) : undefined,
+      onDownload: () => onDownload(item.id, file, true),
     });
   };
 
@@ -219,8 +373,57 @@ export const TransferCard: React.FC<TransferCardProps> = ({
     </button>
   );
 
+  const swipeDir = swipeX > 0 ? 'save' : swipeX < 0 ? 'remove' : null;
+  const swipeProgress = Math.min(1, Math.abs(swipeX) / SWIPE_THRESHOLD);
+  const isArmed = Math.abs(swipeX) >= SWIPE_THRESHOLD;
+
   return (
-    <article className={`feed-item${isDeleting ? ' deleting' : ''}`}>
+    <>
+      <div
+        className="swipe-wrapper"
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      onTouchCancel={handleTouchEnd}
+      onMouseDown={handleMouseDown}
+      onMouseUp={clearLongPress}
+      onMouseLeave={clearLongPress}
+      onClickCapture={handleCardClickCapture}
+    >
+      {swipeDir && (
+        <div className={`swipe-rail is-${swipeDir}${isArmed ? ' is-armed' : ''}`} aria-hidden="true">
+          <span
+            className="swipe-action"
+            style={{
+              opacity: Math.max(0.25, swipeProgress),
+              transform: `scale(${isArmed ? 1.08 : 0.8 + swipeProgress * 0.2})`,
+            }}
+          >
+            {swipeDir === 'save' ? (
+              <>
+                <Download size={19} />
+                <span>Save to Downloads</span>
+              </>
+            ) : (
+              <>
+                <span>Remove</span>
+                <Trash2 size={19} />
+              </>
+            )}
+          </span>
+        </div>
+      )}
+      <div
+        className={`swipe-content${isSnapping ? ' is-snapping' : ''}`}
+        style={swipeX !== 0 ? { transform: `translate3d(${swipeX}px, 0, 0)` } : undefined}
+      >
+        <article className={`feed-item${isDeleting ? ' deleting' : ''}${selectionMode ? ' is-selecting' : ''}${isSelected ? ' is-selected' : ''}`}>
+          {selectionMode && (
+            <span className={`selection-check${isSelected ? ' is-checked' : ''}`} aria-hidden="true">
+              {isSelected && <Check size={14} />}
+            </span>
+          )}
+          <div className="feed-item-body">
       {/* Text */}
       {item.text && !file && (
         <div className="feed-text">
@@ -300,11 +503,11 @@ export const TransferCard: React.FC<TransferCardProps> = ({
           </div>
           <div className="feed-embed-body">
             {file.blobUrl && file.mediaKind === 'audio' ? (
-              <AudioPlayer src={file.blobUrl} filename={file.filename} fileSize={file.totalSize} onDownload={!isSent ? () => onDownload(item.id, file, true) : undefined} />
+              <AudioPlayer src={file.blobUrl} filename={file.filename} fileSize={file.totalSize} onDownload={() => onDownload(item.id, file, true)} />
             ) : file.blobUrl && file.mediaKind === 'pdf' ? (
-              <PdfViewer src={file.blobUrl} filename={file.filename} fileSize={file.totalSize} onDownload={!isSent ? () => onDownload(item.id, file, true) : undefined} />
+              <PdfViewer src={file.blobUrl} filename={file.filename} fileSize={file.totalSize} onDownload={() => onDownload(item.id, file, true)} />
             ) : file.snippet ? (
-              <CodeViewer filename={file.filename} snippet={file.snippet} fullContent={file.fullContent} totalLines={file.totalLines} fileSize={file.totalSize} onDownload={!isSent ? () => onDownload(item.id, file, true) : undefined} onCopyNotice={onToast} />
+              <CodeViewer filename={file.filename} snippet={file.snippet} fullContent={file.fullContent} totalLines={file.totalLines} fileSize={file.totalSize} onDownload={() => onDownload(item.id, file, true)} onCopyNotice={onToast} />
             ) : null}
           </div>
         </div>
@@ -350,6 +553,11 @@ export const TransferCard: React.FC<TransferCardProps> = ({
         </div>
       )}
 
+          </div>
+        </article>
+      </div>
+    </div>
+
       {/* Transfer details */}
       <Sheet open={detailsOpen} onClose={() => setDetailsOpen(false)} title={file ? file.filename : 'Message'} flush>
         <div className="detail-list">
@@ -366,17 +574,23 @@ export const TransferCard: React.FC<TransferCardProps> = ({
           {file && (isImageFile || isVideoFile) && (file.blobUrl || file.thumbnailUrl) && (
             <li><button type="button" className="row" onClick={() => { setDetailsOpen(false); openMedia(); }}><Play size={20} className="row-icon" /><span className="row-main"><span className="row-title">{isVideoFile ? 'Play video' : 'View image'}</span></span></button></li>
           )}
-          {file && !isSent && !file.isPendingApproval && (
+          {file && !file.isPendingApproval && (
             <li><button type="button" className="row" onClick={() => { setDetailsOpen(false); onDownload(item.id, file, true); }}><Download size={20} className="row-icon" /><span className="row-main"><span className="row-title">Save to Downloads</span></span></button></li>
+          )}
+          {item.text && !file && onSaveText && (
+            <li><button type="button" className="row" onClick={() => { setDetailsOpen(false); onSaveText(item.id, item.text!); }}><Download size={20} className="row-icon" /><span className="row-main"><span className="row-title">Save to Downloads</span></span></button></li>
           )}
           {file && canResume && (
             <li><button type="button" className="row" onClick={() => { setDetailsOpen(false); onResumeUpload(item.id); }}><RotateCcw size={20} className="row-icon" /><span className="row-main"><span className="row-title">Resume transfer</span></span></button></li>
           )}
           <li><button type="button" className="row" onClick={handleShare}><Share2 size={20} className="row-icon" /><span className="row-main"><span className="row-title">Share</span></span></button></li>
+          {onLongPressSelect && (
+            <li><button type="button" className="row" onClick={() => { setDetailsOpen(false); onLongPressSelect(item.id); }}><Check size={20} className="row-icon" /><span className="row-main"><span className="row-title">Select</span></span></button></li>
+          )}
           <li><button type="button" className="row is-destructive" onClick={() => { setDetailsOpen(false); onDelete(item.id); }}><Trash2 size={20} className="row-icon" /><span className="row-main"><span className="row-title">Remove from list</span></span></button></li>
         </ul>
       </Sheet>
-    </article>
+    </>
   );
 };
 

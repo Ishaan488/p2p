@@ -28,7 +28,7 @@ import {
   LogOut,
   Trash2, UploadCloud, Settings, Loader2, ChevronRight, Plus,
   ShieldCheck, ShieldAlert, Unlink, MoreVertical,
-  ChevronDown, Laptop, X
+  ChevronDown, Laptop, X, Download
 } from './components/icons';
 import { Sheet } from './components/Sheet';
 import { StateView, Switch } from './components/ui';
@@ -258,6 +258,8 @@ export default function App() {
   });
 
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const selectionMode = selectedIds.size > 0;
   const [isDragging, setIsDragging] = useState(false);
   const [batchStats, setBatchStats] = useState<BatchStats>(() => uploadQueue.getStats());
   const [isBatchPaused, setIsBatchPaused] = useState(false);
@@ -681,6 +683,72 @@ export default function App() {
     }
 
     performImmediateDelete(id, !skipConfirm);
+  };
+
+  useEffect(() => {
+    if (!selectionMode) return;
+    return backButtonManager.push(() => {
+      setSelectedIds(new Set());
+      return true;
+    });
+  }, [selectionMode]);
+
+  const enterSelection = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const exitSelection = () => setSelectedIds(new Set());
+
+  const handleSaveText = async (_id: string, text: string) => {
+    const filename = `message-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.txt`;
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const targetLabel = downloadSubDir ? `Downloads/${downloadSubDir}` : 'Downloads';
+    const res = await saveToDeviceDownloads(blob, filename, undefined, downloadSubDir);
+    if (res.success) {
+      showToast(`Saved ${filename} to ${targetLabel}`, 'success');
+    } else {
+      showToast('Could not save text to Downloads', 'error');
+    }
+  };
+
+  const handleBatchSaveSelected = async () => {
+    const ids = Array.from(selectedIds);
+    const items = messagesRef.current.filter(m => ids.includes(m.id));
+    setSelectedIds(new Set());
+    let savedCount = 0;
+    for (const item of items) {
+      if (item.file && !item.file.isPendingApproval) {
+        await handleDownload(item.id, item.file, true);
+        savedCount++;
+      } else if (item.text) {
+        await handleSaveText(item.id, item.text);
+        savedCount++;
+      }
+    }
+    if (savedCount === 0) {
+      showToast('No saveable items in selection', 'info');
+    }
+  };
+
+  const handleBatchRemoveSelected = () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    setSelectedIds(new Set());
+    ids.forEach(id => handleDelete(id, true));
+    showToast(`Removed ${ids.length} ${ids.length === 1 ? 'item' : 'items'}`, 'info');
   };
 
   const peerOfItem = (id: string): string | undefined => messagesRef.current.find(m => m.id === id)?.peerId;
@@ -1222,20 +1290,39 @@ export default function App() {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, []);
 
-  const handleDownload = async (id: string, file: NonNullable<TransferItem['file']>, saveToDisk = true, peerIdArg?: string) => {
-    const itemRecord = messagesRef.current.find(m => m.id === id);
-    if (itemRecord?.sender === 'me' && !file.blobUrl) {
-      showToast('This file was sent from your device and is already on your phone.', 'info');
-      return;
+  const resolveLocalBlob = async (id: string, file: NonNullable<TransferItem['file']>): Promise<Blob | null> => {
+    const keys = [file.cacheKey, file.transferId, id].filter((k): k is string => Boolean(k));
+    for (const key of keys) {
+      try {
+        const cached = await getBlobFromCache(key);
+        if (cached) return cached;
+      } catch {}
     }
-    const peerId = peerIdArg ?? peerOfItem(id) ?? peerManager.getSnapshot().focused?.id;
-    const api = apiFor(peerId);
-    // 1. Fast path: if saving to disk and file was already downloaded (e.g. from Preview)
-    if (saveToDisk && file.blobUrl) {
+    if (file.blobUrl) {
       try {
         const res = await fetch(file.blobUrl);
-        if (res.ok) {
-          const existingBlob = await res.blob();
+        if (res.ok) return await res.blob();
+      } catch {}
+    }
+    return null;
+  };
+
+  const handleDownload = async (id: string, file: NonNullable<TransferItem['file']>, saveToDisk = true, peerIdArg?: string) => {
+    const itemRecord = messagesRef.current.find(m => m.id === id);
+    const isSentItem = itemRecord?.sender === 'me';
+    const peerId = peerIdArg ?? peerOfItem(id) ?? peerManager.getSnapshot().focused?.id;
+    const api = apiFor(peerId);
+
+    // 1. Fast path: if saving to disk and file is already cached locally (sent or previewed)
+    if (saveToDisk && (file.blobUrl || isSentItem || file.cacheKey)) {
+      const existingBlob = await resolveLocalBlob(id, file);
+      if (existingBlob) {
+        if (!file.blobUrl) {
+          try {
+            updateFile(id, { blobUrl: URL.createObjectURL(existingBlob) });
+          } catch {}
+        }
+        try {
           const targetLabel = downloadSubDir ? `Downloads/${downloadSubDir}` : 'Downloads';
           updateFile(id, { isDownloading: true, status: 'saving', progress: 0, savedBytes: 0, error: undefined });
           const saveRes = await saveToDeviceDownloads(
@@ -1253,9 +1340,18 @@ export default function App() {
             updateFile(id, { isDownloading: false, status: 'done', progress: 100, savedBytes: undefined });
             return;
           }
+        } catch (err) {
+          console.warn('Fast path save failed:', err);
         }
-      } catch (err) {
-        console.warn('Fast path save failed, falling back to fresh download:', err);
+        if (isSentItem) {
+          updateFile(id, { isDownloading: false, status: 'done', progress: 100, savedBytes: undefined });
+          showToast(`Could not save ${file.filename} to Downloads`, 'error');
+          return;
+        }
+      } else if (isSentItem) {
+        updateFile(id, { isDownloading: false, status: 'done', progress: 100, savedBytes: undefined });
+        showToast('Original file is no longer cached on this device.', 'info');
+        return;
       }
     }
 
@@ -1676,6 +1772,14 @@ export default function App() {
         snippet = extracted.snippet;
         fullContent = extracted.fullContent;
         totalLines = extracted.totalLines;
+        saveBlobToCache(baseId, blob);
+      }
+    } else if (file.size < 50 * 1024 * 1024) {
+      const blob = await materializeToBlob(file, 50 * 1024 * 1024);
+      if (blob) {
+        materializedBlob = blob;
+        blobUrl = URL.createObjectURL(blob);
+        saveBlobToCache(baseId, blob);
       }
     }
 
@@ -2039,30 +2143,52 @@ export default function App() {
       )}
 
       {/* Header: the active computer; tap to switch or manage devices */}
-      <header className="top-bar workspace-bar">
-        <button
-          type="button"
-          className="device-switcher"
-          onClick={() => openDevices('manage')}
-          aria-haspopup="dialog"
-          aria-label={`${focused?.name || 'Desktop PC'}${snap.connected.length > 1 ? `, and ${snap.connected.length - 1} more` : ''}. Open devices.`}
-        >
-          <BrandLogo size={28} connected={snap.connected.length > 0} className="device-switcher-brand" />
-          <span className="device-switcher-text">
-            <span className="device-switcher-name">
-              <span className="truncate">{focused?.name || 'Desktop PC'}</span>
-              {snap.connected.length > 1 && <span className="switcher-more">+{snap.connected.length - 1}</span>}
-              <ChevronDown size={16} aria-hidden="true" />
+      {selectionMode ? (
+        <header className="top-bar workspace-bar selection-bar" role="region" aria-label="Selection actions">
+          <button type="button" className="icon-btn" onClick={exitSelection} aria-label="Cancel selection">
+            <X size={20} />
+          </button>
+          <span className="selection-bar-count">{selectedIds.size} selected</span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => {
+              if (filteredMessages.length > 0 && selectedIds.size === filteredMessages.length) {
+                exitSelection();
+              } else {
+                setSelectedIds(new Set(filteredMessages.map(m => m.id)));
+              }
+            }}
+          >
+            {filteredMessages.length > 0 && selectedIds.size === filteredMessages.length ? 'Deselect all' : 'Select all'}
+          </button>
+        </header>
+      ) : (
+        <header className="top-bar workspace-bar">
+          <button
+            type="button"
+            className="device-switcher"
+            onClick={() => openDevices('manage')}
+            aria-haspopup="dialog"
+            aria-label={`${focused?.name || 'Desktop PC'}${snap.connected.length > 1 ? `, and ${snap.connected.length - 1} more` : ''}. Open devices.`}
+          >
+            <BrandLogo size={28} connected={snap.connected.length > 0} className="device-switcher-brand" />
+            <span className="device-switcher-text">
+              <span className="device-switcher-name">
+                <span className="truncate">{focused?.name || 'Desktop PC'}</span>
+                {snap.connected.length > 1 && <span className="switcher-more">+{snap.connected.length - 1}</span>}
+                <ChevronDown size={16} aria-hidden="true" />
+              </span>
+              <span className="device-switcher-sub">
+                <span className="dot ok" />
+                {snap.connected.length > 1 ? `${snap.connected.length} devices connected` : 'Connected'}
+              </span>
             </span>
-            <span className="device-switcher-sub">
-              <span className="dot ok" />
-              {snap.connected.length > 1 ? `${snap.connected.length} devices connected` : 'Connected'}
-            </span>
-          </span>
-        </button>
-        <button type="button" className="icon-btn" onClick={() => setIsPrefsOpen(true)} aria-label="Settings"><Settings size={20} /></button>
-        <button type="button" className="icon-btn" onClick={() => setIsMenuOpen(true)} aria-label="More" aria-haspopup="dialog"><MoreVertical size={20} /></button>
-      </header>
+          </button>
+          <button type="button" className="icon-btn" onClick={() => setIsPrefsOpen(true)} aria-label="Settings"><Settings size={20} /></button>
+          <button type="button" className="icon-btn" onClick={() => setIsMenuOpen(true)} aria-label="More" aria-haspopup="dialog"><MoreVertical size={20} /></button>
+        </header>
+      )}
 
       {pendingApproval && (
         <div className="notice" role="status" style={{ alignItems: 'center' }}>
@@ -2169,8 +2295,13 @@ export default function App() {
                     item={item}
                     isDeleting={deletingIds.has(item.id)}
                     peerLabel={peerLabelFor(item)}
+                    selectionMode={selectionMode}
+                    isSelected={selectedIds.has(item.id)}
+                    onToggleSelect={toggleSelect}
+                    onLongPressSelect={enterSelection}
                     onCopy={handleCopy}
                     onDownload={handleDownload}
+                    onSaveText={handleSaveText}
                     onDelete={handleDelete}
                     onOpenMedia={(media) => setActiveMedia(media)}
                     onAcceptApproval={(id, file) => {
@@ -2260,15 +2391,38 @@ export default function App() {
         onChange={handleFileUpload}
       />
 
-      {/* 4. Purpose-Built Transfer Action Panel (with Category Filters & Quick-Send) */}
-      <TransferActionPanel
-        onOpenFilePicker={handleOpenFilePicker}
-        onOpenSendText={() => setIsSendTextOpen(true)}
-        onQuickSendClipboard={handleQuickSendClipboard}
-        targetNames={snap.targets.map(p => p.name)}
-        canPickTargets={snap.peers.length > 1}
-        onPickTargets={() => openDevices('manage')}
-      />
+      {/* 4. Purpose-Built Transfer Action Panel (or Batch Selection Bar) */}
+      {selectionMode ? (
+        <footer className="batch-action-bar" role="region" aria-label="Batch actions">
+          <button
+            type="button"
+            className="batch-action-btn is-save"
+            onClick={handleBatchSaveSelected}
+            disabled={selectedIds.size === 0}
+          >
+            <Download size={18} />
+            <span>Save to Downloads</span>
+          </button>
+          <button
+            type="button"
+            className="batch-action-btn is-remove"
+            onClick={handleBatchRemoveSelected}
+            disabled={selectedIds.size === 0}
+          >
+            <Trash2 size={18} />
+            <span>Remove ({selectedIds.size})</span>
+          </button>
+        </footer>
+      ) : (
+        <TransferActionPanel
+          onOpenFilePicker={handleOpenFilePicker}
+          onOpenSendText={() => setIsSendTextOpen(true)}
+          onQuickSendClipboard={handleQuickSendClipboard}
+          targetNames={snap.targets.map(p => p.name)}
+          canPickTargets={snap.peers.length > 1}
+          onPickTargets={() => openDevices('manage')}
+        />
+      )}
 
       {/* 5. Dedicated Text & Link Entry Modal */}
       <SendTextModal

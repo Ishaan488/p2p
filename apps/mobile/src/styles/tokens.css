@@ -30,6 +30,8 @@
   --success: #79C9A2;
   --warning: #DDBB75;
   --error: #E97878;
+  --swipe-save: #5387FF;
+  --swipe-remove-fg: #151515;
 
   --scrim: rgba(0, 0, 0, 0.62);
   --shadow-sheet: 0 -12px 40px rgba(0, 0, 0, 0.55);
@@ -60,6 +62,8 @@
   --success: #2E8B62;
   --warning: #98741F;
   --error: #C44A4A;
+  --swipe-save: #5387FF;
+  --swipe-remove-fg: #FFFFFF;
 
   --scrim: rgba(0, 0, 0, 0.38);
   --shadow-sheet: 0 -10px 34px rgba(0, 0, 0, 0.16);
